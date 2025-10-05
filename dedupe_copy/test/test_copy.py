@@ -138,7 +138,7 @@ class TestCopySystem(
         self.assertIsNone(result, "Expected None when no patterns match")
 
     def test_best_match_multiple_patterns(self):
-        """Test _best_match with multiple matching patterns - lines 107-110"""
+        """Test _best_match with multiple matching patterns"""
         # Test multiple patterns that match and choose best by length
         extensions = ["*.j*", "*.jp*", "*.jpg", "*.jpeg"]
         result = dedupe_copy._best_match(extensions, "jpg")
@@ -204,7 +204,7 @@ class TestCopySystem(
             utils.remove_dir(temp_dir)
 
     def test_result_processor_save_event_wait(self):
-        """Test ResultProcessor waiting on save_event - lines 243-244"""
+        """Test ResultProcessor waiting on save_event"""
         temp_dir = utils.make_temp_dir("result_processor_test")
         try:
             db_file = os.path.join(temp_dir, "manifest.db")
