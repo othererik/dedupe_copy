@@ -7,10 +7,9 @@ progress_queue -> read by ProgressThread and put to by all others
 walk_queue -> holds directories discovered by WalkThread(s)
 copy_queue -> read by CopyThread(s) put to by queue_copy_work
 
-TODO::
-    Proper logging
-    Unit tests
-    better structure in cli
+Note: Future enhancements could include:
+    - Replace print statements with proper logging module
+    - Refactor CLI code into separate functions for better testability
 """
 
 # pylint: disable=too-many-lines
@@ -1100,7 +1099,7 @@ class Manifest:
                 )
             self.md5_data[key] = new_values
         # build a new set of values and move into place
-        # XXX replace w/ persistent set?
+        # Note: Using CacheDict for read_sources (could optimize with a persistent set implementation)
         db_file = self.read_sources.db_file_path()
         assert temp_directory is not None, "temp_directory must be provided"
         new_sources = CacheDict(

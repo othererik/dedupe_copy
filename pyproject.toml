@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "DedupeCopy"
 version = "1.0.0"
 description = "Find duplicates / copy and restructure file layout command-line tool"
-readme = "README.txt"
+readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "BSD-2-Clause"}
 authors = [

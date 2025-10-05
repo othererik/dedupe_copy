@@ -1,11 +1,11 @@
 """A LRUish cache / disk backed  (via a database) dictionary
 implementation
 
+Currently uses sqlite3 as the backend.
 
-TODO:
-shelve OR sqlite3
-document backend requirements
-finish LRU option
+Note: Future enhancements could include:
+    - Document backend requirements and interface
+    - Implement full LRU eviction policy (currently uses random eviction)
 """
 
 import collections.abc
@@ -36,7 +36,7 @@ class SqliteBackend:
         unlink_old_db: bool = False,
     ) -> None:
         """Create the db and tables"""
-        # TODO: this should handle the file creation more gracefully.
+        # Generate timestamp-based filename if none provided
         if db_file is None:
             db_file = f"db_file_{int(time.time())}.dict"
         if unlink_old_db and os.path.exists(db_file):
@@ -223,7 +223,10 @@ class CacheDict(collections.abc.MutableMapping):
     There are no guarantees around thread safety, so be careful.
 
     Items are removed from DB when pulled into cache, and written back when
-    they fall out of the cache. TODO: allow for remain in db style caching?
+    they fall out of the cache.
+
+    Note: Current design uses cache-exclusive model (items either in cache OR db).
+    An alternative design could keep items in both cache and db simultaneously.
     """
 
     def __init__(
@@ -254,7 +257,8 @@ class CacheDict(collections.abc.MutableMapping):
 
     def __contains__(self, key: Any) -> bool:
         """Check for existence in local cache, fall back to db.
-        TODO: fault or not fault on contains?  -- currently all db hits fault
+
+        Note: Currently, checking existence will fault the item into cache if found in db.
         """
         local = key in self._cache
         if not local:
@@ -457,5 +461,5 @@ class DefaultCacheDict(CacheDict):
         return newcd
 
 
-# TODO:
-# helper for cleaning up of dictionary file if it shouldn't be stored
+# Note: Cleanup of temporary dictionary files is currently handled by caller.
+# A future enhancement could add a context manager or explicit cleanup helper.
