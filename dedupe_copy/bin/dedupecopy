@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import logging
 
 from dedupe_copy import _clean_extensions, run_dupe_copy, PATH_RULES
+from dedupe_copy.logging_config import setup_logging
 
 
 DESCRIPTION = 'Find duplicates / copy and restructure file layout tool'
@@ -113,6 +115,29 @@ def _create_parser():
                              help='Number of threads to use for copying files',
                              required=False, default=8, type=int)
 
+    output_group = parser.add_argument_group('Output Control')
+    verbosity_group = output_group.add_mutually_exclusive_group()
+    verbosity_group.add_argument('--quiet', '-q',
+                                  help='Show only warnings and errors',
+                                  action='store_true',
+                                  required=False, default=False)
+    verbosity_group.add_argument('--verbose', '-v',
+                                  help='Show detailed progress information',
+                                  action='store_true',
+                                  required=False, default=False)
+    verbosity_group.add_argument('--debug',
+                                  help='Show debug information including queue states',
+                                  action='store_true',
+                                  required=False, default=False)
+    output_group.add_argument('--no-color',
+                              help='Disable colored output',
+                              action='store_true',
+                              required=False, default=False)
+    output_group.add_argument('--json',
+                              help='Output progress and results in JSON format',
+                              action='store_true',
+                              required=False, default=False)
+
     group = parser.add_argument_group('Path conversion')
     group.add_argument('--convert-manifest-paths-from',
                        help='Prefix of paths stored in the input manifest to '
@@ -127,8 +152,20 @@ def _create_parser():
 def _handle_arguments(args):
     """Take the cli args and process them in prep for calling run_dedupe_copy
     """
+    # Setup logging based on verbosity flags
+    verbosity = "normal"
+    if args.quiet:
+        verbosity = "quiet"
+    elif args.debug:
+        verbosity = "debug"
+    elif args.verbose:
+        verbosity = "verbose"
+
+    setup_logging(verbosity=verbosity, use_colors=not args.no_color)
+    logger = logging.getLogger(__name__)
+
     if args.read_path:
-        print('Reading from {0}'.format(args.read_path))
+        logger.info('Reading from {0}'.format(args.read_path))
     # strip, lower, remove leading dot from extensions for both path rules and
     # specific extension includes
     extensions = _clean_extensions(args.extensions)
@@ -157,7 +194,19 @@ def _handle_arguments(args):
 def run_cli():
     parser = _create_parser()
     args = parser.parse_args()
-    print('Running with arguments: {0}'.format(args))
+    # Setup logging first before any output
+    verbosity = "normal"
+    if args.quiet:
+        verbosity = "quiet"
+    elif args.debug:
+        verbosity = "debug"
+    elif args.verbose:
+        verbosity = "verbose"
+
+    setup_logging(verbosity=verbosity, use_colors=not args.no_color)
+    logger = logging.getLogger(__name__)
+
+    logger.debug('Running with arguments: {0}'.format(args))
     processed_args = _handle_arguments(args)
     return run_dupe_copy(**processed_args)
 

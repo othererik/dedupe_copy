@@ -6,10 +6,6 @@ result_queue -> Put to by ReadThreads(s) read by ResultProcessor
 progress_queue -> read by ProgressThread and put to by all others
 walk_queue -> holds directories discovered by WalkThread(s)
 copy_queue -> read by CopyThread(s) put to by queue_copy_work
-
-Note: Future enhancements could include:
-    - Replace print statements with proper logging module
-    - Refactor CLI code into separate functions for better testability
 """
 
 # pylint: disable=too-many-lines
@@ -19,16 +15,71 @@ import datetime
 import fnmatch
 import functools
 import hashlib
+import logging
 import os
 import queue
 import random
 import shutil
+import sys
 import tempfile
 import threading
 import time
 from typing import Dict, List, Optional, Tuple, Set, Callable, Any, Iterator, Union
 
 from .disk_cache_dict import CacheDict, DefaultCacheDict
+
+# Configure module logger
+logger = logging.getLogger(__name__)
+
+
+# Default logging setup for programmatic use (tests, API calls)
+def _ensure_logging_configured() -> None:
+    """Ensure logging is configured with sensible defaults if not already set"""
+    root_logger = logging.getLogger("dedupe_copy")
+    if not root_logger.handlers:
+        # No handlers configured yet, set up basic configuration
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        root_logger.addHandler(handler)
+        root_logger.setLevel(logging.INFO)
+        root_logger.propagate = False
+
+
+def _format_error_message(path: str, error: Union[str, Exception]) -> str:
+    """Format an error message with helpful context and suggestions
+
+    Args:
+        path: File path that caused the error
+        error: The error or exception that occurred
+
+    Returns:
+        Formatted error message with suggestions
+    """
+    error_str = str(error)
+    error_type = type(error).__name__ if isinstance(error, Exception) else "Error"
+
+    # Build helpful message based on error type
+    suggestions = []
+    if isinstance(error, PermissionError) or "Permission denied" in error_str:
+        suggestions.append("Check file permissions")
+        suggestions.append("Ensure you have read access to source files")
+        suggestions.append("Ensure you have write access to destination")
+    elif isinstance(error, FileNotFoundError) or "No such file" in error_str:
+        suggestions.append("File may have been deleted during processing")
+        suggestions.append("Check if path is on a network share that disconnected")
+    elif isinstance(error, OSError) and "Errno 28" in error_str:  # No space left
+        suggestions.append("Destination disk is full")
+        suggestions.append("Free up space or choose a different destination")
+    elif isinstance(error, (IOError, OSError)):
+        suggestions.append("Check disk health and connection")
+        suggestions.append("For network paths, verify network stability")
+
+    msg = f"Error processing {repr(path)}: [{error_type}] {error_str}"
+    if suggestions:
+        msg += "\n  Suggestions: " + "; ".join(suggestions)
+
+    return msg
+
 
 # For message output
 HIGH_PRIORITY = 1
@@ -373,6 +424,10 @@ class ProgressThread(threading.Thread):
         self.not_copied_count = 0
         self.last_copied: Optional[str] = None
         self.save_event = save_event
+        # Performance tracking
+        self.start_time = time.time()
+        self.last_report_time = time.time()
+        self.bytes_processed = 0
 
     def do_log_dir(self, _path: str) -> None:
         """Log directory processing."""
@@ -382,14 +437,17 @@ class ProgressThread(threading.Thread):
         """Log file discovery and progress."""
         self.file_count += 1
         if self.file_count % self.file_count_log_interval == 0 or self.file_count == 1:
+            elapsed = time.time() - self.start_time
+            files_per_sec = self.file_count / elapsed if elapsed > 0 else 0
             message = (
                 f"Discovered {self.file_count} files (dirs: {self.directory_count}), accepted "
-                f"{self.accepted_count}.\nWork queue has {self.work.qsize()} items. "
+                f"{self.accepted_count}. Rate: {files_per_sec:.1f} files/sec\n"
+                f"Work queue has {self.work.qsize()} items. "
                 f"Progress queue has {self.progress_queue.qsize()} items. Walk queue has "
                 f"{self.walk_queue.qsize()} items.\nCurrent file: {repr(path)} "
                 f"(last accepted: {repr(self.last_accepted)})"
             )
-            print(message)
+            logger.info(message)
 
     def do_log_copied(self, src: str, dest: str) -> None:
         """Log successful file copy operations."""
@@ -398,9 +456,12 @@ class ProgressThread(threading.Thread):
             self.copied_count % self.file_count_log_interval == 0
             or self.copied_count == 1
         ):
-            print(
-                f"Copied {self.copied_count} items. Skipped {self.not_copied_count} items. Last file: "
-                f"{repr(src)} -> {repr(dest)}"
+            elapsed = time.time() - self.start_time
+            copy_rate = self.copied_count / elapsed if elapsed > 0 else 0
+            logger.info(
+                f"Copied {self.copied_count} items. Skipped {self.not_copied_count} items. "
+                f"Rate: {copy_rate:.1f} files/sec\n"
+                f"Last file: {repr(src)} -> {repr(dest)}"
             )
         self.last_copied = src
 
@@ -416,17 +477,18 @@ class ProgressThread(threading.Thread):
     def do_log_ignored(self, path: str, reason: str) -> None:
         """Log files that were ignored during processing."""
         self.ignored_count += 1
-        print(f"Ignoring {repr(path)} for {repr(reason)}")
+        logger.info(f"Ignoring {repr(path)} for {repr(reason)}")
 
     def do_log_error(self, path: str, reason: Union[str, Exception]) -> None:
         """Log files that caused errors during processing."""
         self.error_count += 1
-        print(f"Error for {repr(path)} for {repr(reason)}")
+        error_msg = _format_error_message(path, reason)
+        logger.error(error_msg)
 
     @staticmethod
     def do_log_message(message: str) -> None:
         """Log a generic message."""
-        print(message)
+        logger.info(message)
 
     def run(self) -> None:
         """Run loop that slurps items off the progress queue and dispatches
@@ -443,28 +505,60 @@ class ProgressThread(threading.Thread):
                 last_update = time.time()
             except queue.Empty:
                 if self.save_event and self.save_event.is_set():
-                    print("Saving...")
+                    logger.info("Saving...")
                     time.sleep(1)
                 if time.time() - last_update > 60:
                     last_update = time.time()
-                    print(
-                        f"Status:  Work Queue Size: {self.work.qsize()}. "
-                        f"Result Queue Size: {self.result_queue.qsize()}. "
-                        f"Progress Queue Size: {self.progress_queue.qsize()}. "
-                        f"Walk Queue Size: {self.walk_queue.qsize()}."
+                    work_size = self.work.qsize()
+                    result_size = self.result_queue.qsize()
+                    progress_size = self.progress_queue.qsize()
+                    walk_size = self.walk_queue.qsize()
+
+                    logger.debug(
+                        f"Status:  Work Queue Size: {work_size}. "
+                        f"Result Queue Size: {result_size}. "
+                        f"Progress Queue Size: {progress_size}. "
+                        f"Walk Queue Size: {walk_size}."
                     )
+
+                    # Warn about large queue sizes (potential memory issues)
+                    if work_size > 40000:
+                        logger.warning(
+                            f"Work queue is large ({work_size} items). "
+                            f"Consider reducing thread counts to avoid memory issues."
+                        )
+                    if progress_size > 10000:
+                        logger.warning(
+                            f"Progress queue is backing up ({progress_size} items). "
+                            f"This may indicate slow processing."
+                        )
             except (AttributeError, ValueError) as e:
-                print("Failed in progress thread:", e)
+                logger.error(f"Failed in progress thread: {e}")
+
+        # Final summary with timing and rates
+        elapsed = time.time() - self.start_time
         if self.file_count:
-            print("Results from walk:")
-            print(f"Total files: {self.file_count}")
-            print(f"Total accepted: {self.accepted_count}")
-            print(f"Total ignored: {self.ignored_count}")
+            logger.info("=" * 60)
+            logger.info("RESULTS FROM WALK:")
+            logger.info(f"Total files discovered: {self.file_count}")
+            logger.info(f"Total accepted: {self.accepted_count}")
+            logger.info(f"Total ignored: {self.ignored_count}")
+            files_per_sec = self.file_count / elapsed if elapsed > 0 else 0
+            logger.info(f"Average discovery rate: {files_per_sec:.1f} files/sec")
         if self.copied_count:
-            print("Results from copy:")
-            print(f"Total copied: {self.copied_count}")
-            print(f"Total skipped: {self.not_copied_count}")
-        print(f"Total errors: {self.error_count}")
+            logger.info("-" * 60)
+            logger.info("RESULTS FROM COPY:")
+            logger.info(f"Total copied: {self.copied_count}")
+            logger.info(f"Total skipped: {self.not_copied_count}")
+            copy_rate = self.copied_count / elapsed if elapsed > 0 else 0
+            logger.info(f"Average copy rate: {copy_rate:.1f} files/sec")
+        if self.error_count:
+            logger.info("-" * 60)
+        logger.info(f"Total errors: {self.error_count}")
+        logger.info(
+            f"Total elapsed time: {elapsed:.1f} seconds ({elapsed/60:.1f} minutes)"
+        )
+        logger.info("=" * 60)
 
 
 class WalkThread(threading.Thread):
@@ -667,19 +761,19 @@ def _extension_report(md5_data: Any, show_count: int = 10) -> int:
                 extension = "no_extension"
             sizes[extension] += items[1]
             extension_counts[extension] += 1
-    print(f"Top {show_count} extensions by size:")
+    logger.info(f"Top {show_count} extensions by size:")
     for key, _ in zip(
         sorted(sizes, key=lambda x: sizes.get(x, 0), reverse=True), range(show_count)
     ):
-        print(f"  {key}: {sizes[key]} bytes")
-    print(f"Top {show_count} extensions by count:")
+        logger.info(f"  {key}: {sizes[key]} bytes")
+    logger.info(f"Top {show_count} extensions by count:")
     for key, _ in zip(
         sorted(
             extension_counts, key=lambda x: extension_counts.get(x, 0), reverse=True
         ),
         range(show_count),
     ):
-        print(f"  {key}: {extension_counts[key]}")
+        logger.info(f"  {key}: {extension_counts[key]}")
     return sum(sizes.values())
 
 
@@ -768,19 +862,19 @@ def find_duplicates(  # pylint: disable=too-complex
             result_processor.join(5)  # wait for result processor to complete
         if collisions:
             group = 0
-            print("Hash Collisions:")
+            logger.info("Hash Collisions:")
             for md5, info in collisions.items():
                 group += 1
-                print(f"  MD5: {md5}")
+                logger.info(f"  MD5: {md5}")
                 for item in info:
-                    print(f"    {repr(item[0])}, {item[1]}")
+                    logger.info(f"    {repr(item[0])}, {item[1]}")
                     if result_fh:
                         line = (
                             f"{group}, {md5}, {repr(item[0])}, {item[1]}, {item[2]}\n"
                         )
                         result_fh.write(line.encode("utf-8"))
         else:
-            print("No Duplicates Found")
+            logger.info("No Duplicates Found")
         return (collisions, manifest)
     finally:
         if result_fh:
@@ -797,7 +891,7 @@ def info_parser(data: Any) -> Iterator[Tuple[str, str, str, int]]:
                     time_stamp = datetime.datetime.fromtimestamp(item[2])
                     year_month = f"{time_stamp.year}_{time_stamp.month:0>2}"
                 except (OverflowError, OSError, ValueError) as e:
-                    print(f"ERROR: {repr(item[0])} {e}")
+                    logger.error(f"ERROR: {repr(item[0])} {e}")
                     year_month = "Unknown"
                 yield md5, item[0], year_month, item[1]
 
@@ -966,12 +1060,14 @@ class Manifest:
             sources_path = f"{self.path}.read"
             # no data yet
             if os.path.exists(self.path):
-                print(f"Removing old manifest file at: {repr(self.path)}")
+                logger.info(f"Removing old manifest file at: {repr(self.path)}")
                 os.unlink(self.path)
             if os.path.exists(sources_path):
-                print(f"Removing old manifest sources file at: {repr(sources_path)}")
+                logger.info(
+                    f"Removing old manifest sources file at: {repr(sources_path)}"
+                )
                 os.unlink(sources_path)
-            print(f"creating manifests {self.path} / {sources_path}")
+            logger.info(f"creating manifests {self.path} / {sources_path}")
             self.md5_data = DefaultCacheDict(
                 list, db_file=self.path, max_size=self.cache_size
             )
@@ -1031,8 +1127,8 @@ class Manifest:
         self, path: Optional[str] = None, keys: Optional[List[str]] = None
     ) -> None:
         path = path or self.path
-        print(f"Writing manifest of {len(self.md5_data)} hashes to {path}")
-        print(f"Writing sources of {len(self.read_sources)} files to {path}.read")
+        logger.info(f"Writing manifest of {len(self.md5_data)} hashes to {path}")
+        logger.info(f"Writing sources of {len(self.read_sources)} files to {path}.read")
         if not keys:
             dict_iter = self.md5_data.items()
         else:
@@ -1049,12 +1145,12 @@ class Manifest:
 
     def _load_manifest(self, path: Optional[str] = None) -> Tuple[Any, Any]:
         path = path or self.path
-        print(f"Reading manifest from {repr(path)}...")
+        logger.info(f"Reading manifest from {repr(path)}...")
         # Would be nice to just get the fd, but backends require a path
         md5_data = DefaultCacheDict(list, db_file=path, max_size=self.cache_size)
-        print(f"... read {len(md5_data)} hashes")
+        logger.info(f"... read {len(md5_data)} hashes")
         read_sources = CacheDict(db_file=f"{path}.read", max_size=self.cache_size)
-        print(f"... in {len(read_sources)} files")
+        logger.info(f"... in {len(read_sources)} files")
         return md5_data, read_sources
 
     @staticmethod
@@ -1138,6 +1234,51 @@ def run_dupe_copy(  # pylint: disable=too-complex,too-many-branches,too-many-sta
     preserve_stat: bool = False,
 ) -> None:
     """For external callers this is the entry point for dedupe + copy"""
+    # Ensure logging is configured for programmatic calls
+    _ensure_logging_configured()
+
+    # Display pre-flight summary
+    logger.info("=" * 70)
+    logger.info("DEDUPE COPY - Operation Summary")
+    logger.info("=" * 70)
+    if read_from_path:
+        paths = read_from_path if isinstance(read_from_path, list) else [read_from_path]
+        logger.info(f"Source path(s): {len(paths)} path(s)")
+        for p in paths:
+            logger.info(f"  - {p}")
+    if copy_to_path:
+        logger.info(f"Destination: {copy_to_path}")
+    if manifests_in_paths:
+        manifests = (
+            manifests_in_paths
+            if isinstance(manifests_in_paths, list)
+            else [manifests_in_paths]
+        )
+        logger.info(f"Input manifest(s): {len(manifests)} manifest(s)")
+    if manifest_out_path:
+        logger.info(f"Output manifest: {manifest_out_path}")
+    if extensions:
+        logger.info(f"Extension filter: {', '.join(extensions)}")
+    if ignored_patterns:
+        logger.info(f"Ignored patterns: {', '.join(ignored_patterns)}")
+    if path_rules:
+        logger.info(f"Path rules: {', '.join(path_rules)}")
+    logger.info(
+        f"Threads: walk={walk_threads}, read={read_threads}, copy={copy_threads}"
+    )
+    logger.info(
+        f"Options: keep_empty={keep_empty}, preserve_stat={preserve_stat}, no_walk={no_walk}"
+    )
+    if compare_manifests:
+        comp_list = (
+            compare_manifests
+            if isinstance(compare_manifests, list)
+            else [compare_manifests]
+        )
+        logger.info(f"Compare manifests: {len(comp_list)} manifest(s)")
+    logger.info("=" * 70)
+    logger.info("")
+
     temp_directory = tempfile.mkdtemp(suffix="dedupe_copy")
 
     save_event = threading.Event()
@@ -1223,7 +1364,7 @@ def run_dupe_copy(  # pylint: disable=too-complex,too-many-branches,too-many-sta
             walk_queue=walk_queue,
         )
     total_size = _extension_report(all_data)
-    print(f"Total Size of accepted: {total_size} bytes")
+    logger.info(f"Total Size of accepted: {total_size} bytes")
     if manifest_out_path:
         progress_queue.put(
             (HIGH_PRIORITY, "message", "Saving complete manifest from search")
@@ -1262,6 +1403,6 @@ def run_dupe_copy(  # pylint: disable=too-complex,too-many-branches,too-many-sta
         time.sleep(1)
         shutil.rmtree(temp_directory)
     except OSError as err:
-        print(
+        logger.warning(
             f"Failed to cleanup the collisions file: {collisions_file} with err: {err}"
         )

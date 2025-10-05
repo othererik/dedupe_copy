@@ -35,6 +35,10 @@ DedupeCopy is designed for consolidating and restructuring sprawling file system
 - Manifest system for resuming interrupted operations
 - Flexible path restructuring rules
 - Can compare against multiple file systems without full re-scans
+- Configurable logging with verbosity levels (quiet, normal, verbose, debug)
+- Colored output for better readability (optional)
+- Helpful error messages with actionable suggestions
+- Real-time progress with processing rates
 
 **Note:** This is *not* a replacement for rsync or Robocopy for incremental synchronization. Those are good tools that might work for you, so do try them.
 
@@ -46,18 +50,29 @@ DedupeCopy is designed for consolidating and restructuring sprawling file system
 pip install DedupeCopy
 ```
 
+### With color support (optional)
+
+For colored console output (errors in red, warnings in yellow, etc.):
+
+```bash
+pip install DedupeCopy[color]
+```
+
 ### From source
 
 ```bash
 git clone https://github.com/othererik/dedupe_copy.git
 cd dedupe_copy
 pip install -e .
+# Or with color support:
+pip install -e .[color]
 ```
 
 ### Requirements
 
 - Python 3.8 or later
 - Sufficient disk space for manifest files (typically small, but can grow for very large file sets)
+- Optional: colorama for colored console output (installed with `[color]` extra)
 
 ## Quick Start
 
@@ -143,6 +158,16 @@ dedupecopy -p /Users/johndoe -r dupes.csv -m manifest.db
 ```
 
 Creates a CSV report of all duplicates and saves a manifest for future use.
+
+**With quiet output (minimal):**
+```bash
+dedupecopy -p /Users/johndoe -r dupes.csv -m manifest.db --quiet
+```
+
+**With verbose output (detailed progress):**
+```bash
+dedupecopy -p /Users/johndoe -r dupes.csv -m manifest.db --verbose
+```
 
 #### 2. Copy specific file types
 
@@ -246,6 +271,22 @@ Different organization rules for different file types.
 | `--copy-metadata` | Preserve file timestamps and permissions (uses `shutil.copy2` instead of `copyfile`). |
 | `--keep-empty` | Treat empty (0-byte) files as unique rather than duplicates. |
 | `--ignore-old-collisions` | Only detect new duplicates (ignore duplicates already in loaded manifest). |
+
+### Output Control Options
+
+| Option | Description |
+|--------|-------------|
+| `-q`, `--quiet` | Show only warnings and errors (minimal output). |
+| `-v`, `--verbose` | Show detailed progress information (same as normal, kept for compatibility). |
+| `--debug` | Show debug information including queue states and internal diagnostics. |
+| `--no-color` | Disable colored output (useful for logging to files or non-terminal output). |
+| `--json` | Output progress and results in JSON format (placeholder for future use). |
+
+**Output Verbosity Levels:**
+- **Normal** (default): Standard progress updates every 1,000 files, errors, and summaries
+- **Quiet** (`--quiet`): Only warnings, errors, and final summary
+- **Verbose** (`--verbose`): Detailed progress with processing rates and timing
+- **Debug** (`--debug`): All output including queue states and internal operations
 
 ### Performance Options
 
@@ -454,6 +495,142 @@ For very large directories (millions of files):
 - Keep manifests on fast storage (SSD) for best performance
 - Manifests are incrementally saved every 50,000 processed files
 
+## Logging and Output Control
+
+### Verbosity Levels
+
+DedupeCopy provides flexible output control to suit different use cases:
+
+#### Normal Mode (Default)
+Standard output with progress updates every 1,000 files:
+
+```bash
+dedupecopy -p /source -c /destination
+```
+
+**Output includes:**
+- Pre-flight configuration summary
+- Progress updates with file counts and processing rates
+- Error messages with helpful suggestions
+- Final summary statistics
+
+#### Quiet Mode
+Minimal output - only warnings, errors, and final results:
+
+```bash
+dedupecopy -p /source -c /destination --quiet
+```
+
+**Best for:**
+- Cron jobs and automated scripts
+- When you only care about problems
+- Reducing log file sizes
+
+#### Verbose Mode
+Detailed progress information:
+
+```bash
+dedupecopy -p /source -c /destination --verbose
+```
+
+**Output includes:**
+- All normal mode output
+- More frequent progress updates
+- Detailed timing and rate information
+
+#### Debug Mode
+Comprehensive diagnostic information:
+
+```bash
+dedupecopy -p /source -c /destination --debug
+```
+
+**Output includes:**
+- All verbose mode output
+- Queue sizes and internal state
+- Thread activity details
+- Useful for troubleshooting performance issues
+
+### Color Output
+
+By default, DedupeCopy uses colored output when writing to a terminal (if colorama is installed):
+
+- **Errors**: Red text
+- **Warnings**: Yellow text
+- **Info messages**: Default color
+- **Debug messages**: Cyan text
+
+To disable colors (e.g., when logging to a file):
+
+```bash
+dedupecopy -p /source -c /destination --no-color
+```
+
+Colors are automatically disabled when output is redirected to a file or pipe.
+
+### Enhanced Features
+
+#### Pre-Flight Summary
+Before starting operations, you'll see a summary of configuration:
+
+```
+======================================================================
+DEDUPE COPY - Operation Summary
+======================================================================
+Source path(s): 2 path(s)
+  - /Volumes/Source1
+  - /Volumes/Source2
+Destination: /Volumes/Backup
+Extension filter: jpg, png, gif
+Path rules: *.jpg:mtime
+Threads: walk=4, read=8, copy=8
+Options: keep_empty=False, preserve_stat=True, no_walk=False
+======================================================================
+```
+
+#### Progress with Rates
+During operation, you'll see processing rates:
+
+```
+Discovered 5000 files (dirs: 250), accepted 4850. Rate: 142.3 files/sec
+Work queue has 234 items. Progress queue has 12 items. Walk queue has 5 items.
+...
+Copied 4800 items. Skipped 50 items. Rate: 125.7 files/sec
+```
+
+#### Helpful Error Messages
+Errors include context and suggestions:
+
+```
+Error processing '/path/to/file.txt': [PermissionError] Permission denied
+  Suggestions: Check file permissions; Ensure you have read access to source files
+```
+
+#### Proactive Warnings
+The tool warns about potential issues before they become problems:
+
+```
+WARNING: Work queue is large (42000 items). Consider reducing thread counts to avoid memory issues.
+WARNING: Progress queue is backing up (12000 items). This may indicate slow processing.
+```
+
+### Examples
+
+#### Silent operation for scripts
+```bash
+dedupecopy -p /source -c /backup --quiet 2>&1 | tee backup.log
+```
+
+#### Maximum detail for troubleshooting
+```bash
+dedupecopy -p /source -c /backup --debug --no-color > debug.log 2>&1
+```
+
+#### Normal operation with color
+```bash
+dedupecopy -p /source -c /backup --verbose
+```
+
 ## Troubleshooting
 
 ### Common Issues
@@ -512,14 +689,22 @@ If manifest files become corrupted:
 ### Getting Help
 
 Check the output during run:
-- Progress updates every 1,000 files
-- Error messages show problematic files
+- Progress updates every 1,000 files with processing rates
+- Error messages show problematic files with helpful suggestions
+- Warnings alert you to potential issues proactively
 - Final summary shows counts and errors
 
-For debugging, watch the terminal output:
-- File counts and progress
-- Queue sizes (if growing unbounded, reduce threads)
-- Specific error messages with file paths
+For debugging, use `--debug` mode:
+
+```bash
+dedupecopy -p /source -c /destination --debug --no-color > debug.log 2>&1
+```
+
+Debug output includes:
+- File counts and progress with timing
+- Queue sizes and internal state (useful if growing unbounded)
+- Thread activity and performance metrics
+- Specific error messages with file paths and suggestions
 
 ## Safety and Best Practices
 
