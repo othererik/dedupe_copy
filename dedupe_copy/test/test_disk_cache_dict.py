@@ -501,7 +501,7 @@ class DcdActionSuite(unittest.TestCase):  # pylint: disable=too-many-public-meth
             backend.close()
 
     def test_backend_values_method(self):
-        """Test SqliteBackend.values() method - lines 141-144"""
+        """Test SqliteBackend.values() method"""
         db_file = os.path.join(self.temp_dir, "test_values.db")
         backend = disk_cache_dict.SqliteBackend(db_file=db_file)
         try:
@@ -521,7 +521,7 @@ class DcdActionSuite(unittest.TestCase):  # pylint: disable=too-many-public-meth
             backend.close()
 
     def test_backend_items_method(self):
-        """Test SqliteBackend.items() method - lines 148-151"""
+        """Test SqliteBackend.items() method"""
         db_file = os.path.join(self.temp_dir, "test_items.db")
         backend = disk_cache_dict.SqliteBackend(db_file=db_file)
         try:
@@ -539,7 +539,7 @@ class DcdActionSuite(unittest.TestCase):  # pylint: disable=too-many-public-meth
             backend.close()
 
     def test_backend_close_exception_handling(self):
-        """Test SqliteBackend.close() exception handling - lines 169, 171"""
+        """Test SqliteBackend.close() exception handling"""
         # Test that close() handles OSError gracefully
         db_file = os.path.join(self.temp_dir, "test_close.db")
         backend = disk_cache_dict.SqliteBackend(db_file=db_file)
@@ -550,7 +550,7 @@ class DcdActionSuite(unittest.TestCase):  # pylint: disable=too-many-public-meth
         backend.close()
 
         # Simulate OSError scenario by deleting the db file before __del__
-        # This ensures the except (sqlite3.OperationalError, OSError) clause at lines 169-171 is used
+        # This ensures the except (sqlite3.OperationalError, OSError) clause is used
         if os.path.exists(db_file):
             os.unlink(db_file)
 
@@ -666,7 +666,10 @@ class TestDefaultDiskDictLruFunctional(DcdActionSuite, unittest.TestCase):
             print(in_cache, self.dcd._key_order)
             print(cache)
             print("....")
-            self.assertEqual(test_key, self.dcd._key_order[-1], "not lru")
+            last_key = (
+                next(reversed(self.dcd._key_order)) if self.dcd._key_order else None
+            )
+            self.assertEqual(test_key, last_key, "not lru")
             self.assertEqual(
                 self.cache_size, len(self.dcd._cache.keys()), "Dcd cache is wrong size"
             )

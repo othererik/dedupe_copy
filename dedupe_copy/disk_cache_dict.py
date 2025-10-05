@@ -13,6 +13,7 @@ import os
 import shutil
 import sys
 import time
+from collections import OrderedDict
 from typing import Any, Optional, Tuple, List, Iterator, Callable, Dict
 
 # for SqliteBackend
@@ -45,6 +46,9 @@ class SqliteBackend:
         self.conn: sqlite3.Connection = sqlite3.connect(
             db_file, check_same_thread=False
         )
+        # Enable WAL mode for better concurrent performance
+        # self.conn.execute("PRAGMA journal_mode=WAL;")
+        # self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.table = db_table
         self.conn.execute(
             f"create table if not exists {self.table} (id integer primary "
@@ -55,6 +59,9 @@ class SqliteBackend:
         )
         self.conn.commit()
         self._commit_needed = False
+        self._write_count = 0
+        self._batch_size = 100  # Commit every 100 writes
+        self._closed = False  # Track connection state
 
     def _get_key_id(self, key: Any) -> int:
         """The indirection allows for hash collisions needed for add and
@@ -80,12 +87,21 @@ class SqliteBackend:
 
     def __setitem__(self, key: Any, value: Any) -> None:
         self._insert(key, value)
-        self.commit()
+        self._commit_needed = True
+        self._write_count += 1
+        # Batch commits for performance
+        if self._write_count >= self._batch_size:
+            self.commit()
+            self._write_count = 0
 
     def __delitem__(self, key: Any) -> None:
         db_id = self._get_key_id(key)
         self.conn.execute(f"delete from {self.table} where id=?;", (db_id,))
-        self.commit()
+        self._commit_needed = True
+        self._write_count += 1
+        if self._write_count >= self._batch_size:
+            self.commit()
+            self._write_count = 0
 
     def __iter__(self) -> Iterator[Any]:
         """Generator of keys"""
@@ -106,11 +122,41 @@ class SqliteBackend:
 
     @staticmethod
     def _dump(value: Any, version: int = -1) -> bytes:
-        return sqlite3.Binary(pickle.dumps(value, version))
+        # Fast path for primitive types - avoid pickle overhead
+        if isinstance(value, str):
+            return sqlite3.Binary(b"S" + value.encode("utf-8"))
+        elif isinstance(value, int):
+            return sqlite3.Binary(b"I" + str(value).encode("utf-8"))
+        elif isinstance(value, float):
+            return sqlite3.Binary(b"F" + str(value).encode("utf-8"))
+        elif isinstance(value, bool):
+            return sqlite3.Binary(b"B" + (b"1" if value else b"0"))
+        elif value is None:
+            return sqlite3.Binary(b"N")
+        # Fall back to pickle for complex types
+        return sqlite3.Binary(b"P" + pickle.dumps(value, version))
 
     @staticmethod
     def _load(value: bytes) -> Any:
-        return pickle.loads(bytes(value))
+        value_bytes = bytes(value)
+        if not value_bytes:
+            return None
+        # Check type marker
+        type_marker = value_bytes[0:1]
+        if type_marker == b"S":
+            return value_bytes[1:].decode("utf-8")
+        elif type_marker == b"I":
+            return int(value_bytes[1:].decode("utf-8"))
+        elif type_marker == b"F":
+            return float(value_bytes[1:].decode("utf-8"))
+        elif type_marker == b"B":
+            return value_bytes[1:] == b"1"
+        elif type_marker == b"N":
+            return None
+        elif type_marker == b"P":
+            return pickle.loads(value_bytes[1:])
+        # Legacy: no type marker, assume pickle
+        return pickle.loads(value_bytes)
 
     def _insert(self, key: Any, value: Any) -> None:
         """This kinda stinks, check for existence, and then do the work"""
@@ -155,6 +201,7 @@ class SqliteBackend:
         if self._commit_needed or force:
             self.conn.commit()
         self._commit_needed = False
+        self._write_count = 0
 
     def db_file_path(self) -> str:
         """Return the path to the database file."""
@@ -162,17 +209,25 @@ class SqliteBackend:
 
     def close(self) -> None:
         """Close the database connection safely"""
+        if getattr(self, "_closed", True):
+            # Already closed or not initialized
+            return
         try:
-            if hasattr(self, "conn"):
+            if hasattr(self, "conn") and self.conn:
                 self.conn.commit()
                 self.conn.close()
-        except (sqlite3.OperationalError, OSError):
-            # Database may have been deleted already during cleanup
-            pass
+                self._closed = True
+        except (sqlite3.OperationalError, sqlite3.ProgrammingError, OSError):
+            # Database may have been deleted or already closed
+            self._closed = True
 
     def __del__(self) -> None:
         """Cleanup database connection on deletion"""
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            # Suppress all exceptions during cleanup to avoid warnings
+            pass
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
         """Commit the data, close the connection, move file into place"""
@@ -186,6 +241,8 @@ class SqliteBackend:
         if db_file is not None:
             self._db_file = db_file
         self.conn = sqlite3.connect(self._db_file, check_same_thread=False)
+        # self.conn.execute("PRAGMA journal_mode=WAL;")
+        # self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.execute(
             f"create table if not exists {self.table} (id integer primary "
             f"key, hash integer, key blob, value blob);"
@@ -195,6 +252,8 @@ class SqliteBackend:
         )
         self.conn.commit()
         self._commit_needed = False
+        self._write_count = 0
+        self._closed = False
 
     def load(self, db_file: Optional[str] = None) -> None:
         """Load data from a database file."""
@@ -204,6 +263,8 @@ class SqliteBackend:
         # Reinitialize with loaded db_file
         self._db_file = db_file
         self.conn = sqlite3.connect(self._db_file, check_same_thread=False)
+        # self.conn.execute("PRAGMA journal_mode=WAL;")
+        # self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.execute(
             f"create table if not exists {self.table} (id integer primary "
             f"key, hash integer, key blob, value blob);"
@@ -213,6 +274,8 @@ class SqliteBackend:
         )
         self.conn.commit()
         self._commit_needed = False
+        self._write_count = 0
+        self._closed = False
 
 
 # Container stuff
@@ -247,9 +310,9 @@ class CacheDict(collections.abc.MutableMapping):
             self._db = SqliteBackend(db_file)
         self.max_size = max_size
         self.lru = lru
-        self._key_order: Optional[collections.deque] = None
+        self._key_order: Optional[OrderedDict] = None
         if lru:
-            self._key_order = collections.deque(maxlen=max_size)
+            self._key_order = OrderedDict()
         # this is a performance yuck, create a batched option
         if current_dictionary:
             for key, value in current_dictionary.items():
@@ -293,9 +356,11 @@ class CacheDict(collections.abc.MutableMapping):
 
             value = self._fault(key)
         if self.lru and self._key_order is not None:
+            # O(1) operation - track access order
             if key in self._key_order:
-                self._key_order.remove(key)
-            self._key_order.append(key)
+                self._key_order.move_to_end(key, last=True)
+            else:
+                self._key_order[key] = None
         return value
 
     def __setitem__(self, key: Any, value: Any) -> None:
@@ -317,9 +382,11 @@ class CacheDict(collections.abc.MutableMapping):
         if self._evict_lock_held:
             return
         if self.lru and self._key_order is not None:
+            # O(1) operation - add if new, or move to end if exists
             if key in self._key_order:
-                self._key_order.remove(key)
-            self._key_order.append(key)
+                self._key_order.move_to_end(key, last=True)
+            else:
+                self._key_order[key] = None
 
     def __delitem__(self, key: Any) -> None:
         """Remove item, raise KeyError if does not exist"""
@@ -327,8 +394,8 @@ class CacheDict(collections.abc.MutableMapping):
             del self._cache[key]
         else:
             del self._db[key]
-        if self.lru and self._key_order is not None and key in self._key_order:
-            self._key_order.remove(key)
+        if self.lru and self._key_order is not None:
+            self._key_order.pop(key, None)
 
     def _fault(self, key: Any) -> Any:
         """Bring key in from db or raise KeyError, trigger evict if over
@@ -345,8 +412,9 @@ class CacheDict(collections.abc.MutableMapping):
         if len(self._cache) < self.max_size:
             return
         if self.lru and self._key_order is not None:
-            # pop gets the oldest key
-            key = self._key_order.popleft()
+            # O(1) operation - get and remove oldest key
+            key = next(iter(self._key_order))
+            self._key_order.pop(key)
         else:
             # dump a semi-random key
             view_iter = iter(self._cache.keys())
@@ -393,15 +461,17 @@ class CacheDict(collections.abc.MutableMapping):
         # clear out local cache so we're correctly in sync
         self._cache.clear()
         if self.lru:
-            self._key_order = collections.deque([], self.max_size)
+            self._key_order = OrderedDict()
         self._db.load(db_file=db_file)
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
         """Dump all to database"""
         for key, value in self._cache.items():
             self._db[key] = value
+        # Force commit any pending writes
+        self._db.commit(force=True)
         if self.lru:
-            self._key_order = collections.deque(maxlen=self.max_size)
+            self._key_order = OrderedDict()
         # clear out local cache so we're correctly in sync
         self._db.save(db_file=db_file or self._db_file, remove_old_db=remove_old_db)
         self._cache.clear()

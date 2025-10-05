@@ -27,7 +27,7 @@ import time
 
 from dedupe_copy import disk_cache_dict
 
-from . import utils
+import utils
 
 # data set sizes, should be one larger and one smaller than cache sizes
 SMALL_SET = 1000
@@ -140,7 +140,7 @@ def iterate(container, keys):
     """Iterate over container."""
     citer = iter(container)
     for _ in keys:
-        citer.next()
+        next(citer)
 
 
 def log(
@@ -183,7 +183,7 @@ def log(
 # pylint: disable=too-many-nested-blocks
 def gen_tests():
     """Generate test configurations and write results to CSV."""
-    with open("perflog.csv", "ab") as fd:
+    with open("perflog.csv", "a") as fd:
         fd.write(
             "name, percent, py, dcd, lru, in_cache, backend, item_count, max_size\n"
         )
@@ -232,7 +232,7 @@ def main():
 
             if in_cache:
                 # pylint: disable=protected-access
-                test_keys = dcd._cache.keys()
+                test_keys = list(dcd._cache.keys())
             else:
                 test_keys = keys
 
