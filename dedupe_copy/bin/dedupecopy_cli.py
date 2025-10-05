@@ -133,10 +133,6 @@ def _create_parser():
                               help='Disable colored output',
                               action='store_true',
                               required=False, default=False)
-    output_group.add_argument('--json',
-                              help='Output progress and results in JSON format',
-                              action='store_true',
-                              required=False, default=False)
 
     group = parser.add_argument_group('Path conversion')
     group.add_argument('--convert-manifest-paths-from',

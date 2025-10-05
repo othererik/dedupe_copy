@@ -280,7 +280,7 @@ Different organization rules for different file types.
 | `-v`, `--verbose` | Show detailed progress information (same as normal, kept for compatibility). |
 | `--debug` | Show debug information including queue states and internal diagnostics. |
 | `--no-color` | Disable colored output (useful for logging to files or non-terminal output). |
-| `--json` | Output progress and results in JSON format (placeholder for future use). |
+
 
 **Output Verbosity Levels:**
 - **Normal** (default): Standard progress updates every 1,000 files, errors, and summaries

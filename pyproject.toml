@@ -15,9 +15,6 @@ authors = [
 maintainers = [
     {name = "Erik Schweller", email = "othererik@gmail.com"}
 ]
-
-[project.optional-dependencies]
-color = ["colorama>=0.4.0"]
 keywords = [
     "de-duplication",
     "file management",
@@ -43,15 +40,15 @@ classifiers = [
     "Topic :: System :: Filesystems",
 ]
 
+[project.optional-dependencies]
+color = ["colorama>=0.4.0"]
+
 [project.urls]
 Homepage = "https://pypi.python.org/pypi/DedupeCopy/"
 Repository = "https://www.github.com/othererik/dedupe_copy"
 
 [project.scripts]
-dedupecopy = "dedupe_copy.bin.dedupecopy:run_cli"
+dedupecopy = "dedupe_copy.bin.dedupecopy_cli:run_cli"
 
 [tool.setuptools]
-packages = ["dedupe_copy", "dedupe_copy.test"]
-
-[tool.setuptools.package-data]
-dedupe_copy = ["bin/*"]
+packages = ["dedupe_copy", "dedupe_copy.bin", "dedupe_copy.test"]
