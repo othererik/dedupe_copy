@@ -53,6 +53,7 @@ class TestPathRules(unittest.TestCase):
 
     def test_mtime_rule_only(self):
         """Test organizing files by modification time (YYYY_MM)"""
+        # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
             self.temp_dir, file_count=5, extensions=[".jpg"], file_size=100
         )
@@ -80,6 +81,7 @@ class TestPathRules(unittest.TestCase):
 
     def test_extension_rule_only(self):
         """Test organizing files by extension"""
+        # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
             self.temp_dir,
             file_count=10,
@@ -126,6 +128,7 @@ class TestPathRules(unittest.TestCase):
 
     def test_combined_rules_extension_then_mtime(self):
         """Test combining extension and mtime rules"""
+        # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
             self.temp_dir, file_count=5, extensions=[".jpg"], file_size=100
         )
@@ -153,6 +156,7 @@ class TestPathRules(unittest.TestCase):
 
     def test_extension_specific_rules(self):
         """Test different rules for different extensions"""
+        # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
             self.temp_dir, file_count=10, extensions=[".jpg", ".pdf"], file_size=100
         )
@@ -201,6 +205,7 @@ class TestExtensionFiltering(unittest.TestCase):
 
     def test_single_extension_filter(self):
         """Test copying only files with specific extension"""
+        # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
             self.temp_dir,
             file_count=15,
@@ -230,6 +235,7 @@ class TestExtensionFiltering(unittest.TestCase):
 
     def test_multiple_extension_filters(self):
         """Test copying multiple specific extensions"""
+        # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
             self.temp_dir,
             file_count=20,
@@ -298,8 +304,8 @@ class TestDuplicateDetection(unittest.TestCase):
         file2 = os.path.join(self.temp_dir, "subdir2", "file2.txt")
 
         # Use same seed and initial data for identical content
-        check1, mtime1 = utils.write_file(file1, seed=5, size=1000, initial="identical")
-        check2, mtime2 = utils.write_file(file2, seed=5, size=1000, initial="identical")
+        check1, _ = utils.write_file(file1, seed=5, size=1000, initial="identical")
+        check2, _ = utils.write_file(file2, seed=5, size=1000, initial="identical")
 
         # Verify they have the same checksum
         self.assertEqual(check1, check2, "Files should have identical checksums")
@@ -539,6 +545,7 @@ class TestManifestIntegration(unittest.TestCase):
 
     def test_save_manifest_during_copy(self):
         """Test that manifest is saved during copy operation"""
+        # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
             self.temp_dir, file_count=10, file_size=100
         )
@@ -586,6 +593,8 @@ class TestManifestIntegration(unittest.TestCase):
 
         first_count = len(list(utils.walk_tree(copy_to_path, include_dirs=False)))
 
+        assert first_count == 5, f"Expected 5 files in first copy, got {first_count}"
+
         # Add more UNIQUE files
         files2 = []
         for i in range(5):
@@ -626,7 +635,7 @@ class TestMetadataPreservation(unittest.TestCase):
         """Test that preserve_stat flag preserves modification times"""
         # Create a file with specific mtime
         fn = os.path.join(self.temp_dir, "timed_file.txt")
-        check, mtime = utils.write_file(fn, seed=0, size=100)
+        _, mtime = utils.write_file(fn, seed=0, size=100)
 
         # Wait a moment to ensure time difference
         time.sleep(0.1)
@@ -655,6 +664,9 @@ class TestMetadataPreservation(unittest.TestCase):
         # Create a file with old mtime
         fn = os.path.join(self.temp_dir, "old_file.txt")
         check, old_mtime = utils.write_file(fn, seed=0, size=100)
+
+        assert old_mtime is not None, "Old mtime should not be None"
+        assert check is not None, "Checksum should not be None"
 
         # Set mtime to 1 day ago
         one_day_ago = time.time() - 86400
