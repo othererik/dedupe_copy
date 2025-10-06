@@ -25,9 +25,8 @@ import os
 import random
 import time
 
+from dedupe_copy.test import utils
 from dedupe_copy import disk_cache_dict
-
-import utils
 
 # data set sizes, should be one larger and one smaller than cache sizes
 SMALL_SET = 1000

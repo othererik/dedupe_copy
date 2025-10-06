@@ -1,0 +1,5 @@
+DedupeCopy.egg-info/
+build/
+__pycache__/
+logs/
+*.pyc

@@ -19,7 +19,6 @@ do_copy = partial(
     convert_manifest_paths_to="",
     convert_manifest_paths_from="",
     no_walk=False,
-    preserve_stat=False,
 )
 
 

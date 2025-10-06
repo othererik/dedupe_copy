@@ -86,6 +86,7 @@ def setup_logging(verbosity: str = "normal", use_colors: bool = True) -> None:
         # Normal/verbose mode: just the message
         fmt = "%(message)s"
 
+    formatter: logging.Formatter
     if use_colors and HAS_COLORAMA and sys.stdout.isatty():
         formatter = ColoredFormatter(fmt)
     else:

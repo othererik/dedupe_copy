@@ -19,6 +19,7 @@ from typing import Any, Optional, Tuple, List, Iterator, Callable, Dict
 # for SqliteBackend
 import pickle
 import sqlite3
+import threading
 
 
 IS_WIN = sys.platform == "win32"
@@ -43,25 +44,37 @@ class SqliteBackend:
         if unlink_old_db and os.path.exists(db_file):
             os.unlink(db_file)
         self._db_file = db_file
-        self.conn: sqlite3.Connection = sqlite3.connect(
-            db_file, check_same_thread=False
-        )
-        # Enable WAL mode for better concurrent performance
-        # self.conn.execute("PRAGMA journal_mode=WAL;")
-        # self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.table = db_table
-        self.conn.execute(
-            f"create table if not exists {self.table} (id integer primary "
-            f"key, hash integer, key blob, value blob);"
-        )
-        self.conn.execute(
-            f"create index if not exists {self.table}_index ON {self.table}(hash);"
-        )
-        self.conn.commit()
+        self._local = threading.local()
+        # Initialize the database for the main thread
+        self._init_conn()
         self._commit_needed = False
         self._write_count = 0
         self._batch_size = 100  # Commit every 100 writes
         self._closed = False  # Track connection state
+
+    def _init_conn(self):
+        """Initializes a connection for the current thread."""
+        conn = sqlite3.connect(self._db_file, check_same_thread=True)
+        # Enable WAL mode for better concurrent performance
+        # conn.execute("PRAGMA journal_mode=WAL;")
+        # conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute(
+            f"create table if not exists {self.table} (id integer primary "
+            f"key, hash integer, key blob, value blob);"
+        )
+        conn.execute(
+            f"create index if not exists {self.table}_index ON {self.table}(hash);"
+        )
+        conn.commit()
+        return conn
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """Return a thread-local SQLite connection."""
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            self._local.conn = self._init_conn()
+        return self._local.conn
 
     def _get_key_id(self, key: Any) -> int:
         """The indirection allows for hash collisions needed for add and
@@ -240,17 +253,7 @@ class SqliteBackend:
         # Reinitialize with new db_file
         if db_file is not None:
             self._db_file = db_file
-        self.conn = sqlite3.connect(self._db_file, check_same_thread=False)
-        # self.conn.execute("PRAGMA journal_mode=WAL;")
-        # self.conn.execute("PRAGMA synchronous=NORMAL;")
-        self.conn.execute(
-            f"create table if not exists {self.table} (id integer primary "
-            f"key, hash integer, key blob, value blob);"
-        )
-        self.conn.execute(
-            f"create index if not exists {self.table}_index ON {self.table}(hash);"
-        )
-        self.conn.commit()
+        self._local.conn = self._init_conn()
         self._commit_needed = False
         self._write_count = 0
         self._closed = False
@@ -262,17 +265,7 @@ class SqliteBackend:
         db_file = db_file or self._db_file
         # Reinitialize with loaded db_file
         self._db_file = db_file
-        self.conn = sqlite3.connect(self._db_file, check_same_thread=False)
-        # self.conn.execute("PRAGMA journal_mode=WAL;")
-        # self.conn.execute("PRAGMA synchronous=NORMAL;")
-        self.conn.execute(
-            f"create table if not exists {self.table} (id integer primary "
-            f"key, hash integer, key blob, value blob);"
-        )
-        self.conn.execute(
-            f"create index if not exists {self.table}_index ON {self.table}(hash);"
-        )
-        self.conn.commit()
+        self._local.conn = self._init_conn()
         self._commit_needed = False
         self._write_count = 0
         self._closed = False
