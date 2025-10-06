@@ -138,13 +138,13 @@ class SqliteBackend:
         # Fast path for primitive types - avoid pickle overhead
         if isinstance(value, str):
             return sqlite3.Binary(b"S" + value.encode("utf-8"))
-        elif isinstance(value, int):
+        if isinstance(value, int):
             return sqlite3.Binary(b"I" + str(value).encode("utf-8"))
-        elif isinstance(value, float):
+        if isinstance(value, float):
             return sqlite3.Binary(b"F" + str(value).encode("utf-8"))
-        elif isinstance(value, bool):
+        if isinstance(value, bool):
             return sqlite3.Binary(b"B" + (b"1" if value else b"0"))
-        elif value is None:
+        if value is None:
             return sqlite3.Binary(b"N")
         # Fall back to pickle for complex types
         return sqlite3.Binary(b"P" + pickle.dumps(value, version))
@@ -158,15 +158,15 @@ class SqliteBackend:
         type_marker = value_bytes[0:1]
         if type_marker == b"S":
             return value_bytes[1:].decode("utf-8")
-        elif type_marker == b"I":
+        if type_marker == b"I":
             return int(value_bytes[1:].decode("utf-8"))
-        elif type_marker == b"F":
+        if type_marker == b"F":
             return float(value_bytes[1:].decode("utf-8"))
-        elif type_marker == b"B":
+        if type_marker == b"B":
             return value_bytes[1:] == b"1"
-        elif type_marker == b"N":
+        if type_marker == b"N":
             return None
-        elif type_marker == b"P":
+        if type_marker == b"P":
             return pickle.loads(value_bytes[1:])
         # Legacy: no type marker, assume pickle
         return pickle.loads(value_bytes)
@@ -238,8 +238,8 @@ class SqliteBackend:
         """Cleanup database connection on deletion"""
         try:
             self.close()
-        except Exception:
-            # Suppress all exceptions during cleanup to avoid warnings
+        except (sqlite3.OperationalError, sqlite3.ProgrammingError, OSError):
+            # Suppress specific exceptions during cleanup
             pass
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
@@ -289,7 +289,6 @@ class CacheDict(collections.abc.MutableMapping):
         self,
         max_size: int = 100000,
         db_file: Optional[str] = None,
-        *,
         backend: Optional[Any] = None,
         lru: bool = False,
         current_dictionary: Optional[Dict[Any, Any]] = None,
@@ -419,8 +418,7 @@ class CacheDict(collections.abc.MutableMapping):
     def get(self, key: Any, default: Any = None) -> Any:
         if key not in self:
             return default
-        else:
-            return self[key]
+        return self[key]
 
     def has_key(self, key: Any) -> bool:
         """Check if key exists in the dictionary (deprecated method)."""
@@ -498,8 +496,7 @@ class DefaultCacheDict(CacheDict):
         if not super().__contains__(key):
             self[key] = default
             return default
-        else:
-            return self[key]
+        return self[key]
 
     def copy(self, db_file: Optional[str] = None) -> "DefaultCacheDict":
         """Returns a dictionary as a shallow from the cache dict"""

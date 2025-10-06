@@ -1,22 +1,8 @@
 """These are not really 'tests', but just give a relative measure of
 the time to perform various actions between a normal python defaultdict and
-the disk cache version            fd.write(
-                "name, percent, py, dcd, lru, in_cache, backend, item_count, max_size\n"
-            )
-            for item_count in [SMALL_SET, LARGE_SET]:
-                for max_size in [SMALL_CACHE, LARGE_CACHE]:
-                    for backend in [
-                        None,
-                    ]:
-                        for lru in [True, False]:
-                            for in_cache in [True, False]:
-                                if not item_count or not max_size:
-                                    continue
-                                if in_cache and max_size < LARGE_CACHE:
-                                    continue
-                                yield item_count, lru, max_size, backend, in_cache, fd
-    except Exception:
-        passhis is all low grade not to be fully believed performance estimation!
+the disk cache version.
+
+This is all low grade not to be fully believed performance estimation!
 """
 
 import collections
@@ -24,6 +10,7 @@ import contextlib
 import os
 import random
 import time
+from typing import Dict, Any, IO
 
 from dedupe_copy.test import utils
 from dedupe_copy import disk_cache_dict
@@ -143,195 +130,141 @@ def iterate(container, keys):
 
 
 def log(
-    name,
-    py,
-    dcd,
+    name: str,
+    py_time: float,
+    dcd_time: float,
     *,
-    log_fd=None,
-    lru=None,
-    in_cache=None,
-    backend=None,
-    item_count=None,
-    max_size=None,
+    log_fd: IO,
+    log_params: Dict[str, Any],
 ):
     """Log performance test results to console and optionally to file."""
-    percent = ((dcd - py) / py) * 100
+    percent = ((dcd_time - py_time) / py_time) * 100
     print(
-        f"{name:<30}\tdifference: {percent:<5.2f}%\tpy: {py:.4f}s\t" f"dcd: {dcd:.4f}s"
+        f"{name:<30}\tdifference: {percent:<5.2f}%\tpy: {py_time:.4f}s\t"
+        f"dcd: {dcd_time:.4f}s"
     )
     log_spec = (
         "{name}, {percent}, {py}, {dcd}, {lru}, "
         "{in_cache}, {backend}, {item_count}, {max_size}\n"
     )
-    if log_fd:
-        log_fd.write(
-            log_spec.format(
-                name=name,
-                percent=percent,
-                py=py,
-                dcd=dcd,
-                lru=lru,
-                max_size=max_size,
-                in_cache=in_cache,
-                backend=backend,
-                item_count=item_count,
-            )
+    log_params.update(name=name, percent=percent, py=py_time, dcd=dcd_time)
+    log_fd.write(log_spec.format(**log_params))
+
+
+def _run_perf_test(item_count, lru, max_size, backend, in_cache, logfd):
+    keys = [str(i) for i in range(item_count)]
+    items = [(str(i), str(i)) for i in keys]
+    print(
+        f"Running lru: {lru} max_size: {max_size} backend: {backend or 'default'} "
+        f"item_count: {item_count} in_cache_only: {in_cache}"
+    )
+    with temp_db() as db_file:
+        pydict = collections.defaultdict(list)
+        dcd = disk_cache_dict.DefaultCacheDict(
+            default_factory=list,
+            max_size=max_size,
+            db_file=db_file,
+            lru=lru,
+            current_dictionary=None,
+            backend=backend,
         )
+        log_params = {
+            "item_count": item_count,
+            "lru": lru,
+            "max_size": max_size,
+            "backend": backend,
+            "in_cache": in_cache,
+        }
+
+        py_time = populate(pydict, items)
+        dcd_time = populate(dcd, items)
+        log("Populate", py_time, dcd_time, log_fd=logfd, log_params=log_params)
+
+        py_sum = dcd_sum = 0
+
+        if in_cache:
+            # pylint: disable=protected-access
+            test_keys = list(dcd._cache.keys())
+        else:
+            test_keys = keys
+
+        py_time = random_access(pydict, test_keys)
+        dcd_time = random_access(dcd, test_keys)
+        py_sum += py_time
+        dcd_sum += dcd_time
+        log(
+            "Rand Access", py_time, dcd_time, log_fd=logfd, log_params=log_params
+        )
+
+        py_time = random_update(pydict, test_keys)
+        dcd_time = random_update(dcd, test_keys)
+        py_sum += py_time
+        dcd_sum += dcd_time
+        log(
+            "Rand Update", py_time, dcd_time, log_fd=logfd, log_params=log_params
+        )
+
+        py_time = sequential_access(pydict, test_keys)
+        dcd_time = sequential_access(dcd, test_keys)
+        py_sum += py_time
+        dcd_sum += dcd_time
+        log(
+            "Sequential Access", py_time, dcd_time, log_fd=logfd, log_params=log_params
+        )
+
+        py_time = sequential_update(pydict, test_keys)
+        dcd_time = sequential_update(dcd, test_keys)
+        py_sum += py_time
+        dcd_sum += dcd_time
+        log(
+            "Sequential Update", py_time, dcd_time, log_fd=logfd, log_params=log_params
+        )
+
+        py_time = iterate(pydict, test_keys)
+        dcd_time = iterate(dcd, test_keys)
+        py_sum += py_time
+        dcd_sum += dcd_time
+        log("Iterate", py_time, dcd_time, log_fd=logfd, log_params=log_params)
+
+        py_time = random_actions(pydict, test_keys)
+        dcd_time = random_actions(dcd, test_keys)
+        py_sum += py_time
+        dcd_sum += dcd_time
+        log(
+            "Random Actions", py_time, dcd_time, log_fd=logfd, log_params=log_params
+        )
+
+        print(f"Run Average: {(dcd_sum / py_sum) * 100}%\n\n")
 
 
 # pylint: disable=too-many-nested-blocks
 def gen_tests():
     """Generate test configurations and write results to CSV."""
-    with open("perflog.csv", "a") as fd:
-        fd.write(
-            "name, percent, py, dcd, lru, in_cache, backend, item_count, max_size\n"
-        )
-        for item_count in [SMALL_SET, LARGE_SET]:
-            for max_size in [SMALL_CACHE, LARGE_CACHE]:
-                for backend in [
-                    None,
-                ]:
-                    for lru in [True, False]:
-                        for in_cache in [True, False]:
-                            if not item_count or not max_size:
-                                continue
-                            if in_cache and max_size < LARGE_CACHE:
-                                continue
-                            yield item_count, lru, max_size, backend, in_cache, fd
+    try:
+        with open("perflog.csv", "a", encoding="utf-8") as fd:
+            fd.write(
+                "name, percent, py, dcd, lru, in_cache, backend, item_count, max_size\n"
+            )
+            for item_count in [SMALL_SET, LARGE_SET]:
+                for max_size in [SMALL_CACHE, LARGE_CACHE]:
+                    for backend in [
+                        None,
+                    ]:
+                        for lru in [True, False]:
+                            for in_cache in [True, False]:
+                                if not item_count or not max_size:
+                                    continue
+                                if in_cache and max_size < LARGE_CACHE:
+                                    continue
+                                yield item_count, lru, max_size, backend, in_cache, fd
+    except Exception:
+        pass
 
 
 def main():
     """Run performance tests on disk cache dict."""
     for item_count, lru, max_size, backend, in_cache, logfd in gen_tests():
-        keys = [str(i) for i in range(item_count)]
-        items = [(str(i), str(i)) for i in keys]
-        print(
-            f"Running lru: {lru} max_size: {max_size} backend: {backend or 'default'} "
-            f"item_count: {item_count} in_cache_only: {in_cache}"
-        )
-        with temp_db() as db_file:
-            pydict = collections.defaultdict(list)
-            dcd = disk_cache_dict.DefaultCacheDict(
-                default_factory=list,
-                max_size=max_size,
-                db_file=db_file,
-                lru=lru,
-                current_dictionary=None,
-                backend=backend,
-            )
-
-            # populate is a special case - doesn't compare to must stuff
-            # so we don't keep the time in the aggregate which is slightly a
-            # lie
-            py_time = populate(pydict, items)
-            dcd_time = populate(dcd, items)
-            log("Populate", py_time, dcd_time)
-
-            py_sum = dcd_sum = 0
-
-            if in_cache:
-                # pylint: disable=protected-access
-                test_keys = list(dcd._cache.keys())
-            else:
-                test_keys = keys
-
-            py_time = random_access(pydict, test_keys)
-            dcd_time = random_access(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Rand Access",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
-
-            py_time = random_update(pydict, test_keys)
-            dcd_time = random_update(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Rand Update",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
-
-            py_time = sequential_access(pydict, test_keys)
-            dcd_time = sequential_access(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Sequential Access",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
-
-            py_time = sequential_update(pydict, test_keys)
-            dcd_time = sequential_update(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Sequential Update",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
-
-            py_time = iterate(pydict, test_keys)
-            dcd_time = iterate(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Iterate",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
-
-            py_time = random_actions(pydict, test_keys)
-            dcd_time = random_actions(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Random Actions",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
-
-            print(f"Run Average: {(dcd_sum / py_sum) * 100}%\n\n")
+        _run_perf_test(item_count, lru, max_size, backend, in_cache, logfd)
 
 
 if __name__ == "__main__":

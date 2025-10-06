@@ -74,11 +74,9 @@ def _format_error_message(path: str, error: Union[str, Exception]) -> str:
         suggestions.append("Check disk health and connection")
         suggestions.append("For network paths, verify network stability")
 
-    msg = "Error processing {path!r}: [{error_type}] {error_str}".format(
-        path=path, error_type=error_type, error_str=error_str
-    )
+    msg = f"Error processing {path!r}: [{error_type}] {error_str}"
     if suggestions:
-        msg += "\n  Suggestions: " + "; ".join(suggestions)
+        msg += f"\n  Suggestions: {'; '.join(suggestions)}"
     return msg
 
 
@@ -103,17 +101,15 @@ PATH_RULES = {
 
 
 def _path_rules_parser(
-    rules: Dict[str, List[str]],
-    dest_dir: str,
-    extension: str,
-    mtime_str: str,
-    _size: int,
-    *,
-    source_dirs: str,
-    src: str,
-    read_paths: List[str],
+    rules: Dict[str, List[str]], dest_dir: str, file_context: Dict[str, Any]
 ) -> Tuple[str, str]:
     """Builds a path based on the path rules for the given extension pattern"""
+    extension = file_context["extension"]
+    mtime_str = file_context["mtime_str"]
+    source_dirs = file_context["source_dirs"]
+    src = file_context["src"]
+    read_paths = file_context["read_paths"]
+
     ext_key = extension if extension else ""
     best_match_key = _best_match(rules.keys(), ext_key)
     rule_list = (
@@ -194,24 +190,20 @@ class CopyThread(threading.Thread):
         target_path: str,
         read_paths: List[str],
         stop_event: threading.Event,
-        *,
-        extensions: Optional[List[str]] = None,
-        path_rules: Optional[Callable[..., Tuple[str, str]]] = None,
-        progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-        preserve_stat: bool = False,
+        **kwargs: Any,
     ) -> None:
         super().__init__()
         self.work = work_queue
         self.target_path = target_path
-        self.extensions = extensions
-        self.path_rules = path_rules
         self.read_paths = read_paths
         self.stop_event = stop_event
-        self.progress_queue = progress_queue
-        self.preserve_stat = preserve_stat
+        self.extensions = kwargs.get("extensions")
+        self.path_rules = kwargs.get("path_rules")
+        self.progress_queue = kwargs.get("progress_queue")
+        self.preserve_stat = kwargs.get("preserve_stat", False)
         self.daemon = True
 
-    def run(self) -> None:  # pylint: disable=too-complex
+    def run(self) -> None:  # pylint: disable=too-many-branches
         while not self.work.empty() or not self.stop_event.is_set():
             try:
                 src, mtime, size = self.work.get(True, 0.1)
@@ -221,16 +213,15 @@ class CopyThread(threading.Thread):
                 if not _match_extension(self.extensions, src):
                     continue
                 if self.path_rules is not None:
-                    source_dirs = os.path.dirname(src)
-                    dest, dest_dir = self.path_rules(
-                        self.target_path,
-                        ext,
-                        mtime,
-                        size,
-                        source_dirs=source_dirs,
-                        src=os.path.basename(src),
-                        read_paths=self.read_paths,
-                    )
+                    file_context = {
+                        "extension": ext,
+                        "mtime_str": mtime,
+                        "_size": size,
+                        "source_dirs": os.path.dirname(src),
+                        "src": os.path.basename(src),
+                        "read_paths": self.read_paths,
+                    }
+                    dest, dest_dir = self.path_rules(self.target_path, file_context)
                 else:
                     dest = os.path.join(
                         self.target_path, ext, mtime, os.path.basename(src)
@@ -257,7 +248,7 @@ class CopyThread(threading.Thread):
                                 MEDIUM_PRIORITY,
                                 "error",
                                 src,
-                                "Error copying to %r: %s" % (dest, e),
+                                f"Error copying to {dest!r}: {e}",
                             )
                         )
             except queue.Empty:
@@ -288,7 +279,7 @@ class ResultProcessor(threading.Thread):
         self.save_event = save_event
         self.daemon = True
 
-    def run(self) -> None:  # pylint: disable=too-complex
+    def run(self) -> None:  # pylint: disable=too-many-branches
         processed = 0
         while not self.results.empty() or not self.stop_event.is_set():
             if self.save_event and self.save_event.is_set():
@@ -313,7 +304,7 @@ class ResultProcessor(threading.Thread):
                             MEDIUM_PRIORITY,
                             "error",
                             src,
-                            "ERROR in result processing: %s" % err,
+                            f"ERROR in result processing: {err}",
                         )
                     )
             if processed > INCREMENTIAL_SAVE_SIZE:
@@ -322,7 +313,7 @@ class ResultProcessor(threading.Thread):
                         (
                             HIGH_PRIORITY,
                             "message",
-                            "Hit incremental save size, " "will save manifest files",
+                            "Hit incremental save size, will save manifest files",
                         )
                     )
                 processed = 0
@@ -335,7 +326,7 @@ class ResultProcessor(threading.Thread):
                                 MEDIUM_PRIORITY,
                                 "error",
                                 self.md5_data.path,
-                                "ERROR Saving incremental: %s" % e,
+                                f"ERROR Saving incremental: {e}",
                             )
                         )
 
@@ -379,7 +370,12 @@ class ReadThread(threading.Thread):
             except (OSError, IOError, ValueError, TypeError) as err:
                 if self.progress_queue:
                     self.progress_queue.put(
-                        (MEDIUM_PRIORITY, "error", src, "ERROR in file read: %s," % err)
+                        (
+                            MEDIUM_PRIORITY,
+                            "error",
+                            src,
+                            f"ERROR in file read: {err},",
+                        )
                     )
 
 
@@ -399,20 +395,16 @@ class ProgressThread(threading.Thread):
 
     def __init__(
         self,
-        work_queue: "queue.Queue[str]",
-        result_queue: "queue.Queue[Tuple[str, int, float, str]]",
-        progress_queue: "queue.PriorityQueue[Any]",
-        *,
-        walk_queue: "queue.Queue[str]",
+        queues: Dict[str, queue.Queue],
         stop_event: threading.Event,
         save_event: threading.Event,
     ) -> None:
 
         super().__init__()
-        self.work = work_queue
-        self.result_queue = result_queue
-        self.progress_queue = progress_queue
-        self.walk_queue = walk_queue
+        self.work = queues["work"]
+        self.result_queue = queues["result"]
+        self.progress_queue = queues["progress"]
+        self.walk_queue = queues["walk"]
         self.stop_event = stop_event
         self.daemon = True
         self.last_accepted: Optional[str] = None
@@ -487,7 +479,7 @@ class ProgressThread(threading.Thread):
     def do_log_ignored(self, path: str, reason: str) -> None:
         """Log files that were ignored during processing."""
         self.ignored_count += 1
-        logger.info(f"Ignoring {repr(path)} for {repr(reason)}")
+        logger.info("Ignoring %r for %r", path, reason)
 
     def do_log_error(self, path: str, reason: Union[str, Exception]) -> None:
         """Log files that caused errors during processing."""
@@ -500,7 +492,7 @@ class ProgressThread(threading.Thread):
         """Log a generic message."""
         logger.info(message)
 
-    def run(self) -> None:  # pylint: disable=too-complex
+    def run(self) -> None:
         """Run loop that slurps items off the progress queue and dispatches
         the correct handler
         """
@@ -509,7 +501,7 @@ class ProgressThread(threading.Thread):
             try:
                 # we should only be getting directories on this queue
                 item = self.progress_queue.get(True, 0.1)[1:]
-                method_name = "do_log_%s" % item[0]
+                method_name = f"do_log_{item[0]}"
                 method = getattr(self, method_name)
                 method(*item[1:])
                 last_update = time.time()
@@ -536,13 +528,13 @@ class ProgressThread(threading.Thread):
                     # Warn about large queue sizes (potential memory issues)
                     if work_size > 40000:
                         logger.warning(
-                            "Work queue is large (%s items). "
+                            "Work queue is large (%d items). "
                             "Consider reducing thread counts to avoid memory issues.",
                             work_size,
                         )
                     if progress_size > 10000:
                         logger.warning(
-                            "Progress queue is backing up (%s items). "
+                            "Progress queue is backing up (%d items). "
                             "This may indicate slow processing.",
                             progress_size,
                         )
@@ -696,21 +688,20 @@ def _walk_fs(
     read_paths: List[str],
     extensions: Optional[List[str]],
     ignore: Optional[List[str]],
+    queues: Dict[str, queue.Queue],
     *,
-    work_queue: "queue.Queue[str]",
-    walk_queue: Optional["queue.Queue[str]"] = None,
     already_processed: Any,
-    progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
     walk_threads: int = 4,
     save_event: Optional[threading.Event] = None,
 ) -> None:
-    if walk_queue is None:
-        walk_queue = queue.Queue()
+    walk_queue = queues["walk"]
+    work_queue = queues["work"]
+    progress_queue = queues["progress"]
     walk_done = threading.Event()
     walkers = []
     if progress_queue:
         progress_queue.put(
-            (HIGH_PRIORITY, "message", "Starting %s walk workers" % walk_threads)
+            (HIGH_PRIORITY, "message", f"Starting {walk_threads} walk workers")
         )
     for _ in range(walk_threads):
         w = WalkThread(
@@ -794,7 +785,7 @@ def _extension_report(md5_data: Any, show_count: int = 10) -> int:
 # duplicate finding
 
 
-def find_duplicates(  # pylint: disable=too-complex
+def find_duplicates(  # pylint: disable=too-many-branches
     read_paths: List[str],
     work_queue: "queue.Queue[str]",
     result_queue: "queue.Queue[Tuple[str, int, float, str]]",
@@ -827,12 +818,12 @@ def find_duplicates(  # pylint: disable=too-complex
     result_fh = None
     if result_src is not None:
         result_fh = open(result_src, "ab")  # pylint: disable=consider-using-with
-        result_fh.write(("Src: %s\n" % read_paths).encode("utf-8"))
+        result_fh.write(f"Src: {read_paths}\n".encode("utf-8"))
         result_fh.write("Collision #, MD5, Path, Size (bytes), mtime\n".encode("utf-8"))
     try:
         if progress_queue:
             progress_queue.put(
-                (HIGH_PRIORITY, "message", "Starting %s read workers" % read_threads)
+                (HIGH_PRIORITY, "message", f"Starting {read_threads} read workers")
             )
         work_threads = []
         for _ in range(read_threads):
@@ -845,14 +836,18 @@ def find_duplicates(  # pylint: disable=too-complex
             )
             work_threads.append(w)
             w.start()
+        queues = {
+            "work": work_queue,
+            "result": result_queue,
+            "progress": progress_queue,
+            "walk": walk_queue,
+        }
         _walk_fs(
             read_paths,
             extensions,
             ignore,
-            work_queue=work_queue,
-            walk_queue=walk_queue,
+            queues,
             already_processed=manifest.read_sources,
-            progress_queue=progress_queue,
             walk_threads=walk_threads,
             save_event=save_event,
         )
@@ -862,7 +857,7 @@ def find_duplicates(  # pylint: disable=too-complex
                     (
                         HIGH_PRIORITY,
                         "message",
-                        "Waiting for work queue to empty: %s items remain"
+                        "Waiting for work queue to empty: %d items remain"
                         % work_queue.qsize(),
                     )
                 )
@@ -884,10 +879,9 @@ def find_duplicates(  # pylint: disable=too-complex
                     logger.info("    %r, %s", item[0], item[1])
                     if result_fh:
                         line = (
-                            "%s, %s, %r, %s, %s\n"
-                            % (group, md5, item[0], item[1], item[2])
-                        )
-                        result_fh.write(line.encode("utf-8"))
+                            f"{group}, {md5}, {item[0]!r}, {item[1]}, {item[2]}\n"
+                        ).encode("utf-8")
+                        result_fh.write(line)
         else:
             logger.info("No Duplicates Found")
         return (collisions, manifest)
@@ -1329,11 +1323,14 @@ def run_dupe_copy(  # pylint: disable=too-complex,too-many-branches,too-many-sta
     result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
     progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
     walk_queue: "queue.Queue[str]" = queue.Queue()
+    queues = {
+        "work": work_queue,
+        "result": result_queue,
+        "progress": progress_queue,
+        "walk": walk_queue,
+    }
     progress_thread = ProgressThread(
-        work_queue,
-        result_queue,
-        progress_queue,
-        walk_queue=walk_queue,
+        queues,
         stop_event=all_stop,
         save_event=save_event,
     )

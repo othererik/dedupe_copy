@@ -134,29 +134,35 @@ class TestCopySystem(
     def test_best_match_no_matches(self):
         """Test _best_match when no extensions match - line 102"""
         extensions = ["*.jpg", "*.png", "*.gif"]
-        result = dedupe_copy._best_match(extensions, "txt")
+        result = dedupe_copy._best_match(extensions, "txt")  # pylint: disable=protected-access
         self.assertIsNone(result, "Expected None when no patterns match")
 
     def test_best_match_multiple_patterns(self):
         """Test _best_match with multiple matching patterns"""
         # Test multiple patterns that match and choose best by length
         extensions = ["*.j*", "*.jp*", "*.jpg", "*.jpeg"]
-        result = dedupe_copy._best_match(extensions, "jpg")
+        result = dedupe_copy._best_match(extensions, "jpg")  # pylint: disable=protected-access
         # Should return exact match
         self.assertEqual(result, "*.jpg")
 
         # Test with patterns that need scoring
         extensions = ["*.j*", "*.???", "*.j??"]
-        result = dedupe_copy._best_match(extensions, "jpg")
+        result = dedupe_copy._best_match(extensions, "jpg")  # pylint: disable=protected-access
         # Should return the closest match by scoring
         self.assertIn(result, extensions)
 
     def test_match_extension_with_patterns(self):
         """Test _match_extension with wildcard patterns - line 170"""
         # Test pattern matching (not just exact match)
-        self.assertTrue(dedupe_copy._match_extension(["*.txt"], "test.txt"))
-        self.assertTrue(dedupe_copy._match_extension(["test.*"], "test.jpg"))
-        self.assertFalse(dedupe_copy._match_extension(["*.jpg"], "test.txt"))
+        self.assertTrue(
+            dedupe_copy._match_extension(["*.txt"], "test.txt")  # pylint: disable=protected-access
+        )
+        self.assertTrue(
+            dedupe_copy._match_extension(["test.*"], "test.jpg")  # pylint: disable=protected-access
+        )
+        self.assertFalse(
+            dedupe_copy._match_extension(["*.jpg"], "test.txt")  # pylint: disable=protected-access
+        )
 
     def test_extension_filter(self):
         """Test extension filtering in copy operations - covers line 170"""

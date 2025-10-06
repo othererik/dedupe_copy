@@ -12,7 +12,9 @@ from dedupe_copy import disk_cache_dict
 disk_cache_dict.DEBUG = True
 
 
-class DcdActionSuite(unittest.TestCase):  # pylint: disable=too-many-public-methods
+class DcdActionSuite(
+    unittest.TestCase
+):  # pylint: disable=too-many-public-methods,too-many-instance-attributes
     """Test suite for disk_cache_dict actions."""
 
     def setUp(self):
@@ -450,12 +452,12 @@ class DcdActionSuite(unittest.TestCase):  # pylint: disable=too-many-public-meth
             if backend:
                 try:
                     backend.close()
-                except:
+                except OSError:
                     pass
             if db_path and os.path.exists(db_path):
                 try:
                     os.unlink(db_path)
-                except:
+                except OSError:
                     pass
 
     def test_sqlite_backend_unlink_old_db(self):
@@ -463,7 +465,7 @@ class DcdActionSuite(unittest.TestCase):  # pylint: disable=too-many-public-meth
         db_file = os.path.join(self.temp_dir, "test_unlink.db")
 
         # Create an existing db file
-        with open(db_file, "w") as f:
+        with open(db_file, "w", encoding="utf-8") as f:
             f.write("old data")
 
         self.assertTrue(os.path.exists(db_file))
