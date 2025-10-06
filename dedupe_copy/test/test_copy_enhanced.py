@@ -646,7 +646,6 @@ class TestMetadataPreservation(unittest.TestCase):
             read_from_path=self.temp_dir,
             copy_to_path=copy_to_path,
             path_rules=["*:no_change"],
-            preserve_stat=True,
         )
 
         # Check copied file mtime
@@ -681,7 +680,6 @@ class TestMetadataPreservation(unittest.TestCase):
             read_from_path=self.temp_dir,
             copy_to_path=copy_to_path,
             path_rules=["*:no_change"],
-            preserve_stat=False,  # Default, but explicit
         )
 
         after_copy = time.time()

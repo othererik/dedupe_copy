@@ -210,7 +210,7 @@ class CopyThread(threading.Thread):
         self.preserve_stat = preserve_stat
         self.daemon = True
 
-    def run(self) -> None:  # pylint: disable=too-complex
+    def run(self) -> None:  # pylint: disable=too-complex,too-many-branches
         while not self.work.empty() or not self.stop_event.is_set():
             try:
                 src, mtime, size = self.work.get(True, 0.1)
@@ -490,7 +490,7 @@ class ProgressThread(threading.Thread):
         """Log a generic message."""
         logger.info(message)
 
-    def run(self) -> None:
+    def run(self) -> None:  # pylint: disable=too-complex
         """Run loop that slurps items off the progress queue and dispatches
         the correct handler
         """
@@ -626,7 +626,7 @@ class WalkThread(threading.Thread):
 # walk / hash helpers
 
 
-def _distribute_work(  # pylint: disable=too-complex
+def _distribute_work(  # pylint: disable=too-complex,too-many-branches
     src: str,
     already_processed: Any,
     ignore: Optional[List[str]],
@@ -780,7 +780,7 @@ def _extension_report(md5_data: Any, show_count: int = 10) -> int:
 # duplicate finding
 
 
-def find_duplicates(  # pylint: disable=too-complex
+def find_duplicates(  # pylint: disable=too-complex,too-many-branches
     read_paths: List[str],
     work_queue: "queue.Queue[str]",
     result_queue: "queue.Queue[Tuple[str, int, float, str]]",
@@ -899,7 +899,7 @@ def info_parser(data: Any) -> Iterator[Tuple[str, str, str, int]]:
 # copy core
 
 
-def queue_copy_work(
+def queue_copy_work(  # pylint: disable=too-complex
     copy_queue: "queue.Queue[Tuple[str, str, int]]",
     data: Any,
     progress_queue: Optional["queue.PriorityQueue[Any]"],

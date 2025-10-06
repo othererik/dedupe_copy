@@ -25,9 +25,8 @@ import os
 import random
 import time
 
+from dedupe_copy.test import utils
 from dedupe_copy import disk_cache_dict
-
-import utils
 
 # data set sizes, should be one larger and one smaller than cache sizes
 SMALL_SET = 1000
@@ -183,7 +182,7 @@ def log(
 # pylint: disable=too-many-nested-blocks
 def gen_tests():
     """Generate test configurations and write results to CSV."""
-    with open("perflog.csv", "a") as fd:
+    with open("perflog.csv", "a", encoding="utf-8") as fd:
         fd.write(
             "name, percent, py, dcd, lru, in_cache, backend, item_count, max_size\n"
         )

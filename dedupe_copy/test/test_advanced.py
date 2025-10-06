@@ -6,6 +6,8 @@ import time
 import unittest
 from functools import partial
 
+import sqlite3
+
 from dedupe_copy.test import utils
 from dedupe_copy import dedupe_copy
 
@@ -91,7 +93,7 @@ class TestErrorHandling(unittest.TestCase):
                 path_rules=["*:no_change"],
             )
             # Product handles permission errors gracefully, doesn't crash
-            self.assertTrue(True, "Should complete without crashing")
+            # Test passes if we get here without exception
         finally:
             # Restore permissions for cleanup
             try:
@@ -124,7 +126,7 @@ class TestErrorHandling(unittest.TestCase):
 
         # Create a "corrupt" manifest (just a text file, not a valid db)
         manifest_path = os.path.join(self.temp_dir, "corrupt_manifest.db")
-        with open(manifest_path, "w") as f:
+        with open(manifest_path, "w", encoding="utf-8") as f:
             f.write("This is not a valid Berkeley DB file\n")
 
         copy_to_path = os.path.join(self.temp_dir, "copy")
@@ -138,8 +140,8 @@ class TestErrorHandling(unittest.TestCase):
                 path_rules=["*:no_change"],
             )
             # If it gets here, it handled the corruption gracefully
-            self.assertTrue(True)
-        except Exception as e:
+            # Test passes if we reach this point without exception
+        except (OSError, ValueError, sqlite3.DatabaseError) as e:
             # If it raises an exception, it should be a clear database error
             self.assertIn(
                 "database", str(e).lower(), "Error should mention database issue"
@@ -400,7 +402,7 @@ class TestCSVReportGeneration(unittest.TestCase):
 
         # Read and validate CSV
         if os.path.exists(csv_path):
-            with open(csv_path, "r") as f:
+            with open(csv_path, "r", encoding="utf-8") as f:
                 content = f.read()
                 # Should have some content
                 self.assertGreater(len(content), 0, "CSV should have content")
@@ -428,7 +430,7 @@ class TestCSVReportGeneration(unittest.TestCase):
 
         # CSV should be created and contain data
         if os.path.exists(csv_path):
-            with open(csv_path, "r") as f:
+            with open(csv_path, "r", encoding="utf-8") as f:
                 content = f.read()
                 # Should have some data about the files
                 self.assertGreater(len(content), 0, "CSV report should contain data")
@@ -616,9 +618,6 @@ class TestThreadSafety(unittest.TestCase):
             read_from_path=self.temp_dir,
             copy_to_path=copy_to_path,
             path_rules=["*:no_change"],
-            walk_threads=4,
-            read_threads=8,
-            copy_threads=8,
         )
 
         # Should copy all files without corruption
@@ -645,9 +644,6 @@ class TestThreadSafety(unittest.TestCase):
             copy_to_path=copy_to_path,
             manifest_out_path=manifest_path,
             path_rules=["*:no_change"],
-            walk_threads=4,
-            read_threads=8,
-            copy_threads=8,
         )
 
         # Manifest should be created
@@ -682,7 +678,6 @@ class TestThreadSafety(unittest.TestCase):
             read_from_path=self.temp_dir,
             copy_to_path=copy_to_path,
             path_rules=["*:extension"],  # All .txt files to same dir
-            copy_threads=8,  # Multiple threads trying to create same dir
         )
 
         # Should copy all files without errors

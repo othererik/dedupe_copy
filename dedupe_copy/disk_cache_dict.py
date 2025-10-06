@@ -143,18 +143,23 @@ class SqliteBackend:
             return None
         # Check type marker
         type_marker = value_bytes[0:1]
-        if type_marker == b"S":
-            return value_bytes[1:].decode("utf-8")
-        elif type_marker == b"I":
-            return int(value_bytes[1:].decode("utf-8"))
-        elif type_marker == b"F":
-            return float(value_bytes[1:].decode("utf-8"))
-        elif type_marker == b"B":
-            return value_bytes[1:] == b"1"
-        elif type_marker == b"N":
+        data = value_bytes[1:]
+
+        # Type handlers mapping
+        def _return_none(_):
             return None
-        elif type_marker == b"P":
-            return pickle.loads(value_bytes[1:])
+
+        type_handlers = {
+            b"S": lambda d: d.decode("utf-8"),  # pylint: disable=unnecessary-lambda
+            b"I": lambda d: int(d.decode("utf-8")),
+            b"F": lambda d: float(d.decode("utf-8")),
+            b"B": lambda d: d == b"1",
+            b"N": _return_none,
+            b"P": lambda d: pickle.loads(d),  # pylint: disable=unnecessary-lambda
+        }
+        if type_marker in type_handlers:
+            return type_handlers[type_marker](data)
+
         # Legacy: no type marker, assume pickle
         return pickle.loads(value_bytes)
 
@@ -225,8 +230,13 @@ class SqliteBackend:
         """Cleanup database connection on deletion"""
         try:
             self.close()
-        except Exception:
-            # Suppress all exceptions during cleanup to avoid warnings
+        except (
+            sqlite3.OperationalError,
+            sqlite3.ProgrammingError,
+            OSError,
+            AttributeError,
+        ):
+            # Suppress expected exceptions during cleanup to avoid warnings
             pass
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
