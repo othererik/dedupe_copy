@@ -45,6 +45,60 @@ def _ensure_logging_configured() -> None:
         root_logger.propagate = False
 
 
+class DedupeCopyConfig:
+    """Configuration for a dedupe_copy operation."""
+
+    def __init__(
+        self,
+        read_from_path: Optional[Union[str, List[str]]] = None,
+        extensions: Optional[List[str]] = None,
+        manifests_in_paths: Optional[Union[str, List[str]]] = None,
+        manifest_out_path: Optional[str] = None,
+        path_rules: Optional[List[str]] = None,
+        copy_to_path: Optional[str] = None,
+        ignore_old_collisions: bool = False,
+        ignored_patterns: Optional[List[str]] = None,
+        csv_report_path: Optional[str] = None,
+        walk_threads: int = 4,
+        read_threads: int = 8,
+        copy_threads: int = 8,
+        convert_manifest_paths_to: str = "",
+        convert_manifest_paths_from: str = "",
+        no_walk: bool = False,
+        no_copy: Optional[List[str]] = None,
+        keep_empty: bool = False,
+        compare_manifests: Optional[Union[str, List[str]]] = None,
+        preserve_stat: bool = False,
+    ):
+        self.read_from_path = read_from_path
+        self.extensions = extensions
+        self.manifests_in_paths = manifests_in_paths
+        self.manifest_out_path = manifest_out_path
+        self.path_rules = path_rules
+        self.copy_to_path = copy_to_path
+        self.ignore_old_collisions = ignore_old_collisions
+        self.ignored_patterns = ignored_patterns
+        self.csv_report_path = csv_report_path
+        self.walk_threads = walk_threads
+        self.read_threads = read_threads
+        self.copy_threads = copy_threads
+        self.convert_manifest_paths_to = convert_manifest_paths_to
+        self.convert_manifest_paths_from = convert_manifest_paths_from
+        self.no_walk = no_walk
+        self.no_copy = no_copy
+        self.keep_empty = keep_empty
+        self.compare_manifests = compare_manifests
+        self.preserve_stat = preserve_stat
+        if read_from_path:
+            self.read_paths = (
+                read_from_path
+                if isinstance(read_from_path, list)
+                else [read_from_path]
+            )
+        else:
+            self.read_paths = []
+
+
 def _format_error_message(path: str, error: Union[str, Exception]) -> str:
     """Format an error message with helpful context and suggestions
 
@@ -187,20 +241,17 @@ class CopyThread(threading.Thread):
     def __init__(
         self,
         work_queue: "queue.Queue[Tuple[str, str, int]]",
-        target_path: str,
-        read_paths: List[str],
+        config: "DedupeCopyConfig",
         stop_event: threading.Event,
-        **kwargs: Any,
+        progress_queue: "queue.PriorityQueue[Any]",
+        path_rules_func: Optional[Callable[..., Tuple[str, str]]],
     ) -> None:
         super().__init__()
         self.work = work_queue
-        self.target_path = target_path
-        self.read_paths = read_paths
+        self.config = config
         self.stop_event = stop_event
-        self.extensions = kwargs.get("extensions")
-        self.path_rules = kwargs.get("path_rules")
-        self.progress_queue = kwargs.get("progress_queue")
-        self.preserve_stat = kwargs.get("preserve_stat", False)
+        self.progress_queue = progress_queue
+        self.path_rules_func = path_rules_func
         self.daemon = True
 
     def run(self) -> None:  # pylint: disable=too-many-branches
@@ -210,21 +261,24 @@ class CopyThread(threading.Thread):
                 ext = lower_extension(src)
                 if not ext:
                     ext = "no_extension"
-                if not _match_extension(self.extensions, src):
+                if not _match_extension(self.config.extensions, src):
                     continue
-                if self.path_rules is not None:
+                if self.path_rules_func is not None:
                     file_context = {
                         "extension": ext,
                         "mtime_str": mtime,
                         "_size": size,
                         "source_dirs": os.path.dirname(src),
                         "src": os.path.basename(src),
-                        "read_paths": self.read_paths,
+                        "read_paths": self.config.read_paths,
                     }
-                    dest, dest_dir = self.path_rules(self.target_path, file_context)
+                    dest, dest_dir = self.path_rules_func(
+                        self.config.copy_to_path, file_context
+                    )
                 else:
+                    assert self.config.copy_to_path is not None
                     dest = os.path.join(
-                        self.target_path, ext, mtime, os.path.basename(src)
+                        self.config.copy_to_path, ext, mtime, os.path.basename(src)
                     )
                     dest_dir = os.path.dirname(dest)
                 try:
@@ -235,7 +289,7 @@ class CopyThread(threading.Thread):
                             # thread race if it now exists, no issue
                             if not os.path.exists(dest_dir):
                                 raise
-                    if self.preserve_stat:
+                    if self.config.preserve_stat:
                         shutil.copy2(src, dest)
                     else:
                         shutil.copyfile(src, dest)
@@ -264,9 +318,8 @@ class ResultProcessor(threading.Thread):
         result_queue: "queue.Queue[Tuple[str, int, float, str]]",
         collisions: Any,
         manifest: Any,
-        *,
+        config: "DedupeCopyConfig",
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-        keep_empty: bool = False,
         save_event: Optional[threading.Event] = None,
     ) -> None:
         super().__init__()
@@ -275,7 +328,7 @@ class ResultProcessor(threading.Thread):
         self.collisions = collisions
         self.md5_data = manifest
         self.progress_queue = progress_queue
-        self.empty = keep_empty
+        self.config = config
         self.save_event = save_event
         self.daemon = True
 
@@ -289,7 +342,7 @@ class ResultProcessor(threading.Thread):
             try:
                 md5, size, mtime, src = self.results.get(True, 0.1)
                 collision = md5 in self.md5_data
-                if self.empty and md5 == "d41d8cd98f00b204e9800998ecf8427e":
+                if self.config.keep_empty and md5 == "d41d8cd98f00b204e9800998ecf8427e":
                     collision = False
                 self.md5_data[md5].append([src, size, mtime])
                 if collision:
@@ -572,21 +625,18 @@ class WalkThread(threading.Thread):
 
     def __init__(
         self,
+        config: "DedupeCopyConfig",
         walk_queue: "queue.Queue[str]",
         stop_event: threading.Event,
-        extensions: Optional[List[str]],
-        ignore: Optional[List[str]],
-        *,
         work_queue: "queue.Queue[str]",
         already_processed: Any,
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
         save_event: Optional[threading.Event] = None,
     ) -> None:
         super().__init__()
+        self.config = config
         self.walk = walk_queue
         self.work = work_queue
-        self.extensions = extensions
-        self.ignore = ignore
         self.already_processed = already_processed
         self.progress = progress_queue
         self.stop_event = stop_event
@@ -616,8 +666,7 @@ class WalkThread(threading.Thread):
                 _distribute_work(
                     src,
                     self.already_processed,
-                    self.ignore,
-                    extensions=self.extensions,
+                    self.config,
                     progress_queue=self.progress,
                     work_queue=self.work,
                     walk_queue=self.walk,
@@ -632,19 +681,18 @@ class WalkThread(threading.Thread):
 # walk / hash helpers
 
 
-def _distribute_work(  # pylint: disable=too-complex
+def _distribute_work(
     src: str,
     already_processed: Any,
-    ignore: Optional[List[str]],
+    config: "DedupeCopyConfig",
     *,
-    extensions: Optional[List[str]],
     progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
     work_queue: "queue.Queue[str]",
     walk_queue: "queue.Queue[str]",
 ) -> None:
     # if the path is excluded, don't traverse
-    if ignore:
-        for ignored_pattern in ignore:
+    if config.ignored_patterns:
+        for ignored_pattern in config.ignored_patterns:
             if fnmatch.fnmatch(src, ignored_pattern):
                 if progress_queue:
                     progress_queue.put((HIGH_PRIORITY, "ignored", src, ignored_pattern))
@@ -665,8 +713,8 @@ def _distribute_work(  # pylint: disable=too-complex
         action_required = True
         if fn in already_processed:
             action_required = False
-        if ignore and action_required:
-            for ignored_pattern in ignore:
+        if config.ignored_patterns and action_required:
+            for ignored_pattern in config.ignored_patterns:
                 if fnmatch.fnmatch(fn, ignored_pattern):
                     action_required = False
                     if progress_queue:
@@ -674,8 +722,8 @@ def _distribute_work(  # pylint: disable=too-complex
                             (HIGH_PRIORITY, "ignored", fn, ignored_pattern)
                         )
                     break
-        if extensions and action_required:
-            if not _match_extension(extensions, fn):
+        if config.extensions and action_required:
+            if not _match_extension(config.extensions, fn):
                 action_required = False  # didn't find a match
         if action_required:
             _throttle_puts(walk_queue.qsize())
@@ -685,13 +733,10 @@ def _distribute_work(  # pylint: disable=too-complex
 
 
 def _walk_fs(
-    read_paths: List[str],
-    extensions: Optional[List[str]],
-    ignore: Optional[List[str]],
+    config: "DedupeCopyConfig",
     queues: Dict[str, queue.Queue],
     *,
     already_processed: Any,
-    walk_threads: int = 4,
     save_event: Optional[threading.Event] = None,
 ) -> None:
     walk_queue = queues["walk"]
@@ -701,14 +746,13 @@ def _walk_fs(
     walkers = []
     if progress_queue:
         progress_queue.put(
-            (HIGH_PRIORITY, "message", f"Starting {walk_threads} walk workers")
+            (HIGH_PRIORITY, "message", f"Starting {config.walk_threads} walk workers")
         )
-    for _ in range(walk_threads):
+    for _ in range(config.walk_threads):
         w = WalkThread(
+            config,
             walk_queue,
             walk_done,
-            extensions,
-            ignore,
             work_queue=work_queue,
             already_processed=already_processed,
             progress_queue=progress_queue,
@@ -716,7 +760,7 @@ def _walk_fs(
         )
         walkers.append(w)
         w.start()
-    for src in read_paths:
+    for src in config.read_paths:
         _throttle_puts(walk_queue.qsize())
         walk_queue.put(src)
     walk_done.set()
@@ -785,22 +829,15 @@ def _extension_report(md5_data: Any, show_count: int = 10) -> int:
 # duplicate finding
 
 
-def find_duplicates(  # pylint: disable=too-many-branches
-    read_paths: List[str],
+def find_duplicates(
+    config: "DedupeCopyConfig",
     work_queue: "queue.Queue[str]",
     result_queue: "queue.Queue[Tuple[str, int, float, str]]",
     manifest: Any,
     collisions: Any,
-    *,
-    result_src: Optional[str] = None,
-    extensions: Optional[List[str]] = None,
-    ignore: Optional[List[str]] = None,
-    progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-    walk_threads: int = 4,
-    read_threads: int = 8,
-    keep_empty: bool = False,
-    save_event: Optional[threading.Event] = None,
-    walk_queue: Optional["queue.Queue[str]"] = None,
+    progress_queue: Optional["queue.PriorityQueue[Any]"],
+    save_event: Optional[threading.Event],
+    walk_queue: Optional["queue.Queue[str]"],
 ) -> Tuple[Any, Any]:
     """Find duplicate files by comparing checksums across directories."""
     work_stop_event = threading.Event()
@@ -810,23 +847,29 @@ def find_duplicates(  # pylint: disable=too-many-branches
         result_queue,
         collisions,
         manifest,
-        keep_empty=keep_empty,
+        config,
         progress_queue=progress_queue,
         save_event=save_event,
     )
     result_processor.start()
     result_fh = None
-    if result_src is not None:
-        result_fh = open(result_src, "ab")  # pylint: disable=consider-using-with
-        result_fh.write(f"Src: {read_paths}\n".encode("utf-8"))
+    if config.csv_report_path is not None:
+        result_fh = open(
+            config.csv_report_path, "ab"
+        )  # pylint: disable=consider-using-with
+        result_fh.write(f"Src: {config.read_paths}\n".encode("utf-8"))
         result_fh.write("Collision #, MD5, Path, Size (bytes), mtime\n".encode("utf-8"))
     try:
         if progress_queue:
             progress_queue.put(
-                (HIGH_PRIORITY, "message", f"Starting {read_threads} read workers")
+                (
+                    HIGH_PRIORITY,
+                    "message",
+                    f"Starting {config.read_threads} read workers",
+                )
             )
         work_threads = []
-        for _ in range(read_threads):
+        for _ in range(config.read_threads):
             w = ReadThread(
                 work_queue,
                 result_queue,
@@ -843,12 +886,9 @@ def find_duplicates(  # pylint: disable=too-many-branches
             "walk": walk_queue,
         }
         _walk_fs(
-            read_paths,
-            extensions,
-            ignore,
+            config,
             queues,
             already_processed=manifest.read_sources,
-            walk_threads=walk_threads,
             save_event=save_event,
         )
         while not work_queue.empty():
@@ -943,17 +983,10 @@ def queue_copy_work(
 def copy_data(
     dupes: Any,
     all_data: Any,
-    target_base: str,
-    read_paths: List[str],
-    *,
-    copy_threads: int = 8,
-    extensions: Optional[List[str]] = None,
-    path_rules: Optional[Callable[..., Tuple[str, str]]] = None,
-    ignore: Optional[List[str]] = None,
-    progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-    no_copy: Optional[Any] = None,
-    ignore_empty_files: bool = False,
-    preserve_stat: bool = False,
+    config: "DedupeCopyConfig",
+    path_rules_func: Optional[Callable[..., Tuple[str, str]]],
+    progress_queue: Optional["queue.PriorityQueue[Any]"],
+    no_copy: Any,
 ) -> None:
     """Queues up the copy work, waits for threads to finish"""
     stop_event = threading.Event()
@@ -962,23 +995,22 @@ def copy_data(
     copied = no_copy
     if progress_queue:
         progress_queue.put(
-            (HIGH_PRIORITY, "message", "Starting %s copy workers" % copy_threads)
+            (HIGH_PRIORITY, "message", "Starting %s copy workers" % config.copy_threads)
         )
-    for _ in range(copy_threads):
+    for _ in range(config.copy_threads):
         c = CopyThread(
             copy_queue,
-            target_base,
-            read_paths,
+            config,
             stop_event,
-            extensions=extensions,
-            path_rules=path_rules,
             progress_queue=progress_queue,
-            preserve_stat=preserve_stat,
+            path_rules_func=path_rules_func,
         )
         workers.append(c)
         c.start()
     if progress_queue:
-        progress_queue.put((HIGH_PRIORITY, "message", "Copying to %r" % target_base))
+        progress_queue.put(
+            (HIGH_PRIORITY, "message", "Copying to %r" % config.copy_to_path)
+        )
     # copied is passed to here so we don't try to copy "comparison" manifests
     # copied is a dict-like, so it's update in place
     queue_copy_work(
@@ -986,16 +1018,16 @@ def copy_data(
         dupes,
         progress_queue,
         copied,
-        ignore=ignore,
-        ignore_empty_files=ignore_empty_files,
+        ignore=config.ignored_patterns,
+        ignore_empty_files=config.keep_empty,
     )
     queue_copy_work(
         copy_queue,
         all_data,
         progress_queue,
         copied,
-        ignore=ignore,
-        ignore_empty_files=ignore_empty_files,
+        ignore=config.ignored_patterns,
+        ignore_empty_files=config.keep_empty,
     )
     stop_event.set()
     for c in workers:
@@ -1222,28 +1254,7 @@ class Manifest:
         self.read_sources.save()
 
 
-def run_dupe_copy(  # pylint: disable=too-complex,too-many-branches,too-many-statements
-    read_from_path: Optional[Union[str, List[str]]] = None,
-    extensions: Optional[List[str]] = None,
-    manifests_in_paths: Optional[Union[str, List[str]]] = None,
-    manifest_out_path: Optional[str] = None,
-    *,
-    path_rules: Optional[List[str]] = None,
-    copy_to_path: Optional[str] = None,
-    ignore_old_collisions: bool = False,
-    ignored_patterns: Optional[List[str]] = None,
-    csv_report_path: Optional[str] = None,
-    walk_threads: int = 4,
-    read_threads: int = 8,
-    copy_threads: int = 8,
-    convert_manifest_paths_to: str = "",
-    convert_manifest_paths_from: str = "",
-    no_walk: bool = False,
-    no_copy: Optional[List[str]] = None,
-    keep_empty: bool = False,
-    compare_manifests: Optional[Union[str, List[str]]] = None,
-    preserve_stat: bool = False,
-) -> None:
+def run_dupe_copy(config: DedupeCopyConfig) -> None:
     """For external callers this is the entry point for dedupe + copy"""
     # Ensure logging is configured for programmatic calls
     _ensure_logging_configured()
@@ -1252,45 +1263,49 @@ def run_dupe_copy(  # pylint: disable=too-complex,too-many-branches,too-many-sta
     logger.info("=" * 70)
     logger.info("DEDUPE COPY - Operation Summary")
     logger.info("=" * 70)
-    if read_from_path:
-        paths = read_from_path if isinstance(read_from_path, list) else [read_from_path]
+    if config.read_from_path:
+        paths = (
+            config.read_from_path
+            if isinstance(config.read_from_path, list)
+            else [config.read_from_path]
+        )
         logger.info("Source path(s): %s path(s)", len(paths))
         for p in paths:
             logger.info("  - %s", p)
-    if copy_to_path:
-        logger.info("Destination: %s", copy_to_path)
-    if manifests_in_paths:
+    if config.copy_to_path:
+        logger.info("Destination: %s", config.copy_to_path)
+    if config.manifests_in_paths:
         manifests = (
-            manifests_in_paths
-            if isinstance(manifests_in_paths, list)
-            else [manifests_in_paths]
+            config.manifests_in_paths
+            if isinstance(config.manifests_in_paths, list)
+            else [config.manifests_in_paths]
         )
         logger.info("Input manifest(s): %s manifest(s)", len(manifests))
-    if manifest_out_path:
-        logger.info("Output manifest: %s", manifest_out_path)
-    if extensions:
-        logger.info("Extension filter: %s", ", ".join(extensions))
-    if ignored_patterns:
-        logger.info("Ignored patterns: %s", ", ".join(ignored_patterns))
-    if path_rules:
-        logger.info("Path rules: %s", ", ".join(path_rules))
+    if config.manifest_out_path:
+        logger.info("Output manifest: %s", config.manifest_out_path)
+    if config.extensions:
+        logger.info("Extension filter: %s", ", ".join(config.extensions))
+    if config.ignored_patterns:
+        logger.info("Ignored patterns: %s", ", ".join(config.ignored_patterns))
+    if config.path_rules:
+        logger.info("Path rules: %s", ", ".join(config.path_rules))
     logger.info(
         "Threads: walk=%s, read=%s, copy=%s",
-        walk_threads,
-        read_threads,
-        copy_threads,
+        config.walk_threads,
+        config.read_threads,
+        config.copy_threads,
     )
     logger.info(
         "Options: keep_empty=%s, preserve_stat=%s, no_walk=%s",
-        keep_empty,
-        preserve_stat,
-        no_walk,
+        config.keep_empty,
+        config.preserve_stat,
+        config.no_walk,
     )
-    if compare_manifests:
+    if config.compare_manifests:
         comp_list = (
-            compare_manifests
-            if isinstance(compare_manifests, list)
-            else [compare_manifests]
+            config.compare_manifests
+            if isinstance(config.compare_manifests, list)
+            else [config.compare_manifests]
         )
         logger.info("Compare manifests: %s manifest(s)", len(comp_list))
     logger.info("=" * 70)
@@ -1300,24 +1315,24 @@ def run_dupe_copy(  # pylint: disable=too-complex,too-many-branches,too-many-sta
 
     save_event = threading.Event()
     manifest = Manifest(
-        manifests_in_paths,
-        save_path=manifest_out_path,
+        config.manifests_in_paths,
+        save_path=config.manifest_out_path,
         temp_directory=temp_directory,
         save_event=save_event,
     )
-    compare = Manifest(compare_manifests, save_path=None, temp_directory=temp_directory)
+    compare = Manifest(
+        config.compare_manifests, save_path=None, temp_directory=temp_directory
+    )
 
-    if no_copy:
-        for item in no_copy:
+    if config.no_copy:
+        for item in config.no_copy:
             compare[item] = None
 
-    if no_walk and not manifest:
+    if config.no_walk and not manifest:
         raise ValueError("If --no-walk is specified, a manifest must be supplied.")
-    if read_from_path and not isinstance(read_from_path, list):
-        read_from_path = [read_from_path]
     path_rules_func: Optional[Callable[..., Tuple[str, str]]] = None
-    if path_rules:
-        path_rules_func = _build_path_rules(path_rules)
+    if config.path_rules:
+        path_rules_func = _build_path_rules(config.path_rules)
     all_stop = threading.Event()
     work_queue: "queue.Queue[str]" = queue.Queue()
     result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
@@ -1336,20 +1351,22 @@ def run_dupe_copy(  # pylint: disable=too-complex,too-many-branches,too-many-sta
     )
     progress_thread.start()
     collisions = None
-    if manifest and (convert_manifest_paths_to or convert_manifest_paths_from):
+    if manifest and (
+        config.convert_manifest_paths_to or config.convert_manifest_paths_from
+    ):
         manifest.convert_manifest_paths(
-            convert_manifest_paths_from, convert_manifest_paths_to
+            config.convert_manifest_paths_from, config.convert_manifest_paths_to
         )
 
     # storage for hash collisions
     collisions_file = os.path.join(temp_directory, "collisions.db")
     collisions = DefaultCacheDict(list, db_file=collisions_file, max_size=10000)
-    if manifest and not ignore_old_collisions:
+    if manifest and not config.ignore_old_collisions:
         # rebuild collision list
         for md5, info in manifest.iteritems():
             if len(info) > 1:
                 collisions[md5] = info
-    if no_walk:
+    if config.no_walk:
         progress_queue.put(
             (
                 HIGH_PRIORITY,
@@ -1368,29 +1385,23 @@ def run_dupe_copy(  # pylint: disable=too-complex,too-many-branches,too-many-sta
             )
         )
         dupes, all_data = find_duplicates(
-            read_from_path or [],
+            config,
             work_queue,
             result_queue,
             manifest,
             collisions,
-            result_src=csv_report_path,
-            extensions=extensions,
-            ignore=ignored_patterns,
             progress_queue=progress_queue,
-            walk_threads=walk_threads,
-            read_threads=read_threads,
-            keep_empty=keep_empty,
             save_event=save_event,
             walk_queue=walk_queue,
         )
     total_size = _extension_report(all_data)
     logger.info("Total Size of accepted: %s bytes", total_size)
-    if manifest_out_path:
+    if config.manifest_out_path:
         progress_queue.put(
             (HIGH_PRIORITY, "message", "Saving complete manifest from search")
         )
-        all_data.save(path=manifest_out_path)
-    if copy_to_path is not None:
+        all_data.save(path=config.manifest_out_path)
+    if config.copy_to_path is not None:
         # Warning: strip dupes out of all data, this assumes dupes correctly
         # follows handling of keep_empty (not a dupe even if md5 is same for
         # zero byte files)
@@ -1399,21 +1410,15 @@ def run_dupe_copy(  # pylint: disable=too-complex,too-many-branches,too-many-sta
                 del all_data[md5]
         # copy the duplicate files first and then ignore them for the full pass
         progress_queue.put(
-            (HIGH_PRIORITY, "message", "Running copy to %r" % copy_to_path)
+            (HIGH_PRIORITY, "message", "Running copy to %r" % config.copy_to_path)
         )
         copy_data(
             dupes,
             all_data,
-            copy_to_path,
-            read_from_path or [],
-            copy_threads=copy_threads,
-            extensions=extensions,
-            path_rules=path_rules_func,
-            ignore=ignored_patterns,
+            config,
+            path_rules_func,
             progress_queue=progress_queue,
             no_copy=compare,
-            ignore_empty_files=keep_empty,
-            preserve_stat=preserve_stat,
         )
     all_stop.set()
     while progress_thread.is_alive():

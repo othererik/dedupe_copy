@@ -257,7 +257,7 @@ def gen_tests():
                                 if in_cache and max_size < LARGE_CACHE:
                                     continue
                                 yield item_count, lru, max_size, backend, in_cache, fd
-    except Exception:
+    except IOError:
         pass
 
 

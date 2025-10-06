@@ -2,25 +2,28 @@
 
 import csv
 import os
+import sqlite3
 import time
 import unittest
-from functools import partial
-
 from dedupe_copy.test import utils
-from dedupe_copy import dedupe_copy
+from dedupe_copy import dedupe_copy, DedupeCopyConfig
 
 
-do_copy = partial(
-    dedupe_copy.run_dupe_copy,
-    ignore_old_collisions=False,
-    walk_threads=4,
-    read_threads=8,
-    copy_threads=8,
-    convert_manifest_paths_to="",
-    convert_manifest_paths_from="",
-    no_walk=False,
-    preserve_stat=False,
-)
+def do_copy(**kwargs):
+    """Helper for tests to run dupe copy with default test parameters"""
+    default_config = {
+        "ignore_old_collisions": False,
+        "walk_threads": 4,
+        "read_threads": 8,
+        "copy_threads": 8,
+        "convert_manifest_paths_to": "",
+        "convert_manifest_paths_from": "",
+        "no_walk": False,
+        "preserve_stat": False,
+    }
+    default_config.update(kwargs)
+    config = DedupeCopyConfig(**default_config)
+    dedupe_copy.run_dupe_copy(config)
 
 
 class TestErrorHandling(unittest.TestCase):
@@ -92,7 +95,7 @@ class TestErrorHandling(unittest.TestCase):
             )
             # Product handles permission errors gracefully, doesn't crash.
             # If it completes without crashing, the test passes.
-            pass
+            self.assertTrue(True)
         finally:
             # Restore permissions for cleanup
             try:
@@ -139,8 +142,7 @@ class TestErrorHandling(unittest.TestCase):
                 path_rules=["*:no_change"],
             )
             # If it gets here, it handled the corruption gracefully
-            pass
-        except Exception as e:
+        except sqlite3.DatabaseError as e:
             # If it raises an exception, it should be a clear database error
             self.assertIn(
                 "database", str(e).lower(), "Error should mention database issue"

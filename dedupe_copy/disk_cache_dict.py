@@ -152,7 +152,7 @@ class SqliteBackend:
     @staticmethod
     def _load(value: bytes) -> Any:
         value_bytes = bytes(value)
-        if not value_bytes:
+        if not value_bytes or value_bytes[0:1] == b"N":
             return None
         # Check type marker
         type_marker = value_bytes[0:1]
@@ -164,8 +164,6 @@ class SqliteBackend:
             return float(value_bytes[1:].decode("utf-8"))
         if type_marker == b"B":
             return value_bytes[1:] == b"1"
-        if type_marker == b"N":
-            return None
         if type_marker == b"P":
             return pickle.loads(value_bytes[1:])
         # Legacy: no type marker, assume pickle

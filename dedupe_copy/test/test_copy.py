@@ -1,6 +1,5 @@
 """Basic tests around copy operations"""
 
-from functools import partial
 import os
 import unittest
 
@@ -10,20 +9,24 @@ import time
 
 from dedupe_copy.test import utils
 
-from dedupe_copy import dedupe_copy, disk_cache_dict
+from dedupe_copy import dedupe_copy, disk_cache_dict, DedupeCopyConfig
 
 
-do_copy = partial(
-    dedupe_copy.run_dupe_copy,
-    ignore_old_collisions=False,
-    walk_threads=4,
-    read_threads=8,
-    copy_threads=8,
-    convert_manifest_paths_to="",
-    convert_manifest_paths_from="",
-    no_walk=False,
-    preserve_stat=True,
-)
+def do_copy(**kwargs):
+    """Helper for tests to run dupe copy with default test parameters"""
+    default_config = {
+        "ignore_old_collisions": False,
+        "walk_threads": 4,
+        "read_threads": 8,
+        "copy_threads": 8,
+        "convert_manifest_paths_to": "",
+        "convert_manifest_paths_from": "",
+        "no_walk": False,
+        "preserve_stat": True,
+    }
+    default_config.update(kwargs)
+    config = DedupeCopyConfig(**default_config)
+    dedupe_copy.run_dupe_copy(config)
 
 
 class TestCopySystem(
@@ -155,14 +158,14 @@ class TestCopySystem(
         """Test _match_extension with wildcard patterns - line 170"""
         # Test pattern matching (not just exact match)
         self.assertTrue(
-            dedupe_copy._match_extension(["*.txt"], "test.txt")  # pylint: disable=protected-access
-        )
+            dedupe_copy._match_extension(["*.txt"], "test.txt")
+        )  # pylint: disable=protected-access
         self.assertTrue(
-            dedupe_copy._match_extension(["test.*"], "test.jpg")  # pylint: disable=protected-access
-        )
+            dedupe_copy._match_extension(["test.*"], "test.jpg")
+        )  # pylint: disable=protected-access
         self.assertFalse(
-            dedupe_copy._match_extension(["*.jpg"], "test.txt")  # pylint: disable=protected-access
-        )
+            dedupe_copy._match_extension(["*.jpg"], "test.txt")
+        )  # pylint: disable=protected-access
 
     def test_extension_filter(self):
         """Test extension filtering in copy operations - covers line 170"""
@@ -180,25 +183,15 @@ class TestCopySystem(
             copy_to_path = os.path.join(temp_dir, "filtered_copy")
 
             # Copy only .txt files
-
-            do_copy_filtered = partial(
-                dedupe_copy.run_dupe_copy,
-                ignore_old_collisions=False,
-                walk_threads=1,
-                read_threads=1,
-                copy_threads=1,
-                convert_manifest_paths_to="",
-                convert_manifest_paths_from="",
-                no_walk=False,
-                preserve_stat=False,
-            )
-
-            # Use extension filter
-            do_copy_filtered(
+            do_copy(
                 read_from_path=temp_dir,
                 copy_to_path=copy_to_path,
                 extensions=[".txt"],
                 path_rules=["*:no_change"],
+                walk_threads=1,
+                read_threads=1,
+                copy_threads=1,
+                preserve_stat=False,
             )
 
             # Verify only .txt files were copied
@@ -231,13 +224,14 @@ class TestCopySystem(
             result_queue.put(("abc123", 1000, "2020-01-01", "/tmp/file.txt"))
 
             # Create and start result processor
+            config = dedupe_copy.DedupeCopyConfig(keep_empty=False)
             processor = dedupe_copy.ResultProcessor(
-                result_queue=result_queue,
                 stop_event=stop_event,
+                result_queue=result_queue,
                 collisions=collisions,
                 manifest=manifest,
+                config=config,
                 progress_queue=progress_queue,
-                keep_empty=False,
                 save_event=save_event,
             )
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
+"""Command-line interface for the DedupeCopy tool."""
 import argparse
 import logging
 
-from dedupe_copy import _clean_extensions, run_dupe_copy, PATH_RULES
+from dedupe_copy import DedupeCopyConfig, _clean_extensions, run_dupe_copy, PATH_RULES
 from dedupe_copy.logging_config import setup_logging
 
 
@@ -225,7 +226,7 @@ def _create_parser():
     return parser
 
 
-def _handle_arguments(args):
+def _handle_arguments(args) -> DedupeCopyConfig:
     """Take the cli args and process them in prep for calling run_dedupe_copy"""
     # Setup logging based on verbosity flags
     verbosity = "normal"
@@ -248,27 +249,27 @@ def _handle_arguments(args):
     if args.read_path:
         read_paths = args.read_path
     copy_path = args.copy_path if args.copy_path else None
-    return {
-        "read_from_path": read_paths,
-        "extensions": extensions,
-        "manifests_in_paths": args.manifest_in,
-        "manifest_out_path": args.manifest_out,
-        "path_rules": args.path_rules,
-        "copy_to_path": copy_path,
-        "ignore_old_collisions": args.ignore_old_collisions,
-        "ignored_patterns": args.ignore,
-        "csv_report_path": args.result_path,
-        "walk_threads": args.walk_threads,
-        "read_threads": args.read_threads,
-        "copy_threads": args.copy_threads,
-        "convert_manifest_paths_to": args.convert_manifest_paths_to,
-        "convert_manifest_paths_from": args.convert_manifest_paths_from,
-        "no_walk": args.no_walk,
-        "no_copy": None,
-        "keep_empty": args.keep_empty,
-        "compare_manifests": args.compare,
-        "preserve_stat": args.copy_metadata,
-    }
+    return DedupeCopyConfig(
+        read_from_path=read_paths,
+        extensions=extensions,
+        manifests_in_paths=args.manifest_in,
+        manifest_out_path=args.manifest_out,
+        path_rules=args.path_rules,
+        copy_to_path=copy_path,
+        ignore_old_collisions=args.ignore_old_collisions,
+        ignored_patterns=args.ignore,
+        csv_report_path=args.result_path,
+        walk_threads=args.walk_threads,
+        read_threads=args.read_threads,
+        copy_threads=args.copy_threads,
+        convert_manifest_paths_to=args.convert_manifest_paths_to,
+        convert_manifest_paths_from=args.convert_manifest_paths_from,
+        no_walk=args.no_walk,
+        no_copy=None,
+        keep_empty=args.keep_empty,
+        compare_manifests=args.compare,
+        preserve_stat=args.copy_metadata,
+    )
 
 
 def run_cli():
@@ -288,8 +289,8 @@ def run_cli():
     logger = logging.getLogger(__name__)
 
     logger.debug("Running with arguments: %s", args)
-    processed_args = _handle_arguments(args)
-    return run_dupe_copy(**processed_args)
+    config = _handle_arguments(args)
+    return run_dupe_copy(config)
 
 
 if __name__ == "__main__":

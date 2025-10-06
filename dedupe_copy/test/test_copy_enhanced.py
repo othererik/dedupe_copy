@@ -1,42 +1,29 @@
 """Enhanced tests for copy operations covering all user-facing features"""
 
-from functools import partial
 import os
 import unittest
 import datetime
 import time
 
 from dedupe_copy.test import utils
-from dedupe_copy import dedupe_copy
+from dedupe_copy import dedupe_copy, DedupeCopyConfig
 
 
-do_copy = partial(
-    dedupe_copy.run_dupe_copy,
-    ignore_old_collisions=False,
-    walk_threads=4,
-    read_threads=8,
-    copy_threads=8,
-    convert_manifest_paths_to="",
-    convert_manifest_paths_from="",
-    no_walk=False,
-)
-
-
-def do_copy_with_rules(path_rule_strings, **kwargs):
-    """Helper to convert path rule strings to callable and run copy"""
-    # Pass path_rules as strings - run_dupe_copy will call _build_path_rules
-    return dedupe_copy.run_dupe_copy(
-        path_rules=path_rule_strings,
-        ignore_old_collisions=False,
-        walk_threads=4,
-        read_threads=8,
-        copy_threads=8,
-        convert_manifest_paths_to="",
-        convert_manifest_paths_from="",
-        no_walk=False,
-        preserve_stat=False,
-        **kwargs,
-    )
+def do_copy(**kwargs):
+    """Helper for tests to run dupe copy with default test parameters"""
+    default_config = {
+        "ignore_old_collisions": False,
+        "walk_threads": 4,
+        "read_threads": 8,
+        "copy_threads": 8,
+        "convert_manifest_paths_to": "",
+        "convert_manifest_paths_from": "",
+        "no_walk": False,
+        "preserve_stat": False,
+    }
+    default_config.update(kwargs)
+    config = DedupeCopyConfig(**default_config)
+    dedupe_copy.run_dupe_copy(config)
 
 
 class TestPathRules(unittest.TestCase):
@@ -58,8 +45,8 @@ class TestPathRules(unittest.TestCase):
         )
         copy_to_path = os.path.join(self.temp_dir, "mtime_copy")
 
-        do_copy_with_rules(
-            ["*.jpg:mtime"],
+        do_copy(
+            path_rules=["*.jpg:mtime"],
             read_from_path=self.temp_dir,
             copy_to_path=copy_to_path,
         )
@@ -89,8 +76,8 @@ class TestPathRules(unittest.TestCase):
         )
         copy_to_path = os.path.join(self.temp_dir, "ext_copy")
 
-        do_copy_with_rules(
-            ["*:extension"],
+        do_copy(
+            path_rules=["*:extension"],
             read_from_path=self.temp_dir,
             copy_to_path=copy_to_path,
         )
@@ -133,8 +120,8 @@ class TestPathRules(unittest.TestCase):
         )
         copy_to_path = os.path.join(self.temp_dir, "combined_copy")
 
-        do_copy_with_rules(
-            ["*.jpg:extension", "*.jpg:mtime"],
+        do_copy(
+            path_rules=["*.jpg:extension", "*.jpg:mtime"],
             read_from_path=self.temp_dir,
             copy_to_path=copy_to_path,
         )
@@ -161,8 +148,8 @@ class TestPathRules(unittest.TestCase):
         )
         copy_to_path = os.path.join(self.temp_dir, "specific_copy")
 
-        do_copy_with_rules(
-            ["*.jpg:mtime", "*.pdf:extension"],
+        do_copy(
+            path_rules=["*.jpg:mtime", "*.pdf:extension"],
             read_from_path=self.temp_dir,
             copy_to_path=copy_to_path,
         )
@@ -479,8 +466,8 @@ class TestMultipleSourcePaths(unittest.TestCase):
 
         copy_to_path = os.path.join(self.temp_dir, "multi_copy")
 
-        do_copy_with_rules(
-            ["*:no_change"],
+        do_copy(
+            path_rules=["*:no_change"],
             read_from_path=[self.source1, self.source2],
             copy_to_path=copy_to_path,
         )
@@ -516,8 +503,8 @@ class TestMultipleSourcePaths(unittest.TestCase):
 
         copy_to_path = os.path.join(self.temp_dir, "dupe_across_sources")
 
-        do_copy_with_rules(
-            ["*:no_change"],
+        do_copy(
+            path_rules=["*:no_change"],
             read_from_path=[self.source1, self.source2],
             copy_to_path=copy_to_path,
         )
@@ -583,8 +570,8 @@ class TestManifestIntegration(unittest.TestCase):
         copy_to_path = os.path.join(self.temp_dir, "first_copy")
         manifest_path = os.path.join(self.temp_dir, "skip_manifest.db")
 
-        do_copy_with_rules(
-            ["*:no_change"],
+        do_copy(
+            path_rules=["*:no_change"],
             read_from_path=source_dir,
             copy_to_path=copy_to_path,
             manifest_out_path=manifest_path,
@@ -604,8 +591,8 @@ class TestManifestIntegration(unittest.TestCase):
             files2.append([fn, check, mtime])
 
         # Second pass: use existing manifest
-        do_copy_with_rules(
-            ["*:no_change"],
+        do_copy(
+            path_rules=["*:no_change"],
             read_from_path=source_dir,
             copy_to_path=copy_to_path,
             manifests_in_paths=manifest_path,
