@@ -8,9 +8,6 @@ version = "1.0.1"
 description = "Find duplicates / copy and restructure file layout command-line tool"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = [
-    "xxhash>=3.4.1"
-]
 license = {text = "BSD-2-Clause"}
 authors = [
     {name = "Erik Schweller", email = "othererik@gmail.com"}
@@ -41,7 +38,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-color = ["colorama>=0.4.0"]
+color = ["colorama>=0.4.0", "xxhash>=3.4.1"]
 
 [project.urls]
 Homepage = "https://pypi.python.org/pypi/DedupeCopy/"
@@ -54,4 +51,4 @@ dedupecopy = "dedupe_copy.bin.dedupecopy_cli:run_cli"
 packages = ["dedupe_copy", "dedupe_copy.bin", "dedupe_copy.test"]
 
 [tool.pylint."MESSAGES CONTROL"]
-disable = ["R0913", "R0914", "R0902", "R0801"]
+disable = ["R0913", "R0914", "R0902", "R0801", "R0917"]

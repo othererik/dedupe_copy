@@ -220,7 +220,9 @@ def find_duplicates(
                 for item in info:
                     logger.info("    %r, %s", item[0], item[1])
                     if result_fh:
-                        line = f"{group}, {md5}, {repr(item[0])}, {item[1]}, {item[2]}\n"
+                        line = (
+                            f"{group}, {md5}, {repr(item[0])}, {item[1]}, {item[2]}\n"
+                        )
                         result_fh.write(line.encode("utf-8"))
         else:
             logger.info("No Duplicates Found")

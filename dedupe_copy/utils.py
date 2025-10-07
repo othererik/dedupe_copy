@@ -7,13 +7,24 @@ import logging
 import os
 import sys
 import time
-from typing import List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
-import xxhash
+
+logger = logging.getLogger(__name__)
+
+# Optional import of xxhash for faster hashing if available
+xxhash: Optional[Any] = None
+try:
+    import xxhash
+except ImportError:
+    logger.warning(
+        "xxhash module not found. Please install with 'pip install xxhash',"
+        " forcing use of 'hash_algo=\"md5\"' in configuration to avoid xxhash."
+    )
+    xxhash = None
 
 MAX_TARGET_QUEUE_SIZE = 50000
 READ_CHUNK = 1048576  # 1 MB
-logger = logging.getLogger(__name__)
 
 
 def ensure_logging_configured() -> None:
@@ -83,7 +94,7 @@ def hash_file(src: str, hash_algo: str = "md5") -> str:
     :param hash_algo: Hashing algorithm to use ('md5' or 'xxh64').
     :type hash_algo: str
     """
-    if hash_algo == "xxh64":
+    if xxhash and hash_algo == "xxh64":
         checksum = xxhash.xxh64()
     else:
         checksum = hashlib.md5()
