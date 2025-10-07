@@ -109,7 +109,14 @@ class TestDelete(unittest.TestCase):
         do_copy(read_from_path=self.temp_dir, manifest_out_path=manifest_path)
 
         # Second run: delete with --no-walk and size threshold
-        do_copy(
+        run_dupe_copy(
+            ignore_old_collisions=False,
+            walk_threads=1,
+            read_threads=1,
+            copy_threads=1,
+            convert_manifest_paths_to="",
+            convert_manifest_paths_from="",
+            preserve_stat=True,
             manifests_in_paths=manifest_path,
             no_walk=True,
             delete_duplicates=True,
