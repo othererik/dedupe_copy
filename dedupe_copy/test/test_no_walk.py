@@ -1,3 +1,5 @@
+"""Tets --no-walk functionality - confim operations work when suppling a manifest only."""
+
 import os
 import shutil
 import tempfile
@@ -67,10 +69,9 @@ class TestNoWalk(unittest.TestCase):
         self.assertIn("c.txt", remaining_files)
         # only one of a or b should exist
         self.assertTrue(
-            ("a.txt" in remaining_files and "b.txt" not in remaining_files) or
-            ("b.txt" in remaining_files and "a.txt" not in remaining_files)
+            ("a.txt" in remaining_files and "b.txt" not in remaining_files)
+            or ("b.txt" in remaining_files and "a.txt" not in remaining_files)
         )
-
 
     def test_no_walk_report(self):
         """--no-walk with -r generates a report"""

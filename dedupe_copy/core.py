@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from collections import Counter
-from typing import Any, Callable, Iterator, List, Optional, Tuple, Union
+from typing import Any, Callable, Iterator, List, Literal, Optional, Tuple, Union
 
 from .config import CopyConfig, CopyJob, WalkConfig, DeleteJob
 from .disk_cache_dict import DefaultCacheDict
@@ -103,7 +103,7 @@ def _extension_report(md5_data: Any, show_count: int = 10) -> int:
 def generate_report(
     csv_report_path: str,
     collisions: Any,
-    read_paths: Optional[List[str]],
+    read_paths: Literal[""] | list[str] | None,
     hash_algo: str,
 ) -> None:
     """Generate a CSV report of duplicate files."""
@@ -113,7 +113,9 @@ def generate_report(
             if read_paths:
                 result_fh.write(f"Src: {read_paths}\n".encode("utf-8"))
             result_fh.write(
-                "Collision #, MD5, Path, Size (bytes), mtime\n".encode("utf-8")
+                f"Collision #, {hash_algo.upper()}, Path, Size (bytes), mtime\n".encode(
+                    "utf-8"
+                )
             )
             if collisions:
                 group = 0
