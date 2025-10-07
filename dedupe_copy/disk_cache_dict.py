@@ -51,8 +51,9 @@ class SqliteBackend:
         """Initializes a connection for the current thread."""
         conn = sqlite3.connect(self._db_file, check_same_thread=True)
         # Enable WAL mode for better concurrent performance
-        # conn.execute("PRAGMA journal_mode=WAL;")
-        # conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA cache_size = -64000;")  # 64MB cache
         conn.execute(
             f"create table if not exists {self.table} (id integer primary "
             f"key, hash integer, key blob, value blob);"

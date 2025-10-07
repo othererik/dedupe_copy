@@ -11,6 +11,7 @@ class WalkConfig:
 
     extensions: Optional[List[str]] = None
     ignore: Optional[List[str]] = None
+    hash_algo: str = "md5"
 
 
 @dataclass

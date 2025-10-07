@@ -192,6 +192,14 @@ def _create_parser():
         default=8,
         type=int,
     )
+    performance.add_argument(
+        "--hash-algo",
+        help="Hashing algorithm to use (md5 or xxh64)",
+        required=False,
+        default="md5",
+        choices=["md5", "xxh64"],
+        type=str,
+    )
 
     output_group = parser.add_argument_group("Output Control")
     verbosity_group = output_group.add_mutually_exclusive_group()
@@ -282,6 +290,7 @@ def _handle_arguments(args):
         "walk_threads": args.walk_threads,
         "read_threads": args.read_threads,
         "copy_threads": args.copy_threads,
+        "hash_algo": args.hash_algo,
         "convert_manifest_paths_to": args.convert_manifest_paths_to,
         "convert_manifest_paths_from": args.convert_manifest_paths_from,
         "no_walk": args.no_walk,
