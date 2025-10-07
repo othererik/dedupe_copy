@@ -5,7 +5,7 @@ import unittest
 
 from dedupe_copy.test import utils
 
-from dedupe_copy import dedupe_copy
+from dedupe_copy.manifest import Manifest
 from dedupe_copy.disk_cache_dict import DefaultCacheDict
 
 
@@ -21,7 +21,7 @@ class TestManifests(unittest.TestCase):
         self.scratch_dict = os.path.join(self.temp_dir, "scratch.dict")
         self.manifest_path = os.path.join(self.temp_dir, "manifest.dict")
         self.read_path = f"{self.manifest_path}.read"
-        self.manifest = dedupe_copy.Manifest(
+        self.manifest = Manifest(
             None, save_path=None, temp_directory=self.temp_dir
         )
 
@@ -105,7 +105,7 @@ class TestManifests(unittest.TestCase):
         sources = _dcd_from_manifest(sources, f"{self.temp_dict}.read")
         md5data.save()
         sources.save()
-        manifest = dedupe_copy.Manifest(self.temp_dict, temp_directory=self.temp_dir)
+        manifest = Manifest(self.temp_dict, temp_directory=self.temp_dir)
         self.check_manifest(manifest, md5data, sources)
         del md5data
         del sources
@@ -125,7 +125,7 @@ class TestManifests(unittest.TestCase):
             master_sources.update(sources)
             md5data.save()
             sources.save()
-        combined = dedupe_copy.Manifest(paths, temp_directory=self.temp_dir)
+        combined = Manifest(paths, temp_directory=self.temp_dir)
         self.check_manifest(combined, master_md5, master_sources)
         del md5data
         del sources

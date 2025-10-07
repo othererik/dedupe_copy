@@ -1,22 +1,7 @@
 """These are not really 'tests', but just give a relative measure of
 the time to perform various actions between a normal python defaultdict and
-the disk cache version            fd.write(
-                "name, percent, py, dcd, lru, in_cache, backend, item_count, max_size\n"
-            )
-            for item_count in [SMALL_SET, LARGE_SET]:
-                for max_size in [SMALL_CACHE, LARGE_CACHE]:
-                    for backend in [
-                        None,
-                    ]:
-                        for lru in [True, False]:
-                            for in_cache in [True, False]:
-                                if not item_count or not max_size:
-                                    continue
-                                if in_cache and max_size < LARGE_CACHE:
-                                    continue
-                                yield item_count, lru, max_size, backend, in_cache, fd
-    except Exception:
-        passhis is all low grade not to be fully believed performance estimation!
+the disk cache version. This is all low grade not to be fully believed
+performance estimation!
 """
 
 import collections
@@ -25,9 +10,9 @@ import os
 import random
 import time
 
+from dedupe_copy.test import utils
 from dedupe_copy import disk_cache_dict
 
-import utils
 
 # data set sizes, should be one larger and one smaller than cache sizes
 SMALL_SET = 1000
@@ -143,7 +128,7 @@ def iterate(container, keys):
         next(citer)
 
 
-def log(
+def log(  # pylint: disable=too-many-arguments
     name,
     py,
     dcd,
@@ -183,7 +168,7 @@ def log(
 # pylint: disable=too-many-nested-blocks
 def gen_tests():
     """Generate test configurations and write results to CSV."""
-    with open("perflog.csv", "a") as fd:
+    with open("perflog.csv", "a", encoding="utf-8") as fd:
         fd.write(
             "name, percent, py, dcd, lru, in_cache, backend, item_count, max_size\n"
         )
@@ -201,7 +186,7 @@ def gen_tests():
                             yield item_count, lru, max_size, backend, in_cache, fd
 
 
-def main():
+def main():  # pylint: disable=too-many-locals
     """Run performance tests on disk cache dict."""
     for item_count, lru, max_size, backend, in_cache, logfd in gen_tests():
         keys = [str(i) for i in range(item_count)]

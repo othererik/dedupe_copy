@@ -10,16 +10,14 @@ Note: Future enhancements could include:
 
 import collections.abc
 import os
+import pickle
 import shutil
+import sqlite3
 import sys
+import threading
 import time
 from collections import OrderedDict
-from typing import Any, Optional, Tuple, List, Iterator, Callable, Dict
-
-# for SqliteBackend
-import pickle
-import sqlite3
-
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 IS_WIN = sys.platform == "win32"
 DEBUG = False
@@ -43,25 +41,35 @@ class SqliteBackend:
         if unlink_old_db and os.path.exists(db_file):
             os.unlink(db_file)
         self._db_file = db_file
-        self.conn: sqlite3.Connection = sqlite3.connect(
-            db_file, check_same_thread=False
-        )
-        # Enable WAL mode for better concurrent performance
-        # self.conn.execute("PRAGMA journal_mode=WAL;")
-        # self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.table = db_table
-        self.conn.execute(
-            f"create table if not exists {self.table} (id integer primary "
-            f"key, hash integer, key blob, value blob);"
-        )
-        self.conn.execute(
-            f"create index if not exists {self.table}_index ON {self.table}(hash);"
-        )
-        self.conn.commit()
+        self._local = threading.local()
+        self._init_conn()  # Eagerly initialize for the main thread
         self._commit_needed = False
         self._write_count = 0
         self._batch_size = 100  # Commit every 100 writes
-        self._closed = False  # Track connection state
+
+    def _init_conn(self) -> None:
+        """Initializes a connection for the current thread."""
+        conn = sqlite3.connect(self._db_file, check_same_thread=True)
+        # Enable WAL mode for better concurrent performance
+        # conn.execute("PRAGMA journal_mode=WAL;")
+        # conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute(
+            f"create table if not exists {self.table} (id integer primary "
+            f"key, hash integer, key blob, value blob);"
+        )
+        conn.execute(
+            f"create index if not exists {self.table}_index ON {self.table}(hash);"
+        )
+        conn.commit()
+        self._local.conn = conn
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """Return a thread-local SQLite connection."""
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            self._init_conn()
+        return self._local.conn
 
     def _get_key_id(self, key: Any) -> int:
         """The indirection allows for hash collisions needed for add and
@@ -125,13 +133,13 @@ class SqliteBackend:
         # Fast path for primitive types - avoid pickle overhead
         if isinstance(value, str):
             return sqlite3.Binary(b"S" + value.encode("utf-8"))
-        elif isinstance(value, int):
+        if isinstance(value, int):
             return sqlite3.Binary(b"I" + str(value).encode("utf-8"))
-        elif isinstance(value, float):
+        if isinstance(value, float):
             return sqlite3.Binary(b"F" + str(value).encode("utf-8"))
-        elif isinstance(value, bool):
+        if isinstance(value, bool):
             return sqlite3.Binary(b"B" + (b"1" if value else b"0"))
-        elif value is None:
+        if value is None:
             return sqlite3.Binary(b"N")
         # Fall back to pickle for complex types
         return sqlite3.Binary(b"P" + pickle.dumps(value, version))
@@ -145,15 +153,15 @@ class SqliteBackend:
         type_marker = value_bytes[0:1]
         if type_marker == b"S":
             return value_bytes[1:].decode("utf-8")
-        elif type_marker == b"I":
+        if type_marker == b"I":
             return int(value_bytes[1:].decode("utf-8"))
-        elif type_marker == b"F":
+        if type_marker == b"F":
             return float(value_bytes[1:].decode("utf-8"))
-        elif type_marker == b"B":
+        if type_marker == b"B":
             return value_bytes[1:] == b"1"
-        elif type_marker == b"N":
+        if type_marker == b"N":
             return None
-        elif type_marker == b"P":
+        if type_marker == b"P":
             return pickle.loads(value_bytes[1:])
         # Legacy: no type marker, assume pickle
         return pickle.loads(value_bytes)
@@ -208,74 +216,48 @@ class SqliteBackend:
         return self._db_file
 
     def close(self) -> None:
-        """Close the database connection safely"""
-        if getattr(self, "_closed", True):
-            # Already closed or not initialized
-            return
-        try:
-            if hasattr(self, "conn") and self.conn:
-                self.conn.commit()
-                self.conn.close()
-                self._closed = True
-        except (sqlite3.OperationalError, sqlite3.ProgrammingError, OSError):
-            # Database may have been deleted or already closed
-            self._closed = True
+        """Close the database connection safely for the current thread."""
+        if hasattr(self._local, "conn") and self._local.conn:
+            try:
+                self._local.conn.commit()
+                self._local.conn.close()
+            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                pass
+        self._local.conn = None
 
     def __del__(self) -> None:
         """Cleanup database connection on deletion"""
         try:
             self.close()
-        except Exception:
+        except (sqlite3.OperationalError, sqlite3.ProgrammingError):
             # Suppress all exceptions during cleanup to avoid warnings
             pass
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
         """Commit the data, close the connection, move file into place"""
         self.commit(force=True)
-        self.close()
-        if db_file is not None and db_file != self._db_file:
-            shutil.copy(self._db_file, db_file)
+        current_db_file = self._db_file
+
+        if db_file is not None and db_file != current_db_file:
+            dest_conn = sqlite3.connect(db_file)
+            with dest_conn:
+                self.conn.backup(dest_conn)
+            dest_conn.close()
             if remove_old_db:
-                os.unlink(self._db_file)
-        # Reinitialize with new db_file
-        if db_file is not None:
-            self._db_file = db_file
-        self.conn = sqlite3.connect(self._db_file, check_same_thread=False)
-        # self.conn.execute("PRAGMA journal_mode=WAL;")
-        # self.conn.execute("PRAGMA synchronous=NORMAL;")
-        self.conn.execute(
-            f"create table if not exists {self.table} (id integer primary "
-            f"key, hash integer, key blob, value blob);"
-        )
-        self.conn.execute(
-            f"create index if not exists {self.table}_index ON {self.table}(hash);"
-        )
-        self.conn.commit()
-        self._commit_needed = False
-        self._write_count = 0
-        self._closed = False
+                self.close()
+                os.unlink(current_db_file)
+                self._db_file = db_file
+                self._init_conn()
 
     def load(self, db_file: Optional[str] = None) -> None:
         """Load data from a database file."""
         self.commit(force=True)
         self.close()
         db_file = db_file or self._db_file
-        # Reinitialize with loaded db_file
         self._db_file = db_file
-        self.conn = sqlite3.connect(self._db_file, check_same_thread=False)
-        # self.conn.execute("PRAGMA journal_mode=WAL;")
-        # self.conn.execute("PRAGMA synchronous=NORMAL;")
-        self.conn.execute(
-            f"create table if not exists {self.table} (id integer primary "
-            f"key, hash integer, key blob, value blob);"
-        )
-        self.conn.execute(
-            f"create index if not exists {self.table}_index ON {self.table}(hash);"
-        )
-        self.conn.commit()
+        self._init_conn()
         self._commit_needed = False
         self._write_count = 0
-        self._closed = False
 
 
 # Container stuff
@@ -375,7 +357,6 @@ class CacheDict(collections.abc.MutableMapping):
         if key not in self._cache:
             if self._evict_lock_held:
                 self._db[key] = value
-                return
             else:
                 self._evict()
         self._cache[key] = value
@@ -426,8 +407,7 @@ class CacheDict(collections.abc.MutableMapping):
     def get(self, key: Any, default: Any = None) -> Any:
         if key not in self:
             return default
-        else:
-            return self[key]
+        return self[key]
 
     def has_key(self, key: Any) -> bool:
         """Check if key exists in the dictionary (deprecated method)."""
@@ -502,11 +482,10 @@ class DefaultCacheDict(CacheDict):
         return value
 
     def setdefault(self, key: Any, default: Any = None) -> Any:
-        if not super().__contains__(key):
+        if key not in self:
             self[key] = default
             return default
-        else:
-            return self[key]
+        return self[key]
 
     def copy(self, db_file: Optional[str] = None) -> "DefaultCacheDict":
         """Returns a dictionary as a shallow from the cache dict"""
