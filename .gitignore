@@ -1,3 +1,10 @@
+# made by this app
+logs/
+perflog.csv
+manifest
+manifest.db
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
