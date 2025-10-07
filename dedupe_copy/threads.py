@@ -334,6 +334,8 @@ class ProgressThread(threading.Thread):
         self.error_count = 0
         self.copied_count = 0
         self.not_copied_count = 0
+        self.deleted_count = 0
+        self.not_deleted_count = 0
         self.last_copied: Optional[str] = None
         self.save_event = save_event
         self.start_time = time.time()
@@ -383,6 +385,25 @@ class ProgressThread(threading.Thread):
     def do_log_not_copied(self, _path: str) -> None:
         """Log files that were not copied."""
         self.not_copied_count += 1
+
+    def do_log_deleted(self, _path: str) -> None:
+        """Log successful file deletion."""
+        self.deleted_count += 1
+        if (
+            self.deleted_count % self.file_count_log_interval == 0
+            or self.deleted_count == 1
+        ):
+            elapsed = time.time() - self.start_time
+            delete_rate = self.deleted_count / elapsed if elapsed > 0 else 0
+            logger.info(
+                "Deleted %d items. Rate: %.1f files/sec",
+                self.deleted_count,
+                delete_rate,
+            )
+
+    def do_log_not_deleted(self, _path: str) -> None:
+        """Log files that were not deleted."""
+        self.not_deleted_count += 1
 
     def do_log_accepted(self, path: str) -> None:
         """Log files that were accepted for processing."""
@@ -450,6 +471,12 @@ class ProgressThread(threading.Thread):
             logger.info("Total skipped: %d", self.not_copied_count)
             copy_rate = self.copied_count / elapsed if elapsed > 0 else 0
             logger.info("Average copy rate: %.1f files/sec", copy_rate)
+        if self.deleted_count:
+            logger.info("-" * 60)
+            logger.info("RESULTS FROM DELETE:")
+            logger.info("Total deleted: %d", self.deleted_count)
+            delete_rate = self.deleted_count / elapsed if elapsed > 0 else 0
+            logger.info("Average delete rate: %.1f files/sec", delete_rate)
         if self.error_count:
             logger.info("-" * 60)
         logger.info("Total errors: %d", self.error_count)
@@ -457,6 +484,45 @@ class ProgressThread(threading.Thread):
             "Total elapsed time: %.1f seconds (%.1f minutes)", elapsed, elapsed / 60
         )
         logger.info("=" * 60)
+
+
+class DeleteThread(threading.Thread):
+    """Deletes files from a queue."""
+
+    def __init__(
+        self,
+        work_queue: "queue.Queue[str]",
+        stop_event: threading.Event,
+        *,
+        progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
+        dry_run: bool = False,
+    ) -> None:
+        super().__init__()
+        self.work = work_queue
+        self.stop_event = stop_event
+        self.progress_queue = progress_queue
+        self.dry_run = dry_run
+        self.daemon = True
+
+    def run(self) -> None:
+        while not self.work.empty() or not self.stop_event.is_set():
+            try:
+                src = self.work.get(True, 0.1)
+                if self.dry_run:
+                    if self.progress_queue:
+                        self.progress_queue.put(
+                            (HIGH_PRIORITY, "message", f"[DRY RUN] Would delete {src}")
+                        )
+                else:
+                    try:
+                        os.remove(src)
+                        if self.progress_queue:
+                            self.progress_queue.put((LOW_PRIORITY, "deleted", src))
+                    except OSError as e:
+                        if self.progress_queue:
+                            self.progress_queue.put((MEDIUM_PRIORITY, "error", src, e))
+            except queue.Empty:
+                pass
 
 
 class WalkThread(threading.Thread):

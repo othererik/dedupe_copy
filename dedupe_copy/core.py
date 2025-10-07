@@ -21,6 +21,7 @@ from .threads import (
     HIGH_PRIORITY,
     LOW_PRIORITY,
     CopyThread,
+    DeleteThread,
     ProgressThread,
     ReadThread,
     ResultProcessor,
@@ -340,6 +341,61 @@ def copy_data(
         )
 
 
+def delete_files(
+    duplicates: Any,
+    progress_queue: Optional["queue.PriorityQueue[Any]"],
+    *,
+    delete_threads: int = 8,
+    dry_run: bool = False,
+) -> None:
+    """Queues up and deletes duplicate files."""
+    stop_event = threading.Event()
+    delete_queue: "queue.Queue[str]" = queue.Queue()
+    workers = []
+    files_to_delete_count = sum(len(file_list) - 1 for file_list in duplicates.values())
+
+    if progress_queue:
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
+                "message",
+                f"Starting deletion of {files_to_delete_count} files.",
+            )
+        )
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
+                "message",
+                f"Starting {delete_threads} delete workers",
+            )
+        )
+
+    for _ in range(delete_threads):
+        d = DeleteThread(
+            delete_queue,
+            stop_event,
+            progress_queue=progress_queue,
+            dry_run=dry_run,
+        )
+        workers.append(d)
+        d.start()
+
+    for _hash, file_list in duplicates.items():
+        # Keep the first file, queue the rest for deletion
+        for file_info in file_list[1:]:
+            path_to_delete = file_info[0]
+            _throttle_puts(delete_queue.qsize())
+            delete_queue.put(path_to_delete)
+
+    # Wait for queue to empty
+    while not delete_queue.empty():
+        time.sleep(1)
+
+    stop_event.set()
+    for d in workers:
+        d.join()
+
+
 # pylint: disable=too-many-statements
 def run_dupe_copy(
     read_from_path: Optional[Union[str, List[str]]] = None,
@@ -363,6 +419,8 @@ def run_dupe_copy(
     keep_empty: bool = False,
     compare_manifests: Optional[Union[str, List[str]]] = None,
     preserve_stat: bool = False,
+    delete_duplicates: bool = False,
+    dry_run: bool = False,
 ) -> None:
     """For external callers this is the entry point for dedupe + copy"""
     # Ensure logging is configured for programmatic calls
@@ -506,7 +564,17 @@ def run_dupe_copy(
             (HIGH_PRIORITY, "message", "Saving complete manifest from search")
         )
         all_data.save(path=manifest_out_path)
-    if copy_to_path is not None:
+    if delete_duplicates:
+        if copy_to_path:
+            logger.error("Cannot use --delete and --copy-path at the same time.")
+        else:
+            delete_files(
+                dupes,
+                progress_queue,
+                delete_threads=copy_threads,
+                dry_run=dry_run,
+            )
+    elif copy_to_path is not None:
         # Warning: strip dupes out of all data, this assumes dupes correctly
         # follows handling of keep_empty (not a dupe even if md5 is same for
         # zero byte files)

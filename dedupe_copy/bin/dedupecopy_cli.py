@@ -155,6 +155,20 @@ def _create_parser():
         default=False,
         action="store_true",
     )
+    parser.add_argument(
+        "--delete",
+        help="Delete duplicate files",
+        required=False,
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--dry-run",
+        help="Simulate operations without making changes",
+        required=False,
+        default=False,
+        action="store_true",
+    )
 
     performance = parser.add_argument_group("Performance Related")
     performance.add_argument(
@@ -284,6 +298,8 @@ def _handle_arguments(args):
         "keep_empty": args.keep_empty,
         "compare_manifests": args.compare,
         "preserve_stat": args.copy_metadata,
+        "delete_duplicates": args.delete,
+        "dry_run": args.dry_run,
     }
 
 

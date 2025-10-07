@@ -1,5 +1,12 @@
 # Changelog
 
+
+## [1.1.0] - 2025-10-08
+- Add new optional hashing algorithm choice
+- Add delete and dry-run options
+- Other performance improvements
+
+
 ## [1.0.1] - 2025-10-07
 - Drop support for anything eariler than 3.11
 - Lots of internal cleanup, CI related stuff
