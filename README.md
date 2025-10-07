@@ -803,6 +803,4 @@ Erik Schweller (othererik@gmail.com)
 
 ---
 
-**Version**: 1.0.0
-
 **Status**: Tested and seems to work, but use with caution and always backup important data!
