@@ -216,7 +216,7 @@ def find_duplicates(
             logger.info("Hash Collisions:")
             for md5, info in collisions.items():
                 group += 1
-                logger.info("  MD5: %s", md5)
+                logger.info("  %s: %s", walk_config.hash_algo.upper(), md5)
                 for item in info:
                     logger.info("    %r, %s", item[0], item[1])
                     if result_fh:
