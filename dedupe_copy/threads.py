@@ -64,7 +64,6 @@ def _is_file_processing_required(
     return True
 
 
-# pylint: disable=too-complex
 def distribute_work(src: str, config: DistributeWorkConfig) -> None:
     """Distributes files to the appropriate queues for processing."""
     if config.walk_config.ignore:

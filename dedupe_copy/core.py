@@ -100,7 +100,7 @@ def _extension_report(md5_data: Any, show_count: int = 10) -> int:
 
 
 # will need to clean this up later
-# pylint: disable=too-complex, too-many-branches
+# pylint: disable=too-many-branches
 def find_duplicates(
     read_paths: List[str],
     work_queue: "queue.Queue[str]",
