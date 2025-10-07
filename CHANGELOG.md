@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.1] - TBD
+- Drop support for anything eariler than 3.11
+- Lots of internal cleanup, CI related stuff
+
+
 ## [1.0.0] - 2025-10-04
 
 ### Major Changes
