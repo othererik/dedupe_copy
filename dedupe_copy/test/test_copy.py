@@ -10,11 +10,15 @@ import time
 
 from dedupe_copy.test import utils
 
-from dedupe_copy import dedupe_copy, disk_cache_dict
+from dedupe_copy.core import run_dupe_copy
+from dedupe_copy.path_rules import _best_match
+from dedupe_copy.threads import ResultProcessor
+from dedupe_copy.utils import match_extension
+from dedupe_copy import disk_cache_dict
 
 
 do_copy = partial(
-    dedupe_copy.run_dupe_copy,
+    run_dupe_copy,
     ignore_old_collisions=False,
     walk_threads=4,
     read_threads=8,
@@ -134,29 +138,29 @@ class TestCopySystem(
     def test_best_match_no_matches(self):
         """Test _best_match when no extensions match - line 102"""
         extensions = ["*.jpg", "*.png", "*.gif"]
-        result = dedupe_copy._best_match(extensions, "txt")
+        result = _best_match(extensions, "txt")
         self.assertIsNone(result, "Expected None when no patterns match")
 
     def test_best_match_multiple_patterns(self):
         """Test _best_match with multiple matching patterns"""
         # Test multiple patterns that match and choose best by length
         extensions = ["*.j*", "*.jp*", "*.jpg", "*.jpeg"]
-        result = dedupe_copy._best_match(extensions, "jpg")
+        result = _best_match(extensions, "jpg")
         # Should return exact match
         self.assertEqual(result, "*.jpg")
 
         # Test with patterns that need scoring
         extensions = ["*.j*", "*.???", "*.j??"]
-        result = dedupe_copy._best_match(extensions, "jpg")
+        result = _best_match(extensions, "jpg")
         # Should return the closest match by scoring
         self.assertIn(result, extensions)
 
     def test_match_extension_with_patterns(self):
         """Test _match_extension with wildcard patterns - line 170"""
         # Test pattern matching (not just exact match)
-        self.assertTrue(dedupe_copy._match_extension(["*.txt"], "test.txt"))
-        self.assertTrue(dedupe_copy._match_extension(["test.*"], "test.jpg"))
-        self.assertFalse(dedupe_copy._match_extension(["*.jpg"], "test.txt"))
+        self.assertTrue(match_extension(["*.txt"], "test.txt"))
+        self.assertTrue(match_extension(["test.*"], "test.jpg"))
+        self.assertFalse(match_extension(["*.jpg"], "test.txt"))
 
     def test_extension_filter(self):
         """Test extension filtering in copy operations - covers line 170"""
@@ -176,7 +180,7 @@ class TestCopySystem(
             # Copy only .txt files
 
             do_copy_filtered = partial(
-                dedupe_copy.run_dupe_copy,
+                run_dupe_copy,
                 ignore_old_collisions=False,
                 walk_threads=1,
                 read_threads=1,
@@ -225,7 +229,7 @@ class TestCopySystem(
             result_queue.put(("abc123", 1000, "2020-01-01", "/tmp/file.txt"))
 
             # Create and start result processor
-            processor = dedupe_copy.ResultProcessor(
+            processor = ResultProcessor(
                 result_queue=result_queue,
                 stop_event=stop_event,
                 collisions=collisions,

@@ -4,23 +4,25 @@ import csv
 import os
 import time
 import unittest
-from functools import partial
 
 from dedupe_copy.test import utils
-from dedupe_copy import dedupe_copy
+from dedupe_copy.core import run_dupe_copy
 
 
-do_copy = partial(
-    dedupe_copy.run_dupe_copy,
-    ignore_old_collisions=False,
-    walk_threads=4,
-    read_threads=8,
-    copy_threads=8,
-    convert_manifest_paths_to="",
-    convert_manifest_paths_from="",
-    no_walk=False,
-    preserve_stat=False,
-)
+def do_copy(**kwargs):
+    """Helper to run copy with default args"""
+    base_args = {
+        "ignore_old_collisions": False,
+        "walk_threads": 4,
+        "read_threads": 8,
+        "copy_threads": 8,
+        "convert_manifest_paths_to": "",
+        "convert_manifest_paths_from": "",
+        "no_walk": False,
+        "preserve_stat": False,
+    }
+    base_args.update(kwargs)
+    return run_dupe_copy(**base_args)
 
 
 class TestErrorHandling(unittest.TestCase):
@@ -90,8 +92,6 @@ class TestErrorHandling(unittest.TestCase):
                 copy_to_path=copy_to_path,
                 path_rules=["*:no_change"],
             )
-            # Product handles permission errors gracefully, doesn't crash
-            self.assertTrue(True, "Should complete without crashing")
         finally:
             # Restore permissions for cleanup
             try:
@@ -124,7 +124,7 @@ class TestErrorHandling(unittest.TestCase):
 
         # Create a "corrupt" manifest (just a text file, not a valid db)
         manifest_path = os.path.join(self.temp_dir, "corrupt_manifest.db")
-        with open(manifest_path, "w") as f:
+        with open(manifest_path, "w", encoding="utf-8") as f:
             f.write("This is not a valid Berkeley DB file\n")
 
         copy_to_path = os.path.join(self.temp_dir, "copy")
@@ -137,9 +137,7 @@ class TestErrorHandling(unittest.TestCase):
                 copy_to_path=copy_to_path,
                 path_rules=["*:no_change"],
             )
-            # If it gets here, it handled the corruption gracefully
-            self.assertTrue(True)
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-except
             # If it raises an exception, it should be a clear database error
             self.assertIn(
                 "database", str(e).lower(), "Error should mention database issue"
@@ -236,7 +234,7 @@ class TestCompareFunction(unittest.TestCase):
         do_copy(
             read_from_path=source,
             copy_to_path=copy2,
-            compare_manifests=manifest1,
+            compare_manifests=[manifest1],
             path_rules=["*:no_change"],
         )
 
@@ -280,7 +278,7 @@ class TestCompareFunction(unittest.TestCase):
         do_copy(
             read_from_path=source,
             copy_to_path=copy2,
-            compare_manifests=manifest1,
+            compare_manifests=[manifest1],
             path_rules=["*:no_change"],
         )
 
@@ -400,7 +398,7 @@ class TestCSVReportGeneration(unittest.TestCase):
 
         # Read and validate CSV
         if os.path.exists(csv_path):
-            with open(csv_path, "r") as f:
+            with open(csv_path, "r", encoding="utf-8") as f:
                 content = f.read()
                 # Should have some content
                 self.assertGreater(len(content), 0, "CSV should have content")
@@ -428,7 +426,7 @@ class TestCSVReportGeneration(unittest.TestCase):
 
         # CSV should be created and contain data
         if os.path.exists(csv_path):
-            with open(csv_path, "r") as f:
+            with open(csv_path, "r", encoding="utf-8") as f:
                 content = f.read()
                 # Should have some data about the files
                 self.assertGreater(len(content), 0, "CSV report should contain data")
@@ -659,7 +657,7 @@ class TestThreadSafety(unittest.TestCase):
         do_copy(
             read_from_path=source_dir,
             copy_to_path=copy_to_path2,
-            compare_manifests=manifest_path,
+            compare_manifests=[manifest_path],
             path_rules=["*:no_change"],
         )
 

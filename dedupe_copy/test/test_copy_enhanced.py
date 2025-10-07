@@ -1,43 +1,44 @@
 """Enhanced tests for copy operations covering all user-facing features"""
 
-from functools import partial
 import os
 import unittest
 import datetime
 import time
 
 from dedupe_copy.test import utils
-from dedupe_copy import dedupe_copy
+from dedupe_copy.core import run_dupe_copy
 
 
-do_copy = partial(
-    dedupe_copy.run_dupe_copy,
-    ignore_old_collisions=False,
-    walk_threads=4,
-    read_threads=8,
-    copy_threads=8,
-    convert_manifest_paths_to="",
-    convert_manifest_paths_from="",
-    no_walk=False,
-    preserve_stat=False,
-)
+def do_copy(**kwargs):
+    """Helper to run copy with default args"""
+    base_args = {
+        "ignore_old_collisions": False,
+        "walk_threads": 4,
+        "read_threads": 8,
+        "copy_threads": 8,
+        "convert_manifest_paths_to": "",
+        "convert_manifest_paths_from": "",
+        "no_walk": False,
+        "preserve_stat": False,
+    }
+    base_args.update(kwargs)
+    return run_dupe_copy(**base_args)
 
 
 def do_copy_with_rules(path_rule_strings, **kwargs):
     """Helper to convert path rule strings to callable and run copy"""
-    # Pass path_rules as strings - run_dupe_copy will call _build_path_rules
-    return dedupe_copy.run_dupe_copy(
-        path_rules=path_rule_strings,
-        ignore_old_collisions=False,
-        walk_threads=4,
-        read_threads=8,
-        copy_threads=8,
-        convert_manifest_paths_to="",
-        convert_manifest_paths_from="",
-        no_walk=False,
-        preserve_stat=False,
-        **kwargs,
-    )
+    base_args = {
+        "path_rules": path_rule_strings,
+        "ignore_old_collisions": False,
+        "walk_threads": 4,
+        "read_threads": 8,
+        "copy_threads": 8,
+        "convert_manifest_paths_to": "",
+        "convert_manifest_paths_from": "",
+        "no_walk": False,
+    }
+    base_args.update(kwargs)
+    return run_dupe_copy(**base_args)
 
 
 class TestPathRules(unittest.TestCase):
@@ -588,6 +589,7 @@ class TestManifestIntegration(unittest.TestCase):
             ["*:no_change"],
             read_from_path=source_dir,
             copy_to_path=copy_to_path,
+            manifests_in_paths=manifest_path,
             manifest_out_path=manifest_path,
         )
 

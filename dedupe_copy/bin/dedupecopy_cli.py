@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
+"""Command-line interface for the dedupe_copy tool."""
 import argparse
 import logging
 
-from dedupe_copy import _clean_extensions, run_dupe_copy, PATH_RULES
+from dedupe_copy.utils import clean_extensions
+from dedupe_copy.core import run_dupe_copy
+from dedupe_copy.path_rules import PATH_RULES
 from dedupe_copy.logging_config import setup_logging
 
 
 DESCRIPTION = "Find duplicates / copy and restructure file layout tool"
-EPILOGUE = """
+EPILOGUE = r"""
 Examples:
 
   Generate a duplicate file report for a path:
@@ -33,14 +36,15 @@ Examples:
     2.) Copy each source to the target (specifying --compare so manifests from
         other sources are loaded but not used as part of the set to copy and
         --no-walk to skip re-scan of the source):
-        dedupecopy -p \\source1\share -c \\target\share -i source1_manifest
+        dedupecopy -p \\source1\share -c \\target\share -i source1_manifest \
             --compare source2_manifest --compare target_manifest  --no-walk
-        dedupecopy -p \\source2\share -c \\target\share -i source2_manifest
+        dedupecopy -p \\source2\share -c \\target\share -i source2_manifest \
             --compare source1_manifest --compare target_manifest --no-walk
 """
 
 
 def _create_parser():
+    """Creates and returns the argparse parser."""
     parser = argparse.ArgumentParser(
         description=DESCRIPTION,
         epilog=EPILOGUE,
@@ -128,11 +132,11 @@ def _create_parser():
     parser.add_argument(
         "-R",
         "--path-rules",
-        help="extension:rule_name pair(s) For example: "
-        "png:mtime. These rules are cumulative, so "
-        "-R png:extension -R png:mtime results in a structure "
-        "like  /copy_path/png/2012_08/file.png Rules available: "
-        "{rules}".format(rules=PATH_RULES),
+        help=f"extension:rule_name pair(s) For example: "
+        f"png:mtime. These rules are cumulative, so "
+        f"-R png:extension -R png:mtime results in a structure "
+        f"like  /copy_path/png/2012_08/file.png Rules available: "
+        f"{PATH_RULES}",
         required=False,
         default=None,
         action="append",
@@ -240,10 +244,10 @@ def _handle_arguments(args):
     logger = logging.getLogger(__name__)
 
     if args.read_path:
-        logger.info("Reading from {0}".format(args.read_path))
+        logger.info("Reading from %s", args.read_path)
     # strip, lower, remove leading dot from extensions for both path rules and
     # specific extension includes
-    extensions = _clean_extensions(args.extensions)
+    extensions = clean_extensions(args.extensions)
     read_paths = None
     if args.read_path:
         read_paths = args.read_path
@@ -251,30 +255,31 @@ def _handle_arguments(args):
         copy_path = args.copy_path
     else:
         copy_path = None
-    return dict(
-        read_from_path=read_paths,
-        extensions=extensions,
-        manifests_in_paths=args.manifest_in,
-        manifest_out_path=args.manifest_out,
-        path_rules=args.path_rules,
-        copy_to_path=copy_path,
-        ignore_old_collisions=args.ignore_old_collisions,
-        ignored_patterns=args.ignore,
-        csv_report_path=args.result_path,
-        walk_threads=args.walk_threads,
-        read_threads=args.read_threads,
-        copy_threads=args.copy_threads,
-        convert_manifest_paths_to=args.convert_manifest_paths_to,
-        convert_manifest_paths_from=args.convert_manifest_paths_from,
-        no_walk=args.no_walk,
-        no_copy=None,
-        keep_empty=args.keep_empty,
-        compare_manifests=args.compare,
-        preserve_stat=args.copy_metadata,
-    )
+    return {
+        "read_from_path": read_paths,
+        "extensions": extensions,
+        "manifests_in_paths": args.manifest_in,
+        "manifest_out_path": args.manifest_out,
+        "path_rules": args.path_rules,
+        "copy_to_path": copy_path,
+        "ignore_old_collisions": args.ignore_old_collisions,
+        "ignored_patterns": args.ignore,
+        "csv_report_path": args.result_path,
+        "walk_threads": args.walk_threads,
+        "read_threads": args.read_threads,
+        "copy_threads": args.copy_threads,
+        "convert_manifest_paths_to": args.convert_manifest_paths_to,
+        "convert_manifest_paths_from": args.convert_manifest_paths_from,
+        "no_walk": args.no_walk,
+        "no_copy": None,
+        "keep_empty": args.keep_empty,
+        "compare_manifests": args.compare,
+        "preserve_stat": args.copy_metadata,
+    }
 
 
 def run_cli():
+    """Main entry point for the command-line interface."""
     parser = _create_parser()
     args = parser.parse_args()
     # Setup logging first before any output
@@ -289,7 +294,7 @@ def run_cli():
     setup_logging(verbosity=verbosity, use_colors=not args.no_color)
     logger = logging.getLogger(__name__)
 
-    logger.debug("Running with arguments: {0}".format(args))
+    logger.debug("Running with arguments: %s", args)
     processed_args = _handle_arguments(args)
     return run_dupe_copy(**processed_args)
 
