@@ -100,6 +100,34 @@ def _extension_report(md5_data: Any, show_count: int = 10) -> int:
     return sum(sizes.values())
 
 
+def generate_report(
+    csv_report_path: str,
+    collisions: Any,
+    read_paths: Optional[List[str]],
+    hash_algo: str,
+) -> None:
+    """Generate a CSV report of duplicate files."""
+    logger.info("Generating CSV report at %s", csv_report_path)
+    try:
+        with open(csv_report_path, "wb") as result_fh:
+            if read_paths:
+                result_fh.write(f"Src: {read_paths}\n".encode("utf-8"))
+            result_fh.write(
+                "Collision #, MD5, Path, Size (bytes), mtime\n".encode("utf-8")
+            )
+            if collisions:
+                group = 0
+                for md5, info in collisions.items():
+                    group += 1
+                    for item in info:
+                        line = (
+                            f"{group}, {md5}, {repr(item[0])}, {item[1]}, {item[2]}\n"
+                        )
+                        result_fh.write(line.encode("utf-8"))
+    except IOError as e:
+        logger.error("Could not write report to %s: %s", csv_report_path, e)
+
+
 def _start_read_threads_and_process_results(
     work_queue: "queue.Queue[str]",
     result_queue: "queue.Queue[Tuple[str, int, float, str]]",
@@ -153,7 +181,6 @@ def find_duplicates(
     collisions: Any,
     *,
     walk_config: WalkConfig,
-    result_src: Optional[str] = None,
     progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
     walk_threads: int = 4,
     read_threads: int = 8,
@@ -178,59 +205,42 @@ def find_duplicates(
         read_threads,
         walk_config,
     )
-    result_fh = None
-    if result_src is not None:
-        # pylint: disable=consider-using-with
-        result_fh = open(result_src, "ab")
-        result_fh.write(f"Src: {read_paths}\n".encode("utf-8"))
-        result_fh.write("Collision #, MD5, Path, Size (bytes), mtime\n".encode("utf-8"))
-    try:
-        _walk_fs(
-            read_paths,
-            walk_config,
-            work_queue=work_queue,
-            walk_queue=walk_queue,
-            already_processed=manifest.read_sources,
-            progress_queue=progress_queue,
-            walk_threads=walk_threads,
-            save_event=save_event,
-        )
-        while not work_queue.empty():
-            if progress_queue:
-                progress_queue.put(
-                    (
-                        HIGH_PRIORITY,
-                        "message",
-                        f"Waiting for work queue to empty: {work_queue.qsize()} "
-                        f"items remain",
-                    )
+    _walk_fs(
+        read_paths,
+        walk_config,
+        work_queue=work_queue,
+        walk_queue=walk_queue,
+        already_processed=manifest.read_sources,
+        progress_queue=progress_queue,
+        walk_threads=walk_threads,
+        save_event=save_event,
+    )
+    while not work_queue.empty():
+        if progress_queue:
+            progress_queue.put(
+                (
+                    HIGH_PRIORITY,
+                    "message",
+                    f"Waiting for work queue to empty: {work_queue.qsize()} "
+                    f"items remain",
                 )
-            time.sleep(5)
-        work_stop_event.set()
-        for worker in work_threads:
-            worker.join()
-        result_stop_event.set()
-        while result_processor.is_alive():
-            result_processor.join(5)
-        if collisions:
-            group = 0
-            logger.info("Hash Collisions:")
-            for md5, info in collisions.items():
-                group += 1
-                logger.info("  %s: %s", walk_config.hash_algo.upper(), md5)
-                for item in info:
-                    logger.info("    %r, %s", item[0], item[1])
-                    if result_fh:
-                        line = (
-                            f"{group}, {md5}, {repr(item[0])}, {item[1]}, {item[2]}\n"
-                        )
-                        result_fh.write(line.encode("utf-8"))
-        else:
-            logger.info("No Duplicates Found")
-        return collisions, manifest
-    finally:
-        if result_fh:
-            result_fh.close()
+            )
+        time.sleep(5)
+    work_stop_event.set()
+    for worker in work_threads:
+        worker.join()
+    result_stop_event.set()
+    while result_processor.is_alive():
+        result_processor.join(5)
+    if collisions:
+        logger.info("Hash Collisions:")
+        for md5, info in collisions.items():
+            logger.info("  %s: %s", walk_config.hash_algo.upper(), md5)
+            for item in info:
+                logger.info("    %r, %s", item[0], item[1])
+    else:
+        logger.info("No Duplicates Found")
+    return collisions, manifest
 
 
 def info_parser(data: Any) -> Iterator[Tuple[str, str, str, int]]:
@@ -565,7 +575,6 @@ def run_dupe_copy(
             manifest,
             collisions,
             walk_config=walk_config,
-            result_src=csv_report_path,
             progress_queue=progress_queue,
             walk_threads=walk_threads,
             read_threads=read_threads,
@@ -575,6 +584,13 @@ def run_dupe_copy(
         )
     total_size = _extension_report(all_data)
     logger.info("Total Size of accepted: %s bytes", total_size)
+    if csv_report_path:
+        generate_report(
+            csv_report_path=csv_report_path,
+            collisions=dupes,
+            read_paths=read_from_path,
+            hash_algo=hash_algo,
+        )
     if manifest_out_path:
         progress_queue.put(
             (HIGH_PRIORITY, "message", "Saving complete manifest from search")
