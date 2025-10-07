@@ -1,10 +1,10 @@
 # Changelog
 
-
-## [1.1.0] - 2025-10-08
+## [1.1.0] - 2025-10-07
 - Add new optional hashing algorithm choice
 - Add delete and dry-run options
 - Other performance improvements
+- Resolved an issue where using the `--no-walk` flag would prevent `--delete` and `-r` (report) operations from executing. The tool now correctly performs these actions on the loaded manifest without requiring a new filesystem scan.
 
 
 ## [1.0.1] - 2025-10-07
