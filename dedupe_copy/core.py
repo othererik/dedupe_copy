@@ -397,7 +397,7 @@ def run_dupe_copy(
             compare[item] = None
 
     if no_walk and not manifest:
-        raise ValueError("If --no-walk is specified, a manifest must be " "supplied.")
+        raise ValueError("If --no-walk is specified, a manifest must be supplied.")
     if read_from_path and not isinstance(read_from_path, list):
         read_from_path = [read_from_path]
     path_rules_func: Optional[Callable[..., Tuple[str, str]]] = None

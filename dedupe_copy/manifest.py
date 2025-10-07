@@ -185,7 +185,8 @@ class Manifest:
                 )
             self.md5_data[key] = new_values
         # build a new set of values and move into place
-        # Note: Using CacheDict for read_sources (could optimize with a persistent set implementation)
+        # Note: Using CacheDict for read_sources (could optimize with a persistent
+        # set implementation)
         db_file = self.read_sources.db_file_path()
         assert temp_directory is not None, "temp_directory must be provided"
         new_sources = CacheDict(
