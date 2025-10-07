@@ -47,10 +47,7 @@ class TestDelete(unittest.TestCase):
         self.assertEqual(initial_file_count, 10, "Should have 10 files initially")
 
         # Run with --delete
-        do_copy(
-            read_from_path=self.temp_dir,
-            delete_duplicates=True
-        )
+        do_copy(read_from_path=self.temp_dir, delete_duplicates=True)
 
         final_file_count = len(list(utils.walk_tree(self.temp_dir)))
         self.assertEqual(final_file_count, 5, "Should have 5 files after deletion")
@@ -71,14 +68,13 @@ class TestDelete(unittest.TestCase):
         self.assertEqual(initial_file_count, 10, "Should have 10 files initially")
 
         # Run with --delete and --dry-run
-        do_copy(
-            read_from_path=self.temp_dir,
-            delete_duplicates=True,
-            dry_run=True
-        )
+        do_copy(read_from_path=self.temp_dir, delete_duplicates=True, dry_run=True)
 
         final_file_count = len(list(utils.walk_tree(self.temp_dir)))
-        self.assertEqual(final_file_count, 10, "Should have 10 files after dry-run, none deleted")
+        self.assertEqual(
+            final_file_count, 10, "Should have 10 files after dry-run, none deleted"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
