@@ -137,7 +137,7 @@ class TestErrorHandling(unittest.TestCase):
                 copy_to_path=copy_to_path,
                 path_rules=["*:no_change"],
             )
-        except Exception as e:  # pylint: disable=broad-except-caught
+        except Exception as e:  # pylint: disable=broad-except
             # If it raises an exception, it should be a clear database error
             self.assertIn(
                 "database", str(e).lower(), "Error should mention database issue"

@@ -1,3 +1,9 @@
+"""Manifest file handling for dedupe_copy.
+Manifests store a mapping of hash -> list of files with that hash
+They are the core data structure use to track duplicates
+and what files have been read.
+"""
+
 import logging
 import os
 import random
@@ -47,9 +53,7 @@ class Manifest:
                 logger.info("Removing old manifest file at: %r", self.path)
                 os.unlink(self.path)
             if os.path.exists(sources_path):
-                logger.info(
-                    "Removing old manifest sources file at: %r", sources_path
-                )
+                logger.info("Removing old manifest sources file at: %r", sources_path)
                 os.unlink(sources_path)
             logger.info("creating manifests %s / %s", self.path, sources_path)
             self.md5_data = DefaultCacheDict(

@@ -1,6 +1,7 @@
+"""Contains all the threading classes for dedupe_copy
+These are the workers for walking, hashing, copying, and progress reporting
 """
-Contains all the threading classes for dedupe_copy
-"""
+
 import fnmatch
 import logging
 import os
@@ -63,6 +64,7 @@ def _is_file_processing_required(
     return True
 
 
+# pylint: disable=too-complex
 def distribute_work(src: str, config: DistributeWorkConfig) -> None:
     """Distributes files to the appropriate queues for processing."""
     if config.walk_config.ignore:
@@ -164,9 +166,7 @@ class CopyThread(threading.Thread):
             )
             return dest
 
-        return os.path.join(
-            self.config.target_path, ext, mtime, os.path.basename(src)
-        )
+        return os.path.join(self.config.target_path, ext, mtime, os.path.basename(src))
 
     def run(self) -> None:
         while not self.work.empty() or not self.stop_event.is_set():
@@ -494,7 +494,9 @@ class WalkThread(threading.Thread):
                 if not os.path.exists(src):
                     time.sleep(3)
                     if not os.path.exists(src):
-                        raise RuntimeError(f"Directory disappeared during walk: {src!r}")
+                        raise RuntimeError(
+                            f"Directory disappeared during walk: {src!r}"
+                        )
                 if not os.path.isdir(src):
                     raise ValueError(f"Unexpected file in work queue: {src!r}")
                 distribute_work(src, self.distribute_config)

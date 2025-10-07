@@ -21,9 +21,7 @@ class TestManifests(unittest.TestCase):
         self.scratch_dict = os.path.join(self.temp_dir, "scratch.dict")
         self.manifest_path = os.path.join(self.temp_dir, "manifest.dict")
         self.read_path = f"{self.manifest_path}.read"
-        self.manifest = Manifest(
-            None, save_path=None, temp_directory=self.temp_dir
-        )
+        self.manifest = Manifest(None, save_path=None, temp_directory=self.temp_dir)
 
     def tearDown(self):
         """Remove temporary directory and all test files"""

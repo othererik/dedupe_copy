@@ -1,6 +1,6 @@
+"""Core application logic for dedupe_copy
 """
-Core application logic for dedupe_copy
-"""
+
 import datetime
 import fnmatch
 import logging
@@ -25,7 +25,6 @@ from .threads import (
     ReadThread,
     ResultProcessor,
     WalkThread,
-    distribute_work,
 )
 from .utils import _throttle_puts, ensure_logging_configured, lower_extension
 
@@ -100,6 +99,8 @@ def _extension_report(md5_data: Any, show_count: int = 10) -> int:
     return sum(sizes.values())
 
 
+# will need to clean this up later
+# pylint: disable=too-complex, too-many-branches
 def find_duplicates(
     read_paths: List[str],
     work_queue: "queue.Queue[str]",
@@ -131,6 +132,7 @@ def find_duplicates(
     result_processor.start()
     result_fh = None
     if result_src is not None:
+        # pylint: disable=consider-using-with
         result_fh = open(result_src, "ab")
         result_fh.write(f"Src: {read_paths}\n".encode("utf-8"))
         result_fh.write("Collision #, MD5, Path, Size (bytes), mtime\n".encode("utf-8"))
@@ -307,6 +309,7 @@ def copy_data(
         )
 
 
+# pylint: disable=too-many-statements
 def run_dupe_copy(
     read_from_path: Optional[Union[str, List[str]]] = None,
     extensions: Optional[List[str]] = None,

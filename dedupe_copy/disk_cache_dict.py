@@ -11,7 +11,6 @@ Note: Future enhancements could include:
 import collections.abc
 import os
 import pickle
-import shutil
 import sqlite3
 import sys
 import threading
@@ -144,6 +143,7 @@ class SqliteBackend:
         # Fall back to pickle for complex types
         return sqlite3.Binary(b"P" + pickle.dumps(value, version))
 
+    # pylint: disable=too-many-return-statements
     @staticmethod
     def _load(value: bytes) -> Any:
         value_bytes = bytes(value)

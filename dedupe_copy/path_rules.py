@@ -1,6 +1,6 @@
+"""This module handles the path rule parsing logic for dedupe_copy.
 """
-This module handles the path rule parsing logic for dedupe_copy.
-"""
+
 import fnmatch
 import functools
 import os

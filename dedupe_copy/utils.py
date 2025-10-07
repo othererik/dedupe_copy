@@ -1,6 +1,6 @@
+"""Utility functions for dedupe_copy
 """
-Utility functions for dedupe_copy
-"""
+
 import fnmatch
 import hashlib
 import logging
