@@ -7,7 +7,7 @@ Note: Future enhancements could include:
     - Document backend requirements and interface
     - Implement full LRU eviction policy (currently uses random eviction)
 """
-
+# pylint: disable=too-many-arguments
 import collections.abc
 import os
 import shutil
@@ -150,7 +150,7 @@ class SqliteBackend:
         return sqlite3.Binary(b"P" + pickle.dumps(value, version))
 
     @staticmethod
-    def _load(value: bytes) -> Any:
+    def _load(value: bytes) -> Any:  # pylint: disable=too-many-return-statements
         value_bytes = bytes(value)
         if not value_bytes or value_bytes[0:1] == b"N":
             return None
@@ -366,8 +366,7 @@ class CacheDict(collections.abc.MutableMapping):
             if self._evict_lock_held:
                 self._db[key] = value
                 return
-            else:
-                self._evict()
+            self._evict()
         self._cache[key] = value
         if self._evict_lock_held:
             return
@@ -469,9 +468,7 @@ class CacheDict(collections.abc.MutableMapping):
 class DefaultCacheDict(CacheDict):
     """A CacheDict that provides default values for missing keys."""
 
-    def __init__(
-        self, default_factory: Optional[Callable[[], Any]] = None, **kwargs: Any
-    ) -> None:
+    def __init__(self, default_factory: Optional[Callable[[], Any]] = None, **kwargs: Any) -> None:
         self._kwargs = kwargs
         if default_factory is not None and not hasattr(default_factory, "__call__"):
             raise TypeError("the factory must be callable")
@@ -491,7 +488,7 @@ class DefaultCacheDict(CacheDict):
         return value
 
     def setdefault(self, key: Any, default: Any = None) -> Any:
-        if not super().__contains__(key):
+        if key not in self:
             self[key] = default
             return default
         return self[key]

@@ -3,7 +3,7 @@
 import argparse
 import logging
 
-from dedupe_copy import DedupeCopyConfig, _clean_extensions, run_dupe_copy, PATH_RULES
+from dedupe_copy import DedupeCopyConfig, clean_extensions, run_dupe_copy, PATH_RULES
 from dedupe_copy.logging_config import setup_logging
 
 
@@ -244,7 +244,7 @@ def _handle_arguments(args) -> DedupeCopyConfig:
         logger.info("Reading from %s", args.read_path)
     # strip, lower, remove leading dot from extensions for both path rules and
     # specific extension includes
-    extensions = _clean_extensions(args.extensions)
+    extensions = clean_extensions(args.extensions)
     read_paths = None
     if args.read_path:
         read_paths = args.read_path
@@ -276,21 +276,8 @@ def run_cli():
     """Run the dedupe copy CLI with parsed arguments."""
     parser = _create_parser()
     args = parser.parse_args()
-    # Setup logging first before any output
-    verbosity = "normal"
-    if args.quiet:
-        verbosity = "quiet"
-    elif args.debug:
-        verbosity = "debug"
-    elif args.verbose:
-        verbosity = "verbose"
-
-    setup_logging(verbosity=verbosity, use_colors=not args.no_color)
-    logger = logging.getLogger(__name__)
-
-    logger.debug("Running with arguments: %s", args)
     config = _handle_arguments(args)
-    return run_dupe_copy(config)
+    run_dupe_copy(config)
 
 
 if __name__ == "__main__":

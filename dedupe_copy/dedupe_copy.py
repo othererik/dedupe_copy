@@ -7,14 +7,12 @@ progress_queue -> read by ProgressThread and put to by all others
 walk_queue -> holds directories discovered by WalkThread(s)
 copy_queue -> read by CopyThread(s) put to by queue_copy_work
 """
+# pylint: disable=too-many-arguments,too-many-instance-attributes,too-few-public-methods
+# pylint: disable=too-many-locals,too-many-branches,too-many-statements
 
-# pylint: disable=too-many-lines
-
-from collections import defaultdict, Counter
 import datetime
 import fnmatch
-import functools
-import hashlib
+from collections import defaultdict
 import logging
 import os
 import queue
@@ -24,9 +22,19 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Dict, List, Optional, Tuple, Set, Callable, Any, Iterator, Union
+from typing import Dict, List, Optional, Tuple, Callable, Any, Iterator, Union, Set
 
 from .disk_cache_dict import CacheDict, DefaultCacheDict
+from .threads import (
+    CopyThread,
+    ResultProcessor,
+    ReadThread,
+    WalkThread,
+    ProgressThread,
+    HIGH_PRIORITY,
+    LOW_PRIORITY,
+)
+from . import utils_dedupe
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -48,6 +56,7 @@ def _ensure_logging_configured() -> None:
 class DedupeCopyConfig:
     """Configuration for a dedupe_copy operation."""
 
+    # pylint: disable=too-many-arguments
     def __init__(
         self,
         read_from_path: Optional[Union[str, List[str]]] = None,
@@ -91,651 +100,15 @@ class DedupeCopyConfig:
         self.preserve_stat = preserve_stat
         if read_from_path:
             self.read_paths = (
-                read_from_path
-                if isinstance(read_from_path, list)
-                else [read_from_path]
+                read_from_path if isinstance(read_from_path, list) else [read_from_path]
             )
         else:
             self.read_paths = []
 
 
-def _format_error_message(path: str, error: Union[str, Exception]) -> str:
-    """Format an error message with helpful context and suggestions
-
-    Args:
-        path: File path that caused the error
-        error: The error or exception that occurred
-
-    Returns:
-        Formatted error message with suggestions
-    """
-    error_str = str(error)
-    error_type = type(error).__name__ if isinstance(error, Exception) else "Error"
-
-    # Build helpful message based on error type
-    suggestions = []
-    if isinstance(error, PermissionError) or "Permission denied" in error_str:
-        suggestions.append("Check file permissions")
-        suggestions.append("Ensure you have read access to source files")
-        suggestions.append("Ensure you have write access to destination")
-    elif isinstance(error, FileNotFoundError) or "No such file" in error_str:
-        suggestions.append("File may have been deleted during processing")
-        suggestions.append("Check if path is on a network share that disconnected")
-    elif isinstance(error, OSError) and "Errno 28" in error_str:  # No space left
-        suggestions.append("Destination disk is full")
-        suggestions.append("Free up space or choose a different destination")
-    elif isinstance(error, (IOError, OSError)):
-        suggestions.append("Check disk health and connection")
-        suggestions.append("For network paths, verify network stability")
-
-    msg = f"Error processing {path!r}: [{error_type}] {error_str}"
-    if suggestions:
-        msg += f"\n  Suggestions: {'; '.join(suggestions)}"
-    return msg
-
-
-# For message output
-HIGH_PRIORITY = 1
-MEDIUM_PRIORITY = 5
-LOW_PRIORITY = 10
-
-MAX_TARGET_QUEUE_SIZE = 50000
-
-READ_CHUNK = 1048576  # 1 MB
-
-INCREMENTIAL_SAVE_SIZE = 50000
-PATH_RULES = {
-    "mtime": "Put each file into a directory of the form YYYY_MM",
-    "no_change": 'Preserve directory structure from "read_path" up',
-    "extension": "Put all items into directories of their extension",
-}
-
-
-# Path rule matching
-
-
-def _path_rules_parser(
-    rules: Dict[str, List[str]], dest_dir: str, file_context: Dict[str, Any]
-) -> Tuple[str, str]:
-    """Builds a path based on the path rules for the given extension pattern"""
-    extension = file_context["extension"]
-    mtime_str = file_context["mtime_str"]
-    source_dirs = file_context["source_dirs"]
-    src = file_context["src"]
-    read_paths = file_context["read_paths"]
-
-    ext_key = extension if extension else ""
-    best_match_key = _best_match(rules.keys(), ext_key)
-    rule_list = (
-        rules.get(best_match_key, ["no_change"]) if best_match_key else ["no_change"]
-    )
-    dest = None
-    for rule in rule_list:
-        if rule == "mtime":
-            dest_dir = os.path.join(dest_dir, mtime_str)
-        elif rule == "extension":
-            dest_dir = os.path.join(dest_dir, extension)
-        elif rule == "no_change":
-            # remove the path up to our source_dirs from src so we don't
-            # preserve the structure "below" where our copy is from
-            for p in read_paths:
-                if source_dirs.startswith(p):
-                    source_dirs = source_dirs.replace(p, "", 1)
-            if source_dirs.startswith(os.sep):
-                source_dirs = source_dirs[1:]
-            dest_dir = os.path.join(dest_dir, source_dirs)
-    if dest is None:
-        dest = os.path.join(dest_dir, src)
-    return dest, dest_dir
-
-
-def _best_match(extensions: Any, ext: str) -> Optional[str]:
-    """Returns the best matching extension_pattern for ext from a list of
-    extension patterns or none if no extension applies
-    """
-    ext = f"*.{ext}"
-    if ext in extensions:
-        return ext
-    matches = []
-    for extension_pattern in extensions:
-        if fnmatch.fnmatch(ext, extension_pattern):
-            matches.append(extension_pattern)
-    if not matches:
-        return None
-    # take the pattern that is the closest to the given extension by length
-    best = matches.pop()
-    score = abs(len(best.replace("?", "").replace("*", "")) - len(ext))
-    for m in matches:
-        current_score = abs(len(m.replace("?", "").replace("*", "")) - len(ext))
-        if current_score < score:
-            score = current_score
-            best = m
-    return best
-
-
-def _match_extension(extensions: Optional[List[str]], fn: str) -> bool:
-    """Returns true if extensions is empty"""
-    if not extensions:
-        return True
-    for included_pattern in extensions:
-        # first look for an exact match
-        if fn.lower().endswith(included_pattern):
-            return True
-        # now try a pattern match
-        if fnmatch.fnmatch(fn.lower(), included_pattern):
-            return True
-    return False
-
-
-def _throttle_puts(current_size: int) -> None:
-    """Delay for some factor to avoid overloading queues"""
-    time.sleep(min((current_size * 2) / float(MAX_TARGET_QUEUE_SIZE), 60))
-
-
-# Worker threads
-
-
-class CopyThread(threading.Thread):
-    """Copy to target_path for given extensions (all if None)"""
-
-    def __init__(
-        self,
-        work_queue: "queue.Queue[Tuple[str, str, int]]",
-        config: "DedupeCopyConfig",
-        stop_event: threading.Event,
-        progress_queue: "queue.PriorityQueue[Any]",
-        path_rules_func: Optional[Callable[..., Tuple[str, str]]],
-    ) -> None:
-        super().__init__()
-        self.work = work_queue
-        self.config = config
-        self.stop_event = stop_event
-        self.progress_queue = progress_queue
-        self.path_rules_func = path_rules_func
-        self.daemon = True
-
-    def run(self) -> None:  # pylint: disable=too-many-branches
-        while not self.work.empty() or not self.stop_event.is_set():
-            try:
-                src, mtime, size = self.work.get(True, 0.1)
-                ext = lower_extension(src)
-                if not ext:
-                    ext = "no_extension"
-                if not _match_extension(self.config.extensions, src):
-                    continue
-                if self.path_rules_func is not None:
-                    file_context = {
-                        "extension": ext,
-                        "mtime_str": mtime,
-                        "_size": size,
-                        "source_dirs": os.path.dirname(src),
-                        "src": os.path.basename(src),
-                        "read_paths": self.config.read_paths,
-                    }
-                    dest, dest_dir = self.path_rules_func(
-                        self.config.copy_to_path, file_context
-                    )
-                else:
-                    assert self.config.copy_to_path is not None
-                    dest = os.path.join(
-                        self.config.copy_to_path, ext, mtime, os.path.basename(src)
-                    )
-                    dest_dir = os.path.dirname(dest)
-                try:
-                    if not os.path.exists(dest_dir):
-                        try:
-                            os.makedirs(dest_dir)
-                        except OSError:
-                            # thread race if it now exists, no issue
-                            if not os.path.exists(dest_dir):
-                                raise
-                    if self.config.preserve_stat:
-                        shutil.copy2(src, dest)
-                    else:
-                        shutil.copyfile(src, dest)
-                    if self.progress_queue:
-                        self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
-                except (OSError, IOError, shutil.Error) as e:
-                    if self.progress_queue:
-                        self.progress_queue.put(
-                            (
-                                MEDIUM_PRIORITY,
-                                "error",
-                                src,
-                                f"Error copying to {dest!r}: {e}",
-                            )
-                        )
-            except queue.Empty:
-                pass
-
-
-class ResultProcessor(threading.Thread):
-    """Takes results of work queue and builds result data structure"""
-
-    def __init__(
-        self,
-        stop_event: threading.Event,
-        result_queue: "queue.Queue[Tuple[str, int, float, str]]",
-        collisions: Any,
-        manifest: Any,
-        config: "DedupeCopyConfig",
-        progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-        save_event: Optional[threading.Event] = None,
-    ) -> None:
-        super().__init__()
-        self.stop_event = stop_event
-        self.results = result_queue
-        self.collisions = collisions
-        self.md5_data = manifest
-        self.progress_queue = progress_queue
-        self.config = config
-        self.save_event = save_event
-        self.daemon = True
-
-    def run(self) -> None:  # pylint: disable=too-many-branches
-        processed = 0
-        while not self.results.empty() or not self.stop_event.is_set():
-            if self.save_event and self.save_event.is_set():
-                time.sleep(1)
-                continue
-            src = ""
-            try:
-                md5, size, mtime, src = self.results.get(True, 0.1)
-                collision = md5 in self.md5_data
-                if self.config.keep_empty and md5 == "d41d8cd98f00b204e9800998ecf8427e":
-                    collision = False
-                self.md5_data[md5].append([src, size, mtime])
-                if collision:
-                    self.collisions[md5] = self.md5_data[md5]
-                processed += 1
-            except queue.Empty:
-                pass
-            except (KeyError, ValueError, TypeError) as err:
-                if self.progress_queue:
-                    self.progress_queue.put(
-                        (
-                            MEDIUM_PRIORITY,
-                            "error",
-                            src,
-                            f"ERROR in result processing: {err}",
-                        )
-                    )
-            if processed > INCREMENTIAL_SAVE_SIZE:
-                if self.progress_queue:
-                    self.progress_queue.put(
-                        (
-                            HIGH_PRIORITY,
-                            "message",
-                            "Hit incremental save size, will save manifest files",
-                        )
-                    )
-                processed = 0
-                try:
-                    self.md5_data.save()
-                except (OSError, IOError) as e:
-                    if self.progress_queue:
-                        self.progress_queue.put(
-                            (
-                                MEDIUM_PRIORITY,
-                                "error",
-                                self.md5_data.path,
-                                f"ERROR Saving incremental: {e}",
-                            )
-                        )
-
-
-class ReadThread(threading.Thread):
-    """Thread worker for hashing"""
-
-    def __init__(
-        self,
-        work_queue: "queue.Queue[str]",
-        result_queue: "queue.Queue[Tuple[str, int, float, str]]",
-        stop_event: threading.Event,
-        *,
-        progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-        save_event: Optional[threading.Event] = None,
-    ) -> None:
-        super().__init__()
-        self.work = work_queue
-        self.results = result_queue
-        self.stop_event = stop_event
-        self.progress_queue = progress_queue
-        self.save_event = save_event
-        self.daemon = True
-
-    def run(self) -> None:
-        while not self.stop_event.is_set() or not self.work.empty():
-            if self.save_event and self.save_event.is_set():
-                time.sleep(1)
-                continue
-            src = ""
-            try:
-                src = self.work.get(True, 0.1)
-                try:
-                    _throttle_puts(self.results.qsize())
-                    self.results.put(read_file(src))
-                except (OSError, IOError) as e:
-                    if self.progress_queue:
-                        self.progress_queue.put((MEDIUM_PRIORITY, "error", src, e))
-            except queue.Empty:
-                pass
-            except (OSError, IOError, ValueError, TypeError) as err:
-                if self.progress_queue:
-                    self.progress_queue.put(
-                        (
-                            MEDIUM_PRIORITY,
-                            "error",
-                            src,
-                            f"ERROR in file read: {err},",
-                        )
-                    )
-
-
-class ProgressThread(threading.Thread):
-    """All Status updates should come through here.
-    Can process raw messages as well as message of the type:
-        message, msg
-        file, path
-        accepted, path
-        ignored, path, reason
-        error, path, reason
-        copied, src, dest
-        not_copied, path
-    """
-
-    file_count_log_interval = 1000
-
-    def __init__(
-        self,
-        queues: Dict[str, queue.Queue],
-        stop_event: threading.Event,
-        save_event: threading.Event,
-    ) -> None:
-
-        super().__init__()
-        self.work = queues["work"]
-        self.result_queue = queues["result"]
-        self.progress_queue = queues["progress"]
-        self.walk_queue = queues["walk"]
-        self.stop_event = stop_event
-        self.daemon = True
-        self.last_accepted: Optional[str] = None
-        self.file_count = 0
-        self.directory_count = 0
-        self.accepted_count = 0
-        self.ignored_count = 0
-        self.error_count = 0
-        self.copied_count = 0
-        self.not_copied_count = 0
-        self.last_copied: Optional[str] = None
-        self.save_event = save_event
-        # Performance tracking
-        self.start_time = time.time()
-        self.last_report_time = time.time()
-        self.bytes_processed = 0
-
-    def do_log_dir(self, _path: str) -> None:
-        """Log directory processing."""
-        self.directory_count += 1
-
-    def do_log_file(self, path: str) -> None:
-        """Log file discovery and progress."""
-        self.file_count += 1
-        if self.file_count % self.file_count_log_interval == 0 or self.file_count == 1:
-            elapsed = time.time() - self.start_time
-            files_per_sec = self.file_count / elapsed if elapsed > 0 else 0
-            logger.info(
-                "Discovered %s files (dirs: %s), accepted %s. Rate: %.1f files/sec\n"
-                "Work queue has %s items. Progress queue has %s items. Walk queue has "
-                "%s items.\nCurrent file: %r (last accepted: %r)",
-                self.file_count,
-                self.directory_count,
-                self.accepted_count,
-                files_per_sec,
-                self.work.qsize(),
-                self.progress_queue.qsize(),
-                self.walk_queue.qsize(),
-                path,
-                self.last_accepted,
-            )
-
-    def do_log_copied(self, src: str, dest: str) -> None:
-        """Log successful file copy operations."""
-        self.copied_count += 1
-        if (
-            self.copied_count % self.file_count_log_interval == 0
-            or self.copied_count == 1
-        ):
-            elapsed = time.time() - self.start_time
-            copy_rate = self.copied_count / elapsed if elapsed > 0 else 0
-            logger.info(
-                "Copied %s items. Skipped %s items. Rate: %.1f files/sec\n"
-                "Last file: %r -> %r",
-                self.copied_count,
-                self.not_copied_count,
-                copy_rate,
-                src,
-                dest,
-            )
-        self.last_copied = src
-
-    def do_log_not_copied(self, _path: str) -> None:
-        """Log files that were not copied."""
-        self.not_copied_count += 1
-
-    def do_log_accepted(self, path: str) -> None:
-        """Log files that were accepted for processing."""
-        self.accepted_count += 1
-        self.last_accepted = path
-
-    def do_log_ignored(self, path: str, reason: str) -> None:
-        """Log files that were ignored during processing."""
-        self.ignored_count += 1
-        logger.info("Ignoring %r for %r", path, reason)
-
-    def do_log_error(self, path: str, reason: Union[str, Exception]) -> None:
-        """Log files that caused errors during processing."""
-        self.error_count += 1
-        error_msg = _format_error_message(path, reason)
-        logger.error(error_msg)
-
-    @staticmethod
-    def do_log_message(message: str) -> None:
-        """Log a generic message."""
-        logger.info(message)
-
-    def run(self) -> None:
-        """Run loop that slurps items off the progress queue and dispatches
-        the correct handler
-        """
-        last_update = time.time()
-        while not self.stop_event.is_set() or not self.progress_queue.empty():
-            try:
-                # we should only be getting directories on this queue
-                item = self.progress_queue.get(True, 0.1)[1:]
-                method_name = f"do_log_{item[0]}"
-                method = getattr(self, method_name)
-                method(*item[1:])
-                last_update = time.time()
-            except queue.Empty:
-                if self.save_event and self.save_event.is_set():
-                    logger.info("Saving...")
-                    time.sleep(1)
-                if time.time() - last_update > 60:
-                    last_update = time.time()
-                    work_size = self.work.qsize()
-                    result_size = self.result_queue.qsize()
-                    progress_size = self.progress_queue.qsize()
-                    walk_size = self.walk_queue.qsize()
-
-                    logger.debug(
-                        "Status:  Work Queue Size: %s. Result Queue Size: %s. "
-                        "Progress Queue Size: %s. Walk Queue Size: %s.",
-                        work_size,
-                        result_size,
-                        progress_size,
-                        walk_size,
-                    )
-
-                    # Warn about large queue sizes (potential memory issues)
-                    if work_size > 40000:
-                        logger.warning(
-                            "Work queue is large (%d items). "
-                            "Consider reducing thread counts to avoid memory issues.",
-                            work_size,
-                        )
-                    if progress_size > 10000:
-                        logger.warning(
-                            "Progress queue is backing up (%d items). "
-                            "This may indicate slow processing.",
-                            progress_size,
-                        )
-            except (AttributeError, ValueError) as e:
-                logger.error("Failed in progress thread: %s", e)
-
-        # Final summary with timing and rates
-        elapsed = time.time() - self.start_time
-        if self.file_count:
-            logger.info("=" * 60)
-            logger.info("RESULTS FROM WALK:")
-            logger.info("Total files discovered: %s", self.file_count)
-            logger.info("Total accepted: %s", self.accepted_count)
-            logger.info("Total ignored: %s", self.ignored_count)
-            files_per_sec = self.file_count / elapsed if elapsed > 0 else 0
-            logger.info("Average discovery rate: %.1f files/sec", files_per_sec)
-        if self.copied_count:
-            logger.info("-" * 60)
-            logger.info("RESULTS FROM COPY:")
-            logger.info("Total copied: %s", self.copied_count)
-            logger.info("Total skipped: %s", self.not_copied_count)
-            copy_rate = self.copied_count / elapsed if elapsed > 0 else 0
-            logger.info("Average copy rate: %.1f files/sec", copy_rate)
-        if self.error_count:
-            logger.info("-" * 60)
-        logger.info("Total errors: %s", self.error_count)
-        logger.info(
-            "Total elapsed time: %.1f seconds (%.1f minutes)", elapsed, elapsed / 60
-        )
-        logger.info("=" * 60)
-
-
-class WalkThread(threading.Thread):
-    """Thread that walks directory trees to discover files."""
-
-    def __init__(
-        self,
-        config: "DedupeCopyConfig",
-        walk_queue: "queue.Queue[str]",
-        stop_event: threading.Event,
-        work_queue: "queue.Queue[str]",
-        already_processed: Any,
-        progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-        save_event: Optional[threading.Event] = None,
-    ) -> None:
-        super().__init__()
-        self.config = config
-        self.walk = walk_queue
-        self.work = work_queue
-        self.already_processed = already_processed
-        self.progress = progress_queue
-        self.stop_event = stop_event
-        self.save_event = save_event
-        self.daemon = True
-
-    def run(self) -> None:
-        while not self.walk.empty() or not self.stop_event.is_set():
-            if self.save_event and self.save_event.is_set():
-                time.sleep(1)
-                continue
-            src = None
-            try:
-                # we should only be getting directories on this queue
-                src = self.walk.get(True, 0.5)
-                if not os.path.exists(src):
-                    # are we dealing with a network path, retry after sleeping
-                    time.sleep(3)
-                    if not os.path.exists(src):
-                        raise RuntimeError(
-                            f"Directory disappeared during walk: {src!r}"
-                        )
-                if not os.path.isdir(src):
-                    raise ValueError(f"Unexpected file in work queue: {src!r}")
-                # process the files, sending items off to be read and getting
-                # new directories put onto the queue we read from
-                _distribute_work(
-                    src,
-                    self.already_processed,
-                    self.config,
-                    progress_queue=self.progress,
-                    work_queue=self.work,
-                    walk_queue=self.walk,
-                )
-            except queue.Empty:
-                pass
-            except (OSError, ValueError, RuntimeError) as e:
-                if self.progress:
-                    self.progress.put((MEDIUM_PRIORITY, "error", src, e))
-
-
-# walk / hash helpers
-
-
-def _distribute_work(
-    src: str,
-    already_processed: Any,
-    config: "DedupeCopyConfig",
-    *,
-    progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-    work_queue: "queue.Queue[str]",
-    walk_queue: "queue.Queue[str]",
-) -> None:
-    # if the path is excluded, don't traverse
-    if config.ignored_patterns:
-        for ignored_pattern in config.ignored_patterns:
-            if fnmatch.fnmatch(src, ignored_pattern):
-                if progress_queue:
-                    progress_queue.put((HIGH_PRIORITY, "ignored", src, ignored_pattern))
-                return
-    for item in os.listdir(src):
-        fn = os.path.join(src, item)
-        if os.path.isdir(fn):
-            if progress_queue:
-                progress_queue.put((LOW_PRIORITY, "dir", fn))
-            _throttle_puts(walk_queue.qsize())
-            walk_queue.put(fn)
-            continue
-        if progress_queue:
-            progress_queue.put((LOW_PRIORITY, "file", fn))
-        # first check if this has already been processed, then
-        # check the ignore file pattern first, then check if we
-        # need to process the extension pattern
-        action_required = True
-        if fn in already_processed:
-            action_required = False
-        if config.ignored_patterns and action_required:
-            for ignored_pattern in config.ignored_patterns:
-                if fnmatch.fnmatch(fn, ignored_pattern):
-                    action_required = False
-                    if progress_queue:
-                        progress_queue.put(
-                            (HIGH_PRIORITY, "ignored", fn, ignored_pattern)
-                        )
-                    break
-        if config.extensions and action_required:
-            if not _match_extension(config.extensions, fn):
-                action_required = False  # didn't find a match
-        if action_required:
-            _throttle_puts(walk_queue.qsize())
-            work_queue.put(fn)
-            if progress_queue:
-                progress_queue.put((HIGH_PRIORITY, "accepted", fn))
-
-
 def _walk_fs(
     config: "DedupeCopyConfig",
     queues: Dict[str, queue.Queue],
-    *,
     already_processed: Any,
     save_event: Optional[threading.Event] = None,
 ) -> None:
@@ -746,13 +119,13 @@ def _walk_fs(
     walkers = []
     if progress_queue:
         progress_queue.put(
-            (HIGH_PRIORITY, "message", f"Starting {config.walk_threads} walk workers")
+            (HIGH_PRIORITY, "message", "Starting %s walk workers", config.walk_threads)
         )
     for _ in range(config.walk_threads):
         w = WalkThread(
-            config,
-            walk_queue,
-            walk_done,
+            config=config,
+            walk_queue=walk_queue,
+            stop_event=walk_done,
             work_queue=work_queue,
             already_processed=already_processed,
             progress_queue=progress_queue,
@@ -761,144 +134,82 @@ def _walk_fs(
         walkers.append(w)
         w.start()
     for src in config.read_paths:
-        _throttle_puts(walk_queue.qsize())
+        utils_dedupe.throttle_puts(walk_queue.qsize())
         walk_queue.put(src)
     walk_done.set()
     for w in walkers:
         w.join()
 
 
-def lower_extension(src: str) -> str:
-    """Extract and return the lowercase file extension."""
-    _, extension = os.path.splitext(src)
-    return extension[1:].lower()
-
-
-def hash_file(src: str) -> str:
-    """Hash a file, returning the md5 hexdigest
-
-    :param src: Full path of the source file.
-    :type src: str
-    """
-    checksum = hashlib.md5()
-    with open(src, "rb") as inhandle:
-        chunk = inhandle.read(READ_CHUNK)
-        while chunk:
-            checksum.update(chunk)
-            chunk = inhandle.read(READ_CHUNK)
-    return checksum.hexdigest()
-
-
-def read_file(src: str) -> Tuple[str, int, float, str]:
-    """Read file and return its metadata including checksum and size."""
-    size = os.path.getsize(src)
-    mtime = os.path.getmtime(src)
-    md5 = hash_file(src)
-    return (md5, size, mtime, src)
-
-
-def _extension_report(md5_data: Any, show_count: int = 10) -> int:
-    """Print details for each extension, sorted by total size, return
-    total size for all extensions
-    """
-    sizes: Counter[str] = Counter()
-    extension_counts: Counter[str] = Counter()
-    for key, info in md5_data.items():
-        for items in info:
-            extension = lower_extension(items[0])
-            if not extension:
-                extension = "no_extension"
-            sizes[extension] += items[1]
-            extension_counts[extension] += 1
-    logger.info("Top %s extensions by size:", show_count)
-    for key, _ in zip(
-        sorted(sizes, key=lambda x: sizes.get(x, 0), reverse=True), range(show_count)
-    ):
-        logger.info("  %s: %s bytes", key, sizes[key])
-    logger.info("Top %s extensions by count:", show_count)
-    for key, _ in zip(
-        sorted(
-            extension_counts, key=lambda x: extension_counts.get(x, 0), reverse=True
-        ),
-        range(show_count),
-    ):
-        logger.info("  %s: %s", key, extension_counts[key])
-    return sum(sizes.values())
-
-
 # duplicate finding
 
 
-def find_duplicates(
+def _find_duplicates_and_report(  # pylint: disable=too-many-arguments
     config: "DedupeCopyConfig",
-    work_queue: "queue.Queue[str]",
-    result_queue: "queue.Queue[Tuple[str, int, float, str]]",
-    manifest: Any,
+    queues: Dict[str, "queue.Queue"],
+    manifest: "Manifest",
     collisions: Any,
-    progress_queue: Optional["queue.PriorityQueue[Any]"],
-    save_event: Optional[threading.Event],
-    walk_queue: Optional["queue.Queue[str]"],
+    save_event: threading.Event,
 ) -> Tuple[Any, Any]:
     """Find duplicate files by comparing checksums across directories."""
     work_stop_event = threading.Event()
     result_stop_event = threading.Event()
     result_processor = ResultProcessor(
-        result_stop_event,
-        result_queue,
-        collisions,
-        manifest,
-        config,
-        progress_queue=progress_queue,
+        stop_event=result_stop_event,
+        result_queue=queues["result"],
+        collisions=collisions,
+        manifest=manifest,
+        progress_queue=queues["progress"],
+        config=config,
         save_event=save_event,
     )
     result_processor.start()
+
     result_fh = None
-    if config.csv_report_path is not None:
-        result_fh = open(
-            config.csv_report_path, "ab"
-        )  # pylint: disable=consider-using-with
+    if config.csv_report_path:
+        # The file is opened here and closed in the finally block
+        # to ensure it remains open for the duration of the function.
+        result_fh = open(config.csv_report_path, "ab")
         result_fh.write(f"Src: {config.read_paths}\n".encode("utf-8"))
-        result_fh.write("Collision #, MD5, Path, Size (bytes), mtime\n".encode("utf-8"))
+        result_fh.write(
+            "Collision #, MD5, Path, Size (bytes), mtime\n".encode("utf-8")
+        )
+
     try:
-        if progress_queue:
-            progress_queue.put(
+        if queues["progress"]:
+            queues["progress"].put(
                 (
                     HIGH_PRIORITY,
                     "message",
-                    f"Starting {config.read_threads} read workers",
+                    "Starting %s read workers",
+                    config.read_threads,
                 )
             )
         work_threads = []
         for _ in range(config.read_threads):
             w = ReadThread(
-                work_queue,
-                result_queue,
-                work_stop_event,
-                progress_queue=progress_queue,
+                work_queue=queues["work"],
+                result_queue=queues["result"],
+                stop_event=work_stop_event,
+                progress_queue=queues["progress"],
                 save_event=save_event,
             )
             work_threads.append(w)
             w.start()
-        queues = {
-            "work": work_queue,
-            "result": result_queue,
-            "progress": progress_queue,
-            "walk": walk_queue,
-        }
         _walk_fs(
             config,
             queues,
-            already_processed=manifest.read_sources,
+            manifest.read_sources,
             save_event=save_event,
         )
-        while not work_queue.empty():
-            if progress_queue:
-                progress_queue.put(
+        while not queues["work"].empty():
+            if queues["progress"]:
+                queues["progress"].put(
                     (
                         HIGH_PRIORITY,
                         "message",
-                        "Waiting for work queue to empty: %d items remain"
-                        % work_queue.qsize(),
+                        "Waiting for work queue to empty: %d items remain",
+                        queues["work"].qsize(),
                     )
                 )
             time.sleep(5)
@@ -918,9 +229,9 @@ def find_duplicates(
                 for item in info:
                     logger.info("    %r, %s", item[0], item[1])
                     if result_fh:
-                        line = (
-                            f"{group}, {md5}, {item[0]!r}, {item[1]}, {item[2]}\n"
-                        ).encode("utf-8")
+                        line = f'{group}, {md5}, "{item[0]}", {item[1]}, {item[2]}\n'.encode(
+                            "utf-8"
+                        )
                         result_fh.write(line)
         else:
             logger.info("No Duplicates Found")
@@ -948,12 +259,11 @@ def info_parser(data: Any) -> Iterator[Tuple[str, str, str, int]]:
 # copy core
 
 
-def queue_copy_work(
+def queue_copy_work(  # pylint: disable=too-many-arguments
     copy_queue: "queue.Queue[Tuple[str, str, int]]",
     data: Any,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
     copied: Any,
-    *,
     ignore: Optional[List[str]] = None,
     ignore_empty_files: bool = False,
 ) -> Any:
@@ -961,17 +271,15 @@ def queue_copy_work(
     for md5, path, mtime, size in info_parser(data):
         if md5 not in copied:
             action_required = True
-            if ignore:
-                for ignored_pattern in ignore:
-                    if fnmatch.fnmatch(path, ignored_pattern):
-                        action_required = False
-                        break
+            if ignore and any(
+                fnmatch.fnmatch(os.path.basename(path), pattern) for pattern in ignore
+            ):
+                action_required = False
+
             if action_required:
-                if not ignore_empty_files:
+                if not ignore_empty_files or md5 != "d41d8cd98f00b204e9800998ecf8427e":
                     copied[md5] = None
-                elif md5 != "d41d8cd98f00b204e9800998ecf8427e":
-                    copied[md5] = None
-                _throttle_puts(copy_queue.qsize())
+                utils_dedupe.throttle_puts(copy_queue.qsize())
                 copy_queue.put((path, mtime, size))
             elif progress_queue:
                 progress_queue.put((LOW_PRIORITY, "not_copied", path))
@@ -980,12 +288,12 @@ def queue_copy_work(
     return copied
 
 
-def copy_data(
+def _handle_copy_operation(  # pylint: disable=too-many-arguments
     dupes: Any,
     all_data: Any,
     config: "DedupeCopyConfig",
     path_rules_func: Optional[Callable[..., Tuple[str, str]]],
-    progress_queue: Optional["queue.PriorityQueue[Any]"],
+    progress_queue: "queue.PriorityQueue[Any]",
     no_copy: Any,
 ) -> None:
     """Queues up the copy work, waits for threads to finish"""
@@ -995,13 +303,18 @@ def copy_data(
     copied = no_copy
     if progress_queue:
         progress_queue.put(
-            (HIGH_PRIORITY, "message", "Starting %s copy workers" % config.copy_threads)
+            (
+                HIGH_PRIORITY,
+                "message",
+                "Starting %s copy workers",
+                config.copy_threads,
+            )
         )
     for _ in range(config.copy_threads):
         c = CopyThread(
-            copy_queue,
-            config,
-            stop_event,
+            copy_queue=copy_queue,
+            config=config,
+            stop_event=stop_event,
             progress_queue=progress_queue,
             path_rules_func=path_rules_func,
         )
@@ -1009,7 +322,7 @@ def copy_data(
         c.start()
     if progress_queue:
         progress_queue.put(
-            (HIGH_PRIORITY, "message", "Copying to %r" % config.copy_to_path)
+            (HIGH_PRIORITY, "message", "Copying to %r", config.copy_to_path)
         )
     # copied is passed to here so we don't try to copy "comparison" manifests
     # copied is a dict-like, so it's update in place
@@ -1034,36 +347,8 @@ def copy_data(
         c.join()
     if progress_queue and copied is not None:
         progress_queue.put(
-            (HIGH_PRIORITY, "message", "Processed %s unique items" % len(copied))
+            (HIGH_PRIORITY, "message", "Processed %s unique items", len(copied))
         )
-
-
-def _clean_extensions(extensions: Optional[List[str]]) -> List[str]:
-    clean: List[str] = []
-    if extensions is not None:
-        for ext in extensions:
-            ext = ext.strip().lower()
-            if ext.startswith(".") and len(ext) > 1:
-                ext = ext[1:]
-            clean.append(f"*.{ext}")
-    return clean
-
-
-def _build_path_rules(rule_pairs: List[str]) -> Callable[..., Tuple[str, str]]:
-    """Create the rule applying function for path rule pairs"""
-    rules: Dict[str, List[str]] = defaultdict(list)
-    for rule in rule_pairs:
-        extension, rule = rule.split(":")
-        # Don't double-wildcard if extension already has wildcard
-        if not extension.startswith("*"):
-            extension = _clean_extensions([extension])[0]
-        else:
-            # Already wildcarded, just normalize
-            extension = extension.strip().lower()
-        if rule not in PATH_RULES:
-            raise ValueError(f"Unexpected path rule: {rule}")
-        rules[extension].append(rule)
-    return functools.partial(_path_rules_parser, rules)
 
 
 class Manifest:
@@ -1104,9 +389,7 @@ class Manifest:
                 logger.info("Removing old manifest file at: %r", self.path)
                 os.unlink(self.path)
             if os.path.exists(sources_path):
-                logger.info(
-                    "Removing old manifest sources file at: %r", sources_path
-                )
+                logger.info("Removing old manifest sources file at: %r", sources_path)
                 os.unlink(sources_path)
             logger.info("creating manifests %s / %s", self.path, sources_path)
             self.md5_data = DefaultCacheDict(
@@ -1254,12 +537,8 @@ class Manifest:
         self.read_sources.save()
 
 
-def run_dupe_copy(config: DedupeCopyConfig) -> None:
-    """For external callers this is the entry point for dedupe + copy"""
-    # Ensure logging is configured for programmatic calls
-    _ensure_logging_configured()
-
-    # Display pre-flight summary
+def _display_summary(config: DedupeCopyConfig):
+    """Displays a summary of the configuration."""
     logger.info("=" * 70)
     logger.info("DEDUPE COPY - Operation Summary")
     logger.info("=" * 70)
@@ -1311,6 +590,13 @@ def run_dupe_copy(config: DedupeCopyConfig) -> None:
     logger.info("=" * 70)
     logger.info("")
 
+
+def run_dupe_copy(config: DedupeCopyConfig) -> None:
+    """For external callers this is the entry point for dedupe + copy"""
+    # Ensure logging is configured for programmatic calls
+    _ensure_logging_configured()
+    _display_summary(config)
+
     temp_directory = tempfile.mkdtemp(suffix="dedupe_copy")
 
     save_event = threading.Event()
@@ -1332,17 +618,19 @@ def run_dupe_copy(config: DedupeCopyConfig) -> None:
         raise ValueError("If --no-walk is specified, a manifest must be supplied.")
     path_rules_func: Optional[Callable[..., Tuple[str, str]]] = None
     if config.path_rules:
-        path_rules_func = _build_path_rules(config.path_rules)
+        path_rules_func = utils_dedupe.build_path_rules(config.path_rules)
     all_stop = threading.Event()
     work_queue: "queue.Queue[str]" = queue.Queue()
     result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
     progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
     walk_queue: "queue.Queue[str]" = queue.Queue()
+    copy_queue: "queue.Queue[Tuple[str, str, int]]" = queue.Queue()
     queues = {
         "work": work_queue,
         "result": result_queue,
         "progress": progress_queue,
         "walk": walk_queue,
+        "copy": copy_queue,
     }
     progress_thread = ProgressThread(
         queues,
@@ -1384,17 +672,14 @@ def run_dupe_copy(config: DedupeCopyConfig) -> None:
                 "Running the duplicate search, generating reports",
             )
         )
-        dupes, all_data = find_duplicates(
+        dupes, all_data = _find_duplicates_and_report(
             config,
-            work_queue,
-            result_queue,
+            queues,
             manifest,
             collisions,
-            progress_queue=progress_queue,
-            save_event=save_event,
-            walk_queue=walk_queue,
+            save_event,
         )
-    total_size = _extension_report(all_data)
+    total_size = utils_dedupe.extension_report(all_data)
     logger.info("Total Size of accepted: %s bytes", total_size)
     if config.manifest_out_path:
         progress_queue.put(
@@ -1410,15 +695,10 @@ def run_dupe_copy(config: DedupeCopyConfig) -> None:
                 del all_data[md5]
         # copy the duplicate files first and then ignore them for the full pass
         progress_queue.put(
-            (HIGH_PRIORITY, "message", "Running copy to %r" % config.copy_to_path)
+            (HIGH_PRIORITY, "message", "Running copy to %r", config.copy_to_path)
         )
-        copy_data(
-            dupes,
-            all_data,
-            config,
-            path_rules_func,
-            progress_queue=progress_queue,
-            no_copy=compare,
+        _handle_copy_operation(
+            dupes, all_data, config, path_rules_func, progress_queue, compare
         )
     all_stop.set()
     while progress_thread.is_alive():

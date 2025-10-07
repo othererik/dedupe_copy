@@ -95,7 +95,6 @@ class TestErrorHandling(unittest.TestCase):
             )
             # Product handles permission errors gracefully, doesn't crash.
             # If it completes without crashing, the test passes.
-            self.assertTrue(True)
         finally:
             # Restore permissions for cleanup
             try:

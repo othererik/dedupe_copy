@@ -4,13 +4,14 @@ the disk cache version.
 
 This is all low grade not to be fully believed performance estimation!
 """
-
+# pylint: disable=too-many-arguments
 import collections
 import contextlib
 import os
 import random
 import time
-from typing import Dict, Any, IO
+from dataclasses import dataclass
+from typing import Dict, Any, IO, List, Tuple, Callable, Iterator, Optional
 
 from dedupe_copy.test import utils
 from dedupe_copy import disk_cache_dict
@@ -24,6 +25,18 @@ SMALL_CACHE = 10
 LARGE_CACHE = 100000
 
 disk_cache_dict.DEBUG = False
+
+
+@dataclass
+class PerfTestConfig:
+    """Configuration for a performance test run."""
+
+    item_count: int
+    lru: bool
+    max_size: int
+    backend: Any
+    in_cache: bool
+    logfd: IO
 
 
 @contextlib.contextmanager
@@ -41,11 +54,11 @@ def time_once(func):
     """Adds an additional return value of the run time"""
 
     def time_func(*args, **kwargs):
-        # print '\tstart: {0}'.format(func.__name__)
+        # print('\tstart: {0}'.format(func.__name__))
         start = time.time()
         func(*args, **kwargs)
         total = time.time() - start
-        # print '\tend: {0} {1}s'.format(func.__name__, total)
+        # print('\tend: {0} {1}s'.format(func.__name__, total)
         return total
 
     return time_func
@@ -129,16 +142,15 @@ def iterate(container, keys):
         next(citer)
 
 
-def log(
+def log_perf(
     name: str,
     py_time: float,
     dcd_time: float,
-    *,
     log_fd: IO,
     log_params: Dict[str, Any],
 ):
     """Log performance test results to console and optionally to file."""
-    percent = ((dcd_time - py_time) / py_time) * 100
+    percent = ((dcd_time - py_time) / py_time) * 100 if py_time else 0
     print(
         f"{name:<30}\tdifference: {percent:<5.2f}%\tpy: {py_time:.4f}s\t"
         f"dcd: {dcd_time:.4f}s"
@@ -151,120 +163,129 @@ def log(
     log_fd.write(log_spec.format(**log_params))
 
 
-def _run_perf_test(item_count, lru, max_size, backend, in_cache, logfd):
-    keys = [str(i) for i in range(item_count)]
+def run_and_log_test(
+    name: str,
+    test_func: Callable,
+    pydict: Dict,
+    dcd: disk_cache_dict.DefaultCacheDict,
+    keys: List[str],
+    config: "PerfTestConfig",
+    log_params: Dict[str, Any],
+    items: Optional[List[Tuple[str, str]]] = None,
+) -> Tuple[float, float]:
+    """Runs a performance test and logs the results."""
+    args_py = (pydict, items) if "populate" in name.lower() else (pydict, keys)
+    args_dcd = (dcd, items) if "populate" in name.lower() else (dcd, keys)
+
+    py_time = test_func(*args_py)
+    dcd_time = test_func(*args_dcd)
+    log_perf(name, py_time, dcd_time, config.logfd, log_params)
+    return py_time, dcd_time
+
+
+def _run_perf_test(config: PerfTestConfig):
+    """Runs a single performance test configuration."""
+    keys = [str(i) for i in range(config.item_count)]
     items = [(str(i), str(i)) for i in keys]
     print(
-        f"Running lru: {lru} max_size: {max_size} backend: {backend or 'default'} "
-        f"item_count: {item_count} in_cache_only: {in_cache}"
+        f"Running lru: {config.lru} max_size: {config.max_size} "
+        f"backend: {config.backend or 'default'} item_count: {config.item_count} "
+        f"in_cache_only: {config.in_cache}"
     )
     with temp_db() as db_file:
         pydict = collections.defaultdict(list)
         dcd = disk_cache_dict.DefaultCacheDict(
             default_factory=list,
-            max_size=max_size,
+            max_size=config.max_size,
             db_file=db_file,
-            lru=lru,
-            current_dictionary=None,
-            backend=backend,
+            lru=config.lru,
+            backend=config.backend,
         )
         log_params = {
-            "item_count": item_count,
-            "lru": lru,
-            "max_size": max_size,
-            "backend": backend,
-            "in_cache": in_cache,
+            "item_count": config.item_count,
+            "lru": config.lru,
+            "max_size": config.max_size,
+            "backend": config.backend,
+            "in_cache": config.in_cache,
         }
 
-        py_time = populate(pydict, items)
-        dcd_time = populate(dcd, items)
-        log("Populate", py_time, dcd_time, log_fd=logfd, log_params=log_params)
+        run_and_log_test(
+            "Populate",
+            populate,
+            pydict,
+            dcd,
+            keys,
+            config,
+            log_params,
+            items=items,
+        )
 
         py_sum = dcd_sum = 0
 
-        if in_cache:
+        if config.in_cache:
             # pylint: disable=protected-access
             test_keys = list(dcd._cache.keys())
         else:
             test_keys = keys
 
-        py_time = random_access(pydict, test_keys)
-        dcd_time = random_access(dcd, test_keys)
-        py_sum += py_time
-        dcd_sum += dcd_time
-        log(
-            "Rand Access", py_time, dcd_time, log_fd=logfd, log_params=log_params
-        )
+        tests_to_run = {
+            "Rand Access": random_access,
+            "Rand Update": random_update,
+            "Sequential Access": sequential_access,
+            "Sequential Update": sequential_update,
+            "Iterate": iterate,
+            "Random Actions": random_actions,
+        }
 
-        py_time = random_update(pydict, test_keys)
-        dcd_time = random_update(dcd, test_keys)
-        py_sum += py_time
-        dcd_sum += dcd_time
-        log(
-            "Rand Update", py_time, dcd_time, log_fd=logfd, log_params=log_params
-        )
+        for name, func in tests_to_run.items():
+            py_time, dcd_time = run_and_log_test(
+                name, func, pydict, dcd, test_keys, config, log_params
+            )
+            py_sum += py_time
+            dcd_sum += dcd_time
 
-        py_time = sequential_access(pydict, test_keys)
-        dcd_time = sequential_access(dcd, test_keys)
-        py_sum += py_time
-        dcd_sum += dcd_time
-        log(
-            "Sequential Access", py_time, dcd_time, log_fd=logfd, log_params=log_params
-        )
-
-        py_time = sequential_update(pydict, test_keys)
-        dcd_time = sequential_update(dcd, test_keys)
-        py_sum += py_time
-        dcd_sum += dcd_time
-        log(
-            "Sequential Update", py_time, dcd_time, log_fd=logfd, log_params=log_params
-        )
-
-        py_time = iterate(pydict, test_keys)
-        dcd_time = iterate(dcd, test_keys)
-        py_sum += py_time
-        dcd_sum += dcd_time
-        log("Iterate", py_time, dcd_time, log_fd=logfd, log_params=log_params)
-
-        py_time = random_actions(pydict, test_keys)
-        dcd_time = random_actions(dcd, test_keys)
-        py_sum += py_time
-        dcd_sum += dcd_time
-        log(
-            "Random Actions", py_time, dcd_time, log_fd=logfd, log_params=log_params
-        )
-
-        print(f"Run Average: {(dcd_sum / py_sum) * 100}%\n\n")
+        if py_sum:
+            print(f"Run Average: {(dcd_sum / py_sum) * 100}%\n\n")
 
 
-# pylint: disable=too-many-nested-blocks
-def gen_tests():
+def _generate_test_configs(logfd: IO) -> Iterator[PerfTestConfig]:
+    """Generate test configurations."""
+    item_counts = [SMALL_SET, LARGE_SET]
+    max_sizes = [SMALL_CACHE, LARGE_CACHE]
+    backends = [None]
+    lrus = [True, False]
+    in_caches = [True, False]
+
+    for item_count in item_counts:
+        for max_size in max_sizes:
+            for backend in backends:
+                for lru in lrus:
+                    for in_cache in in_caches:
+                        if not item_count or not max_size:
+                            continue
+                        if in_cache and max_size < LARGE_CACHE:
+                            continue
+                        yield PerfTestConfig(
+                            item_count, lru, max_size, backend, in_cache, logfd
+                        )
+
+
+def gen_tests() -> Iterator[PerfTestConfig]:
     """Generate test configurations and write results to CSV."""
     try:
         with open("perflog.csv", "a", encoding="utf-8") as fd:
             fd.write(
                 "name, percent, py, dcd, lru, in_cache, backend, item_count, max_size\n"
             )
-            for item_count in [SMALL_SET, LARGE_SET]:
-                for max_size in [SMALL_CACHE, LARGE_CACHE]:
-                    for backend in [
-                        None,
-                    ]:
-                        for lru in [True, False]:
-                            for in_cache in [True, False]:
-                                if not item_count or not max_size:
-                                    continue
-                                if in_cache and max_size < LARGE_CACHE:
-                                    continue
-                                yield item_count, lru, max_size, backend, in_cache, fd
+            yield from _generate_test_configs(fd)
     except IOError:
         pass
 
 
 def main():
     """Run performance tests on disk cache dict."""
-    for item_count, lru, max_size, backend, in_cache, logfd in gen_tests():
-        _run_perf_test(item_count, lru, max_size, backend, in_cache, logfd)
+    for config in gen_tests():
+        _run_perf_test(config)
 
 
 if __name__ == "__main__":

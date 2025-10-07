@@ -1,4 +1,5 @@
 """Basic tests around copy operations"""
+# pylint: disable=protected-access
 
 import os
 import unittest
@@ -9,7 +10,13 @@ import time
 
 from dedupe_copy.test import utils
 
-from dedupe_copy import dedupe_copy, disk_cache_dict, DedupeCopyConfig
+from dedupe_copy import (
+    dedupe_copy,
+    disk_cache_dict,
+    DedupeCopyConfig,
+    utils_dedupe,
+    threads,
+)
 
 
 def do_copy(**kwargs):
@@ -137,35 +144,29 @@ class TestCopySystem(
     def test_best_match_no_matches(self):
         """Test _best_match when no extensions match - line 102"""
         extensions = ["*.jpg", "*.png", "*.gif"]
-        result = dedupe_copy._best_match(extensions, "txt")  # pylint: disable=protected-access
+        result = utils_dedupe.best_match(extensions, "txt")
         self.assertIsNone(result, "Expected None when no patterns match")
 
     def test_best_match_multiple_patterns(self):
         """Test _best_match with multiple matching patterns"""
         # Test multiple patterns that match and choose best by length
         extensions = ["*.j*", "*.jp*", "*.jpg", "*.jpeg"]
-        result = dedupe_copy._best_match(extensions, "jpg")  # pylint: disable=protected-access
+        result = utils_dedupe.best_match(extensions, "jpg")
         # Should return exact match
         self.assertEqual(result, "*.jpg")
 
         # Test with patterns that need scoring
         extensions = ["*.j*", "*.???", "*.j??"]
-        result = dedupe_copy._best_match(extensions, "jpg")  # pylint: disable=protected-access
+        result = utils_dedupe.best_match(extensions, "jpg")
         # Should return the closest match by scoring
         self.assertIn(result, extensions)
 
     def test_match_extension_with_patterns(self):
         """Test _match_extension with wildcard patterns - line 170"""
         # Test pattern matching (not just exact match)
-        self.assertTrue(
-            dedupe_copy._match_extension(["*.txt"], "test.txt")
-        )  # pylint: disable=protected-access
-        self.assertTrue(
-            dedupe_copy._match_extension(["test.*"], "test.jpg")
-        )  # pylint: disable=protected-access
-        self.assertFalse(
-            dedupe_copy._match_extension(["*.jpg"], "test.txt")
-        )  # pylint: disable=protected-access
+        self.assertTrue(utils_dedupe.match_extension(["*.txt"], "test.txt"))
+        self.assertTrue(utils_dedupe.match_extension(["test.*"], "test.jpg"))
+        self.assertFalse(utils_dedupe.match_extension(["*.jpg"], "test.txt"))
 
     def test_extension_filter(self):
         """Test extension filtering in copy operations - covers line 170"""
@@ -225,7 +226,7 @@ class TestCopySystem(
 
             # Create and start result processor
             config = dedupe_copy.DedupeCopyConfig(keep_empty=False)
-            processor = dedupe_copy.ResultProcessor(
+            processor = threads.ResultProcessor(
                 stop_event=stop_event,
                 result_queue=result_queue,
                 collisions=collisions,
