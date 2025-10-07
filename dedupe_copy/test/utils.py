@@ -187,6 +187,7 @@ def make_file_tree(
     file_count: int = 10,
     extensions: Optional[List[str]] = None,
     file_size: int = 1000,
+    prefix: Optional[str] = None,
 ) -> List[List[Union[str, float]]]:
     """Create a tree of files with various extensions off of root,
     returns a list if lists such as [[item, hash, mtime], [item, hash, mtime]]
@@ -200,6 +201,7 @@ def make_file_tree(
         fn = get_random_file_name(
             root=get_random_dir_path(root, existing_dirs=existing_dirs),
             extensions=extensions,
+            prefix=prefix,
         )
         src = os.path.join(root, fn)
         check, mtime = write_file(src, 0, size=file_size, initial=str(i))

@@ -34,3 +34,12 @@ class CopyJob:
     no_copy: Optional[Any] = None
     ignore_empty_files: bool = False
     copy_threads: int = 8
+
+
+@dataclass
+class DeleteJob:
+    """Configuration for a delete job."""
+
+    delete_threads: int = 8
+    dry_run: bool = False
+    min_delete_size_bytes: int = 0
