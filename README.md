@@ -28,6 +28,7 @@ DedupeCopy is designed for consolidating and restructuring sprawling file system
 - **File system cleanup**: Identify and remove duplicate files
 - **Server migration**: Copy files to new storage while preserving structure
 - **Duplicate detection**: Generate reports of duplicate files without copying
+- **Deleting duplicates**: Reclaim disk space by removing redundant files.
 
 **The good bits:**
 - Uses MD5 checksums for accurate duplicate detection
@@ -99,6 +100,14 @@ dedupecopy -p /source/path -c /destination/path -m manifest.db
 ```
 
 Creates a manifest file that allows you to resume if interrupted.
+
+### Delete Duplicates
+
+```bash
+dedupecopy -p /path/to/search --delete --dry-run
+```
+
+This will scan the specified path and show you which files would be deleted. Once you are sure, you can run the command again without `--dry-run` to perform the deletion.
 
 ## Key Concepts
 
@@ -255,7 +264,8 @@ Different organization rules for different file types.
 
 | Option | Description |
 |--------|-------------|
-| `-c PATH`, `--copy-path PATH` | Destination path for copying files. |
+| `-c PATH`, `--copy-path PATH` | Destination path for copying files. Cannot be used with `--delete`. |
+| `--delete` | Deletes duplicate files, keeping the first-seen file. Cannot be used with `--copy-path`. |
 | `-r PATH`, `--result-path PATH` | Output path for CSV duplicate report. |
 | `-m PATH`, `--manifest-dump-path PATH` | Path to save manifest file. |
 | `-i PATH`, `--manifest-read-path PATH` | Path to load existing manifest. Can be specified multiple times. |
@@ -271,6 +281,7 @@ Different organization rules for different file types.
 | `--copy-metadata` | Preserve file timestamps and permissions (uses `shutil.copy2` instead of `copyfile`). |
 | `--keep-empty` | Treat empty (0-byte) files as unique rather than duplicates. |
 | `--ignore-old-collisions` | Only detect new duplicates (ignore duplicates already in loaded manifest). |
+| `--dry-run` | Simulate operations without making any changes to the filesystem. |
 
 ### Output Control Options
 
@@ -732,19 +743,20 @@ dedupecopy -p /source -c /destination -i preview_manifest.db -m final_manifest.d
 # Check file counts, spot-check files, verify important files copied
 ```
 
-### What Gets Copied
+### What Gets Copied / Deleted
 
-- **First occurrence** of each unique file (by MD5 hash)
-- Files are considered unique if MD5 differs
-- Empty files are duplicates unless `--keep-empty` is used
-- Ignored patterns (`--ignore`) are never copied
+- **First occurrence** of each unique file (by MD5 hash) is kept.
+- Subsequent identical files are either copied to the destination or deleted from the source.
+- Files are considered unique if their MD5 hash differs.
+- Empty files are treated as duplicates unless `--keep-empty` is used.
+- Ignored patterns (`--ignore`) are never copied or deleted.
 
-### What Doesn't Get Copied
+### What Doesn't Get Copied / Deleted
 
-- Duplicate files (already seen MD5)
-- Files matching `--ignore` patterns
-- Files in `--compare` manifests (used for comparison only)
-- Extensions not matching `-e` filter (if specified)
+- The first-seen version of a file is never deleted.
+- Files matching `--ignore` patterns.
+- Files listed in `--compare` manifests (used for comparison only).
+- Extensions not matching the `-e` filter (if specified).
 
 ### Preserving Metadata
 
