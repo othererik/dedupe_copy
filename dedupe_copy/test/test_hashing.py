@@ -2,7 +2,7 @@
 
 import os
 import unittest
-from ..utils import hash_file
+from dedupe_copy.utils import hash_file
 
 
 class TestHashing(unittest.TestCase):

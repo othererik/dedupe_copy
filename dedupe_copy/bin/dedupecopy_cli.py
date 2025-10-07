@@ -40,6 +40,9 @@ Examples:
             --compare source2_manifest --compare target_manifest  --no-walk
         dedupecopy -p \\source2\share -c \\target\share -i source2_manifest \
             --compare source1_manifest --compare target_manifest --no-walk
+
+  Delete duplicates from a manifest, skipping files smaller than 1MB:
+    dedupecopy --no-walk --delete --manifest-read-path my_manifest.db --min-delete-size 1048576
 """
 
 
@@ -64,6 +67,14 @@ def _create_parser():
         required=False,
         default=False,
         action="store_true",
+    )
+    parser.add_argument(
+        "--min-delete-size",
+        help="Minimum size of a file to be considered for deletion (bytes).",
+        required=False,
+        default=0,
+        type=int,
+        dest="min_delete_size",
     )
 
     parser.add_argument(
@@ -300,6 +311,7 @@ def _handle_arguments(args):
         "preserve_stat": args.copy_metadata,
         "delete_duplicates": args.delete,
         "dry_run": args.dry_run,
+        "min_delete_size": args.min_delete_size,
     }
 
 

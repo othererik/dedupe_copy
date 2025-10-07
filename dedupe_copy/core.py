@@ -13,7 +13,7 @@ import time
 from collections import Counter
 from typing import Any, Callable, Iterator, List, Optional, Tuple, Union
 
-from .config import CopyConfig, CopyJob, WalkConfig
+from .config import CopyConfig, CopyJob, WalkConfig, DeleteJob
 from .disk_cache_dict import DefaultCacheDict
 from .manifest import Manifest
 from .path_rules import build_path_rules
@@ -345,14 +345,32 @@ def delete_files(
     duplicates: Any,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
     *,
-    delete_threads: int = 8,
-    dry_run: bool = False,
+    delete_job: "DeleteJob",
 ) -> None:
     """Queues up and deletes duplicate files."""
     stop_event = threading.Event()
     delete_queue: "queue.Queue[str]" = queue.Queue()
     workers = []
-    files_to_delete_count = sum(len(file_list) - 1 for file_list in duplicates.values())
+    files_to_delete_count = 0
+    files_to_delete = []
+
+    for _hash, file_list in duplicates.items():
+        # Check size against the threshold
+        size = file_list[0][1]
+        if size >= delete_job.min_delete_size_bytes:
+            # Keep the first file, queue the rest for deletion
+            for file_info in file_list[1:]:
+                files_to_delete.append(file_info[0])
+                files_to_delete_count += 1
+        elif progress_queue:
+            progress_queue.put(
+                (
+                    LOW_PRIORITY,
+                    "message",
+                    f"Skipping deletion of files with size {size} bytes (smaller "
+                    f"than threshold {delete_job.min_delete_size_bytes}).",
+                )
+            )
 
     if progress_queue:
         progress_queue.put(
@@ -366,26 +384,23 @@ def delete_files(
             (
                 HIGH_PRIORITY,
                 "message",
-                f"Starting {delete_threads} delete workers",
+                f"Starting {delete_job.delete_threads} delete workers",
             )
         )
 
-    for _ in range(delete_threads):
+    for _ in range(delete_job.delete_threads):
         d = DeleteThread(
             delete_queue,
             stop_event,
             progress_queue=progress_queue,
-            dry_run=dry_run,
+            dry_run=delete_job.dry_run,
         )
         workers.append(d)
         d.start()
 
-    for _hash, file_list in duplicates.items():
-        # Keep the first file, queue the rest for deletion
-        for file_info in file_list[1:]:
-            path_to_delete = file_info[0]
-            _throttle_puts(delete_queue.qsize())
-            delete_queue.put(path_to_delete)
+    for path_to_delete in files_to_delete:
+        _throttle_puts(delete_queue.qsize())
+        delete_queue.put(path_to_delete)
 
     # Wait for queue to empty
     while not delete_queue.empty():
@@ -421,6 +436,7 @@ def run_dupe_copy(
     preserve_stat: bool = False,
     delete_duplicates: bool = False,
     dry_run: bool = False,
+    min_delete_size: int = 0,
 ) -> None:
     """For external callers this is the entry point for dedupe + copy"""
     # Ensure logging is configured for programmatic calls
@@ -568,11 +584,15 @@ def run_dupe_copy(
         if copy_to_path:
             logger.error("Cannot use --delete and --copy-path at the same time.")
         else:
+            delete_job = DeleteJob(
+                delete_threads=copy_threads,
+                dry_run=dry_run,
+                min_delete_size_bytes=min_delete_size,
+            )
             delete_files(
                 dupes,
                 progress_queue,
-                delete_threads=copy_threads,
-                dry_run=dry_run,
+                delete_job=delete_job,
             )
     elif copy_to_path is not None:
         # Warning: strip dupes out of all data, this assumes dupes correctly
