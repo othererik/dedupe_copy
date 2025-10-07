@@ -99,6 +99,49 @@ def _extension_report(md5_data: Any, show_count: int = 10) -> int:
     return sum(sizes.values())
 
 
+def _start_read_threads_and_process_results(
+    work_queue: "queue.Queue[str]",
+    result_queue: "queue.Queue[Tuple[str, int, float, str]]",
+    collisions: Any,
+    manifest: Any,
+    keep_empty: bool,
+    progress_queue: Optional["queue.PriorityQueue[Any]"],
+    save_event: Optional[threading.Event],
+    read_threads: int,
+    walk_config: "WalkConfig",
+) -> Tuple[ResultProcessor, List[ReadThread], threading.Event, threading.Event]:
+    """Starts the read threads and result processor."""
+    work_stop_event = threading.Event()
+    result_stop_event = threading.Event()
+    result_processor = ResultProcessor(
+        result_stop_event,
+        result_queue,
+        collisions,
+        manifest,
+        keep_empty=keep_empty,
+        progress_queue=progress_queue,
+        save_event=save_event,
+    )
+    result_processor.start()
+    if progress_queue:
+        progress_queue.put(
+            (HIGH_PRIORITY, "message", f"Starting {read_threads} read workers")
+        )
+    work_threads = []
+    for _ in range(read_threads):
+        w = ReadThread(
+            work_queue,
+            result_queue,
+            work_stop_event,
+            walk_config=walk_config,
+            progress_queue=progress_queue,
+            save_event=save_event,
+        )
+        work_threads.append(w)
+        w.start()
+    return result_processor, work_threads, work_stop_event, result_stop_event
+
+
 # will need to clean this up later
 # pylint: disable=too-many-branches
 def find_duplicates(
@@ -118,18 +161,22 @@ def find_duplicates(
     walk_queue: Optional["queue.Queue[str]"] = None,
 ) -> Tuple[Any, Any]:
     """Find duplicate files by comparing checksums across directories."""
-    work_stop_event = threading.Event()
-    result_stop_event = threading.Event()
-    result_processor = ResultProcessor(
+    (
+        result_processor,
+        work_threads,
+        work_stop_event,
         result_stop_event,
+    ) = _start_read_threads_and_process_results(
+        work_queue,
         result_queue,
         collisions,
         manifest,
-        keep_empty=keep_empty,
-        progress_queue=progress_queue,
-        save_event=save_event,
+        keep_empty,
+        progress_queue,
+        save_event,
+        read_threads,
+        walk_config,
     )
-    result_processor.start()
     result_fh = None
     if result_src is not None:
         # pylint: disable=consider-using-with
@@ -137,21 +184,6 @@ def find_duplicates(
         result_fh.write(f"Src: {read_paths}\n".encode("utf-8"))
         result_fh.write("Collision #, MD5, Path, Size (bytes), mtime\n".encode("utf-8"))
     try:
-        if progress_queue:
-            progress_queue.put(
-                (HIGH_PRIORITY, "message", f"Starting {read_threads} read workers")
-            )
-        work_threads = []
-        for _ in range(read_threads):
-            w = ReadThread(
-                work_queue,
-                result_queue,
-                work_stop_event,
-                progress_queue=progress_queue,
-                save_event=save_event,
-            )
-            work_threads.append(w)
-            w.start()
         _walk_fs(
             read_paths,
             walk_config,
@@ -174,12 +206,11 @@ def find_duplicates(
                 )
             time.sleep(5)
         work_stop_event.set()
-        # let the workers finish
         for worker in work_threads:
             worker.join()
         result_stop_event.set()
         while result_processor.is_alive():
-            result_processor.join(5)  # wait for result processor to complete
+            result_processor.join(5)
         if collisions:
             group = 0
             logger.info("Hash Collisions:")
@@ -189,13 +220,11 @@ def find_duplicates(
                 for item in info:
                     logger.info("    %r, %s", item[0], item[1])
                     if result_fh:
-                        line = (
-                            f"{group}, {md5}, {repr(item[0])}, {item[1]}, {item[2]}\n"
-                        )
+                        line = f"{group}, {md5}, {repr(item[0])}, {item[1]}, {item[2]}\n"
                         result_fh.write(line.encode("utf-8"))
         else:
             logger.info("No Duplicates Found")
-        return (collisions, manifest)
+        return collisions, manifest
     finally:
         if result_fh:
             result_fh.close()
@@ -324,6 +353,7 @@ def run_dupe_copy(
     walk_threads: int = 4,
     read_threads: int = 8,
     copy_threads: int = 8,
+    hash_algo: str = "md5",
     convert_manifest_paths_to: str = "",
     convert_manifest_paths_from: str = "",
     no_walk: bool = False,
@@ -449,7 +479,9 @@ def run_dupe_copy(
                 "Running the duplicate search, generating reports",
             )
         )
-        walk_config = WalkConfig(extensions=extensions, ignore=ignored_patterns)
+        walk_config = WalkConfig(
+            extensions=extensions, ignore=ignored_patterns, hash_algo=hash_algo
+        )
         dupes, all_data = find_duplicates(
             read_from_path or [],
             work_queue,

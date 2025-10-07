@@ -266,6 +266,7 @@ class ReadThread(threading.Thread):
         result_queue: "queue.Queue[Tuple[str, int, float, str]]",
         stop_event: threading.Event,
         *,
+        walk_config: "WalkConfig",
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
         save_event: Optional[threading.Event] = None,
     ) -> None:
@@ -273,6 +274,7 @@ class ReadThread(threading.Thread):
         self.work = work_queue
         self.results = result_queue
         self.stop_event = stop_event
+        self.walk_config = walk_config
         self.progress_queue = progress_queue
         self.save_event = save_event
         self.daemon = True
@@ -287,7 +289,9 @@ class ReadThread(threading.Thread):
                 src = self.work.get(True, 0.1)
                 try:
                     _throttle_puts(self.results.qsize())
-                    self.results.put(read_file(src))
+                    self.results.put(
+                        read_file(src, hash_algo=self.walk_config.hash_algo)
+                    )
                 except (OSError, IOError) as e:
                     if self.progress_queue:
                         self.progress_queue.put((MEDIUM_PRIORITY, "error", src, e))

@@ -9,6 +9,8 @@ import sys
 import time
 from typing import List, Optional, Tuple, Union
 
+import xxhash
+
 MAX_TARGET_QUEUE_SIZE = 50000
 READ_CHUNK = 1048576  # 1 MB
 logger = logging.getLogger(__name__)
@@ -73,13 +75,19 @@ def lower_extension(src: str) -> str:
     return extension[1:].lower()
 
 
-def hash_file(src: str) -> str:
-    """Hash a file, returning the md5 hexdigest
+def hash_file(src: str, hash_algo: str = "md5") -> str:
+    """Hash a file, returning the checksum hexdigest.
 
     :param src: Full path of the source file.
     :type src: str
+    :param hash_algo: Hashing algorithm to use ('md5' or 'xxh64').
+    :type hash_algo: str
     """
-    checksum = hashlib.md5()
+    if hash_algo == "xxh64":
+        checksum = xxhash.xxh64()
+    else:
+        checksum = hashlib.md5()
+
     with open(src, "rb") as inhandle:
         chunk = inhandle.read(READ_CHUNK)
         while chunk:
@@ -88,12 +96,12 @@ def hash_file(src: str) -> str:
     return checksum.hexdigest()
 
 
-def read_file(src: str) -> Tuple[str, int, float, str]:
+def read_file(src: str, hash_algo: str = "md5") -> Tuple[str, int, float, str]:
     """Read file and return its metadata including checksum and size."""
     size = os.path.getsize(src)
     mtime = os.path.getmtime(src)
-    md5 = hash_file(src)
-    return (md5, size, mtime, src)
+    file_hash = hash_file(src, hash_algo=hash_algo)
+    return (file_hash, size, mtime, src)
 
 
 def match_extension(extensions: Optional[List[str]], fn: str) -> bool:

@@ -8,6 +8,9 @@ version = "1.0.1"
 description = "Find duplicates / copy and restructure file layout command-line tool"
 readme = "README.md"
 requires-python = ">=3.11"
+dependencies = [
+    "xxhash>=3.4.1"
+]
 license = {text = "BSD-2-Clause"}
 authors = [
     {name = "Erik Schweller", email = "othererik@gmail.com"}
