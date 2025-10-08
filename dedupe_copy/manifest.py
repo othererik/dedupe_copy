@@ -92,7 +92,11 @@ class Manifest:
         path = path or self.path
         try:
             self._write_manifest(path=path, keys=keys)
+            logger.info("Writing manifest of %d hashes to %s", len(self.md5_data), path)
             self.md5_data.save(db_file=path)
+            logger.info(
+                "Writing sources of %d files to %s.read", len(self.read_sources), path
+            )
             self.read_sources.save(db_file=f"{path}.read")
         finally:
             if self.save_event:
@@ -115,10 +119,6 @@ class Manifest:
         self, path: Optional[str] = None, keys: Optional[List[str]] = None
     ) -> None:
         path = path or self.path
-        logger.info("Writing manifest of %d hashes to %s", len(self.md5_data), path)
-        logger.info(
-            "Writing sources of %d files to %s.read", len(self.read_sources), path
-        )
         if not keys:
             dict_iter = self.md5_data.items()
         else:
