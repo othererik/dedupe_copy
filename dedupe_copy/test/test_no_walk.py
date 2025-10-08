@@ -74,13 +74,9 @@ class TestNoWalk(unittest.TestCase):
         self.assertEqual(len(remaining_files), 3)
         self.assertIn("e.txt", remaining_files)
         # Check first group of duplicates
-        self.assertTrue(
-            ("a.txt" in remaining_files) ^ ("b.txt" in remaining_files)
-        )
+        self.assertTrue(("a.txt" in remaining_files) ^ ("b.txt" in remaining_files))
         # Check second group of duplicates
-        self.assertTrue(
-            ("c.txt" in remaining_files) ^ ("d.txt" in remaining_files)
-        )
+        self.assertTrue(("c.txt" in remaining_files) ^ ("d.txt" in remaining_files))
 
     def test_no_walk_report(self):
         """--no-walk with -r generates a report"""
