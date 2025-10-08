@@ -270,7 +270,10 @@ def queue_copy_work(
             if action_required:
                 if not copy_job.ignore_empty_files:
                     copied[md5] = None
-                elif md5 != "d41d8cd98f00b204e9800998ecf8427e":
+                elif md5 not in (
+                    "d41d8cd98f00b204e9800998ecf8427e",
+                    "ef46db3751d8e999",
+                ):
                     copied[md5] = None
                 _throttle_puts(copy_queue.qsize())
                 copy_queue.put((path, mtime, size))
@@ -557,7 +560,6 @@ def run_dupe_copy(
         for _, file_list in manifest.items():
             for file_info in file_list:
                 work_queue.put(file_info[0])
-        collisions.clear()
         dupes, all_data = find_duplicates(
             [],  # No paths to walk
             work_queue,
