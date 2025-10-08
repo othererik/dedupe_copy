@@ -1,9 +1,11 @@
 """Tets --no-walk functionality - confim operations work when suppling a manifest only."""
 
+import io
 import os
 import shutil
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from dedupe_copy.bin.dedupecopy_cli import run_cli
@@ -115,3 +117,57 @@ class TestNoWalk(unittest.TestCase):
             self.assertIn("a.txt", content)
             self.assertIn("b.txt", content)
             self.assertNotIn("c.txt", content)
+
+    def test_no_walk_delete_dry_run_min_size(self):
+        """--no-walk --delete --dry-run with --min-delete-size"""
+        self._create_file("a.txt", "content1")  # 8 bytes
+        self._create_file("b.txt", "content1")  # 8 bytes
+        self._create_file("c.txt", "sho")  # 3 bytes
+        self._create_file("d.txt", "sho")  # 3 bytes
+        self._create_file("e.txt", "unique")  # 6 bytes
+
+        manifest_path = os.path.join(self.root, "manifest.db")
+
+        # 1. Generate manifest
+        with patch(
+            "sys.argv",
+            [
+                "dedupecopy",
+                "-p",
+                self.files_dir,
+                "-m",
+                manifest_path,
+            ],
+        ):
+            run_cli()
+
+        # 2. Run with --no-walk and --delete and --dry-run
+        f = io.StringIO()
+        with redirect_stdout(f):
+            with patch(
+                "sys.argv",
+                [
+                    "dedupecopy",
+                    "--no-walk",
+                    "--delete",
+                    "--dry-run",
+                    "-i",
+                    manifest_path,
+                    "--min-delete-size",
+                    "4",  # c.txt and d.txt are smaller than this
+                ],
+            ):
+                run_cli()
+
+        output = f.getvalue()
+
+        # Check that it would delete one of the larger files
+        self.assertIn("[DRY RUN] Would delete", output)
+        self.assertIn("Starting deletion of 1 files.", output)
+
+        # Check that it skips the smaller files
+        self.assertIn("Skipping deletion of files with size 3 bytes", output)
+
+        # Check that original files are still there
+        remaining_files = os.listdir(self.files_dir)
+        self.assertEqual(len(remaining_files), 5)

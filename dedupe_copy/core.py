@@ -549,6 +549,10 @@ def run_dupe_copy(
         for md5, info in manifest.iteritems():
             if len(info) > 1:
                 collisions[md5] = info
+    walk_config = WalkConfig(
+        extensions=extensions, ignore=ignored_patterns, hash_algo=hash_algo
+    )
+
     if no_walk:
         progress_queue.put(
             (
@@ -557,8 +561,27 @@ def run_dupe_copy(
                 "Not walking file system. Using stored manifests",
             )
         )
-        all_data = manifest
-        dupes = collisions
+        # Use a new manifest to avoid duplicate processing
+        all_data = Manifest(None, temp_directory=temp_directory, save_event=save_event)
+        # Re-process all files from the original manifest
+        for _, file_list in manifest.items():
+            for file_info in file_list:
+                work_queue.put(file_info[0])
+        collisions.clear()
+        dupes, all_data = find_duplicates(
+            [],  # No paths to walk
+            work_queue,
+            result_queue,
+            all_data,  # Use the new, empty manifest
+            collisions,
+            walk_config=walk_config,
+            progress_queue=progress_queue,
+            walk_threads=walk_threads,
+            read_threads=read_threads,
+            keep_empty=keep_empty,
+            save_event=save_event,
+            walk_queue=walk_queue,
+        )
     else:
         progress_queue.put(
             (
@@ -566,9 +589,6 @@ def run_dupe_copy(
                 "message",
                 "Running the duplicate search, generating reports",
             )
-        )
-        walk_config = WalkConfig(
-            extensions=extensions, ignore=ignored_patterns, hash_algo=hash_algo
         )
         dupes, all_data = find_duplicates(
             read_from_path or [],
