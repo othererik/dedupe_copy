@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.1.0] - 2025-10-08
+## [1.1.0] - 2025-10-07
 - Add new optional hashing algorithm choice
 - Add delete and dry-run options
 - Other performance improvements

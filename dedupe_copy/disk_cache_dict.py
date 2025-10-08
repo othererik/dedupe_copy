@@ -457,6 +457,10 @@ class CacheDict(collections.abc.MutableMapping):
         self._db.save(db_file=db_file or self._db_file, remove_old_db=remove_old_db)
         self._cache.clear()
 
+    def close(self) -> None:
+        """Close the database connection."""
+        self._db.close()
+
 
 class DefaultCacheDict(CacheDict):
     """A CacheDict that provides default values for missing keys."""

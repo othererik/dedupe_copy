@@ -115,6 +115,13 @@ class Manifest:
         """Deprecated: Use items() instead"""
         return self.md5_data.items()
 
+    def close(self) -> None:
+        """Close the manifest's database files."""
+        if hasattr(self.md5_data, "close"):
+            self.md5_data.close()
+        if hasattr(self.read_sources, "close"):
+            self.read_sources.close()
+
     def _write_manifest(
         self, path: Optional[str] = None, keys: Optional[List[str]] = None
     ) -> None:
