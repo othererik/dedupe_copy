@@ -217,7 +217,17 @@ def find_duplicates(
         walk_threads=walk_threads,
         save_event=save_event,
     )
-    work_queue.join()
+    while not work_queue.empty():
+        if progress_queue:
+            progress_queue.put(
+                (
+                    HIGH_PRIORITY,
+                    "message",
+                    f"Waiting for work queue to empty: {work_queue.qsize()} "
+                    f"items remain",
+                )
+            )
+        time.sleep(5)
     work_stop_event.set()
     for worker in work_threads:
         worker.join()
@@ -490,182 +500,159 @@ def run_dupe_copy(
     logger.info("")
 
     temp_directory = tempfile.mkdtemp(suffix="dedupe_copy")
-    manifest = None
-    compare = None
-    collisions = None
-    all_data = None
-    progress_thread = None
+
+    save_event = threading.Event()
+    manifest = Manifest(
+        manifests_in_paths,
+        save_path=manifest_out_path,
+        temp_directory=temp_directory,
+        save_event=save_event,
+    )
+    compare = Manifest(compare_manifests, save_path=None, temp_directory=temp_directory)
+
+    if no_copy:
+        for item in no_copy:
+            compare[item] = None
+
+    if no_walk and not manifest:
+        raise ValueError("If --no-walk is specified, a manifest must be supplied.")
+    if read_from_path and not isinstance(read_from_path, list):
+        read_from_path = [read_from_path]
+    path_rules_func: Optional[Callable[..., Tuple[str, str]]] = None
+    if path_rules:
+        path_rules_func = build_path_rules(path_rules)
     all_stop = threading.Event()
-
-    try:
-        save_event = threading.Event()
-        manifest = Manifest(
-            manifests_in_paths,
-            save_path=manifest_out_path,
-            temp_directory=temp_directory,
-            save_event=save_event,
+    work_queue: "queue.Queue[str]" = queue.Queue()
+    result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
+    progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
+    walk_queue: "queue.Queue[str]" = queue.Queue()
+    progress_thread = ProgressThread(
+        work_queue,
+        result_queue,
+        progress_queue,
+        walk_queue=walk_queue,
+        stop_event=all_stop,
+        save_event=save_event,
+    )
+    progress_thread.start()
+    collisions = None
+    if manifest and (convert_manifest_paths_to or convert_manifest_paths_from):
+        manifest.convert_manifest_paths(
+            convert_manifest_paths_from, convert_manifest_paths_to
         )
-        compare = Manifest(
-            compare_manifests, save_path=None, temp_directory=temp_directory
-        )
 
-        if no_copy:
-            for item in no_copy:
-                compare[item] = None
-
-        if no_walk and not manifest:
-            raise ValueError("If --no-walk is specified, a manifest must be supplied.")
-        if read_from_path and not isinstance(read_from_path, list):
-            read_from_path = [read_from_path]
-        path_rules_func: Optional[Callable[..., Tuple[str, str]]] = None
-        if path_rules:
-            path_rules_func = build_path_rules(path_rules)
-
-        work_queue: "queue.Queue[str]" = queue.Queue()
-        result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
-        progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
-        walk_queue: "queue.Queue[str]" = queue.Queue()
-        progress_thread = ProgressThread(
-            work_queue,
-            result_queue,
-            progress_queue,
-            walk_queue=walk_queue,
-            stop_event=all_stop,
-            save_event=save_event,
-        )
-        progress_thread.start()
-
-        if manifest and (convert_manifest_paths_to or convert_manifest_paths_from):
-            manifest.convert_manifest_paths(
-                convert_manifest_paths_from, convert_manifest_paths_to
+    # storage for hash collisions
+    collisions_file = os.path.join(temp_directory, "collisions.db")
+    collisions = DefaultCacheDict(list, db_file=collisions_file, max_size=10000)
+    if manifest and not ignore_old_collisions:
+        # rebuild collision list
+        for md5, info in manifest.items():
+            if len(info) > 1:
+                collisions[md5] = info
+    if no_walk:
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
+                "message",
+                "Not walking file system. Using stored manifests",
             )
-
-        collisions_file = os.path.join(temp_directory, "collisions.db")
-        collisions = DefaultCacheDict(list, db_file=collisions_file, max_size=10000)
-        if manifest and not ignore_old_collisions:
-            for md5, info in manifest.iteritems():
-                if len(info) > 1:
-                    collisions[md5] = info
-
+        )
+        all_data = manifest
+        dupes = collisions
+    else:
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
+                "message",
+                "Running the duplicate search, generating reports",
+            )
+        )
         walk_config = WalkConfig(
             extensions=extensions, ignore=ignored_patterns, hash_algo=hash_algo
         )
-
-        if no_walk:
-            progress_queue.put(
-                (
-                    HIGH_PRIORITY,
-                    "message",
-                    "Not walking file system. Using stored manifests",
-                )
-            )
-            all_data = Manifest(
-                None, temp_directory=temp_directory, save_event=save_event
-            )
-            for _, file_list in manifest.items():
-                for file_info in file_list:
-                    work_queue.put(file_info[0])
-            collisions.clear()
-            dupes, all_data = find_duplicates(
-                [],
-                work_queue,
-                result_queue,
-                all_data,
-                collisions,
-                walk_config=walk_config,
-                progress_queue=progress_queue,
-                walk_threads=walk_threads,
-                read_threads=read_threads,
-                keep_empty=keep_empty,
-                save_event=save_event,
-                walk_queue=walk_queue,
-            )
+        dupes, all_data = find_duplicates(
+            read_from_path or [],
+            work_queue,
+            result_queue,
+            manifest,
+            collisions,
+            walk_config=walk_config,
+            progress_queue=progress_queue,
+            walk_threads=walk_threads,
+            read_threads=read_threads,
+            keep_empty=keep_empty,
+            save_event=save_event,
+            walk_queue=walk_queue,
+        )
+    total_size = _extension_report(all_data)
+    logger.info("Total Size of accepted: %s bytes", total_size)
+    if csv_report_path:
+        generate_report(
+            csv_report_path=csv_report_path,
+            collisions=dupes,
+            read_paths=read_from_path,
+            hash_algo=hash_algo,
+        )
+    if manifest_out_path:
+        progress_queue.put(
+            (HIGH_PRIORITY, "message", "Saving complete manifest from search")
+        )
+        all_data.save(path=manifest_out_path)
+    if delete_duplicates:
+        if copy_to_path:
+            logger.error("Cannot use --delete and --copy-path at the same time.")
         else:
-            progress_queue.put(
-                (
-                    HIGH_PRIORITY,
-                    "message",
-                    "Running the duplicate search, generating reports",
-                )
+            delete_job = DeleteJob(
+                delete_threads=copy_threads,
+                dry_run=dry_run,
+                min_delete_size_bytes=min_delete_size,
             )
-            dupes, all_data = find_duplicates(
-                read_from_path or [],
-                work_queue,
-                result_queue,
-                manifest,
-                collisions,
-                walk_config=walk_config,
-                progress_queue=progress_queue,
-                walk_threads=walk_threads,
-                read_threads=read_threads,
-                keep_empty=keep_empty,
-                save_event=save_event,
-                walk_queue=walk_queue,
+            delete_files(
+                dupes,
+                progress_queue,
+                delete_job=delete_job,
             )
-
-        total_size = _extension_report(all_data)
-        logger.info("Total Size of accepted: %s bytes", total_size)
-
-        if csv_report_path:
-            generate_report(
-                csv_report_path=csv_report_path,
-                collisions=dupes,
-                read_paths=read_from_path,
-                hash_algo=hash_algo,
-            )
-        if manifest_out_path:
-            progress_queue.put(
-                (HIGH_PRIORITY, "message", "Saving complete manifest from search")
-            )
-            all_data.save(path=manifest_out_path)
-
-        if delete_duplicates:
-            if copy_to_path:
-                logger.error("Cannot use --delete and --copy-path at the same time.")
-            else:
-                delete_job = DeleteJob(
-                    delete_threads=copy_threads,
-                    dry_run=dry_run,
-                    min_delete_size_bytes=min_delete_size,
-                )
-                delete_files(dupes, progress_queue, delete_job=delete_job)
-        elif copy_to_path is not None:
-            for md5 in dupes:
-                if md5 in all_data:
-                    del all_data[md5]
-            progress_queue.put(
-                (HIGH_PRIORITY, "message", f"Running copy to {repr(copy_to_path)}")
-            )
-            copy_config = CopyConfig(
-                target_path=copy_to_path,
-                read_paths=read_from_path or [],
-                extensions=extensions,
-                path_rules=path_rules_func,
-                preserve_stat=preserve_stat,
-            )
-            copy_job = CopyJob(
-                copy_config=copy_config,
-                ignore=ignored_patterns,
-                no_copy=compare,
-                ignore_empty_files=keep_empty,
-                copy_threads=copy_threads,
-            )
-            copy_data(dupes, all_data, progress_queue, copy_job=copy_job)
-
-    finally:
-        all_stop.set()
-        if progress_thread and progress_thread.is_alive():
-            progress_thread.join(5)
-        if manifest:
-            manifest.close()
-        if compare:
-            compare.close()
-        if collisions:
-            collisions.close()
-        if no_walk and all_data:
-            all_data.close()
-
-        try:
-            shutil.rmtree(temp_directory)
-        except (OSError, NameError):
-            pass
+    elif copy_to_path is not None:
+        # Warning: strip dupes out of all data, this assumes dupes correctly
+        # follows handling of keep_empty (not a dupe even if md5 is same for
+        # zero byte files)
+        for md5 in dupes:
+            if md5 in all_data:
+                del all_data[md5]
+        # copy the duplicate files first and then ignore them for the full pass
+        progress_queue.put(
+            (HIGH_PRIORITY, "message", f"Running copy to {repr(copy_to_path)}")
+        )
+        copy_config = CopyConfig(
+            target_path=copy_to_path,
+            read_paths=read_from_path or [],
+            extensions=extensions,
+            path_rules=path_rules_func,
+            preserve_stat=preserve_stat,
+        )
+        copy_job = CopyJob(
+            copy_config=copy_config,
+            ignore=ignored_patterns,
+            no_copy=compare,
+            ignore_empty_files=keep_empty,
+            copy_threads=copy_threads,
+        )
+        copy_data(
+            dupes,
+            all_data,
+            progress_queue,
+            copy_job=copy_job,
+        )
+    all_stop.set()
+    while progress_thread.is_alive():
+        progress_thread.join(5)
+    del collisions
+    try:
+        time.sleep(1)
+        shutil.rmtree(temp_directory)
+    except OSError as err:
+        logger.warning(
+            "Failed to cleanup the collisions file: %s with err: %s",
+            collisions_file,
+            err,
+        )

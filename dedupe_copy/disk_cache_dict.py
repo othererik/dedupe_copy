@@ -23,7 +23,8 @@ DEBUG = False
 
 
 class SqliteBackend:
-    """Stole the query / update scheme from Erez Shinan's filedict project.
+    """A thread-safe SQLite backend using a single connection with a lock.
+    Stole the query / update scheme from Erez Shinan's filedict project.
     Thanks!
     """
 
@@ -34,92 +35,96 @@ class SqliteBackend:
         unlink_old_db: bool = False,
     ) -> None:
         """Create the db and tables"""
-        # Generate timestamp-based filename if none provided
         if db_file is None:
             db_file = f"db_file_{int(time.time())}.dict"
         if unlink_old_db and os.path.exists(db_file):
             os.unlink(db_file)
         self._db_file = db_file
         self.table = db_table
-        self._local = threading.local()
-        self._init_conn()  # Eagerly initialize for the main thread
+        self._lock = threading.RLock()
+        self._conn: Optional[sqlite3.Connection] = None
+        self._init_conn()
         self._commit_needed = False
         self._write_count = 0
-        self._batch_size = 100  # Commit every 100 writes
+        self._batch_size = 100
 
     def _init_conn(self) -> None:
-        """Initializes a connection for the current thread."""
-        conn = sqlite3.connect(self._db_file, check_same_thread=True)
-        # Enable WAL mode for better concurrent performance
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA cache_size = -64000;")  # 64MB cache
-        conn.execute(
-            f"create table if not exists {self.table} (id integer primary "
-            f"key, hash integer, key blob, value blob);"
-        )
-        conn.execute(
-            f"create index if not exists {self.table}_index ON {self.table}(hash);"
-        )
-        conn.commit()
-        self._local.conn = conn
+        """Initializes a single, shared connection."""
+        with self._lock:
+            if self._conn is None:
+                self._conn = sqlite3.connect(
+                    self._db_file, check_same_thread=False, timeout=10
+                )
+                self._conn.execute("PRAGMA journal_mode=WAL;")
+                self._conn.execute("PRAGMA synchronous=NORMAL;")
+                self._conn.execute("PRAGMA cache_size = -64000;")
+                self._conn.execute(
+                    f"create table if not exists {self.table} (id integer primary "
+                    f"key, hash integer, key blob, value blob);"
+                )
+                self._conn.execute(
+                    f"create index if not exists {self.table}_index ON {self.table}(hash);"
+                )
+                self._conn.commit()
 
     @property
     def conn(self) -> sqlite3.Connection:
-        """Return a thread-local SQLite connection."""
-        if not hasattr(self._local, "conn") or self._local.conn is None:
+        """Return the shared SQLite connection."""
+        if self._conn is None:
             self._init_conn()
-        return self._local.conn
+        return self._conn  # type: ignore
 
     def _get_key_id(self, key: Any) -> int:
-        """The indirection allows for hash collisions needed for add and
-        delete -- makes contains a bit faster"""
-        cursor = self.conn.execute(
-            f"select key,id from {self.table} where hash=?;", (hash(key),)
-        )
-        for k, key_id in cursor:
-            if self._load(k) == key:
-                return key_id
-        # not in the db
-        raise KeyError(key)
+        with self._lock:
+            cursor = self.conn.execute(
+                f"select key,id from {self.table} where hash=?;", (hash(key),)
+            )
+            for k, key_id in cursor:
+                if self._load(k) == key:
+                    return key_id
+            raise KeyError(key)
 
     def __getitem__(self, key: Any) -> Any:
-        cursor = self.conn.execute(
-            f"select key,value from {self.table} where hash=?;", (hash(key),)
-        )
-        for k, v in cursor:
-            if self._load(k) == key:
-                return self._load(v)
-        # not in the db
-        raise KeyError(key)
+        with self._lock:
+            cursor = self.conn.execute(
+                f"select key,value from {self.table} where hash=?;", (hash(key),)
+            )
+            for k, v in cursor:
+                if self._load(k) == key:
+                    return self._load(v)
+            raise KeyError(key)
 
     def __setitem__(self, key: Any, value: Any) -> None:
-        self._insert(key, value)
-        self._commit_needed = True
-        self._write_count += 1
-        # Batch commits for performance
-        if self._write_count >= self._batch_size:
-            self.commit()
-            self._write_count = 0
+        with self._lock:
+            self._insert(key, value)
+            self._commit_needed = True
+            self._write_count += 1
+            if self._write_count >= self._batch_size:
+                self.commit()
 
     def __delitem__(self, key: Any) -> None:
-        db_id = self._get_key_id(key)
-        self.conn.execute(f"delete from {self.table} where id=?;", (db_id,))
-        self._commit_needed = True
-        self._write_count += 1
-        if self._write_count >= self._batch_size:
-            self.commit()
-            self._write_count = 0
+        with self._lock:
+            db_id = self._get_key_id(key)
+            self.conn.execute(f"delete from {self.table} where id=?;", (db_id,))
+            self._commit_needed = True
+            self._write_count += 1
+            if self._write_count >= self._batch_size:
+                self.commit()
 
     def __iter__(self) -> Iterator[Any]:
-        """Generator of keys"""
-        return (
-            self._load(k[0])
-            for k in self.conn.execute(f"select key from {self.table};")
-        )
+        with self._lock:
+            # Fetch all keys at once to avoid lock contention during iteration
+            keys = [
+                self._load(k[0])
+                for k in self.conn.execute(f"select key from {self.table};")
+            ]
+        return iter(keys)
 
     def __len__(self) -> int:
-        return self.conn.execute(f"select count(*) from {self.table};").fetchone()[0]
+        with self._lock:
+            return self.conn.execute(
+                f"select count(*) from {self.table};"
+            ).fetchone()[0]
 
     def __contains__(self, key: Any) -> bool:
         try:
@@ -168,7 +173,7 @@ class SqliteBackend:
         return pickle.loads(value_bytes)
 
     def _insert(self, key: Any, value: Any) -> None:
-        """This kinda stinks, check for existence, and then do the work"""
+        """Assumes lock is held."""
         try:
             db_id = self._get_key_id(key)
             self.conn.execute(
@@ -182,83 +187,78 @@ class SqliteBackend:
             )
 
     def pop(self, key: Any) -> Any:
-        """Not atomic, kinda a deal breaker for thread safety."""
-        value = self[key]
-        del self[key]
-        return value
+        with self._lock:
+            value = self[key]
+            del self[key]
+            return value
 
     def keys(self) -> Iterator[Any]:
-        """Return an iterator over the dictionary keys."""
         return iter(self)
 
     def values(self) -> List[Any]:
-        """Return a list of all values in the dictionary."""
-        return [
-            self._load(x[0])
-            for x in self.conn.execute(f"select value from {self.table};")
-        ]
+        with self._lock:
+            return [
+                self._load(x[0])
+                for x in self.conn.execute(f"select value from {self.table};")
+            ]
 
     def items(self) -> List[Tuple[Any, Any]]:
-        """Return a list of (key, value) tuples."""
-        return [
-            (self._load(items[0]), self._load(items[1]))
-            for items in self.conn.execute(f"select key,value from {self.table};")
-        ]
+        with self._lock:
+            return [
+                (self._load(items[0]), self._load(items[1]))
+                for items in self.conn.execute(f"select key,value from {self.table};")
+            ]
 
     def commit(self, force: bool = False) -> None:
-        """Commit pending transactions to the database."""
-        if self._commit_needed or force:
-            self.conn.commit()
-        self._commit_needed = False
-        self._write_count = 0
+        with self._lock:
+            if self._commit_needed or force:
+                self.conn.commit()
+            self._commit_needed = False
+            self._write_count = 0
 
     def db_file_path(self) -> str:
-        """Return the path to the database file."""
         return self._db_file
 
     def close(self) -> None:
-        """Close the database connection safely for the current thread."""
-        if hasattr(self._local, "conn") and self._local.conn:
-            try:
-                self._local.conn.commit()
-                self._local.conn.close()
-            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
-                pass
-        self._local.conn = None
+        with self._lock:
+            if self._conn:
+                try:
+                    self.commit(force=True)
+                    self._conn.close()
+                except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                    pass
+            self._conn = None
 
     def __del__(self) -> None:
-        """Cleanup database connection on deletion"""
         try:
             self.close()
-        except (sqlite3.OperationalError, sqlite3.ProgrammingError):
-            # Suppress all exceptions during cleanup to avoid warnings
+        except Exception:  # pylint: disable=broad-except-clause
             pass
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
-        """Commit the data, close the connection, move file into place"""
-        self.commit(force=True)
-        current_db_file = self._db_file
-
-        if db_file is not None and db_file != current_db_file:
-            dest_conn = sqlite3.connect(db_file)
-            with dest_conn:
-                self.conn.backup(dest_conn)
-            dest_conn.close()
-            if remove_old_db:
-                self.close()
-                os.unlink(current_db_file)
-                self._db_file = db_file
-                self._init_conn()
+        with self._lock:
+            self.commit(force=True)
+            current_db_file = self._db_file
+            if db_file is not None and db_file != current_db_file:
+                dest_conn = sqlite3.connect(db_file)
+                with dest_conn:
+                    self.conn.backup(dest_conn)
+                dest_conn.close()
+                if remove_old_db:
+                    self.close()
+                    os.unlink(current_db_file)
+                    self._db_file = db_file
+                    self._init_conn()
 
     def load(self, db_file: Optional[str] = None) -> None:
-        """Load data from a database file."""
-        self.commit(force=True)
-        self.close()
-        db_file = db_file or self._db_file
-        self._db_file = db_file
-        self._init_conn()
-        self._commit_needed = False
-        self._write_count = 0
+        with self._lock:
+            self.commit(force=True)
+            self.close()
+            db_file = db_file or self._db_file
+            self._db_file = db_file
+            self._init_conn()
+            self._commit_needed = False
+            self._write_count = 0
 
 
 # Container stuff
@@ -456,10 +456,6 @@ class CacheDict(collections.abc.MutableMapping):
         # clear out local cache so we're correctly in sync
         self._db.save(db_file=db_file or self._db_file, remove_old_db=remove_old_db)
         self._cache.clear()
-
-    def close(self) -> None:
-        """Close the database connection."""
-        self._db.close()
 
 
 class DefaultCacheDict(CacheDict):

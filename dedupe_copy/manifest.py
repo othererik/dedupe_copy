@@ -91,12 +91,10 @@ class Manifest:
             self.save_event.set()
         path = path or self.path
         try:
-            self._write_manifest(path=path, keys=keys)
-            logger.info("Writing manifest of %d hashes to %s", len(self.md5_data), path)
+            # Save the main data first, as _write_manifest iterates the cache
+            # and can cause state changes before the data is persisted.
             self.md5_data.save(db_file=path)
-            logger.info(
-                "Writing sources of %d files to %s.read", len(self.read_sources), path
-            )
+            self._write_manifest(path=path, keys=keys)
             self.read_sources.save(db_file=f"{path}.read")
         finally:
             if self.save_event:
@@ -115,17 +113,14 @@ class Manifest:
         """Deprecated: Use items() instead"""
         return self.md5_data.items()
 
-    def close(self) -> None:
-        """Close the manifest's database files."""
-        if hasattr(self.md5_data, "close"):
-            self.md5_data.close()
-        if hasattr(self.read_sources, "close"):
-            self.read_sources.close()
-
     def _write_manifest(
         self, path: Optional[str] = None, keys: Optional[List[str]] = None
     ) -> None:
         path = path or self.path
+        logger.info("Writing manifest of %d hashes to %s", len(self.md5_data), path)
+        logger.info(
+            "Writing sources of %d files to %s.read", len(self.read_sources), path
+        )
         if not keys:
             dict_iter = self.md5_data.items()
         else:
