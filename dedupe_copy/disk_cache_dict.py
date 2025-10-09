@@ -24,8 +24,7 @@ DEBUG = False
 
 class SqliteBackend:
     """A thread-safe SQLite backend using a single connection with a lock.
-    Stole the query / update scheme from Erez Shinan's filedict project.
-    Thanks!
+    Query/update scheme adapted from Erez Shinan's filedict project.
     """
 
     def __init__(
@@ -317,7 +316,7 @@ class CacheDict(collections.abc.MutableMapping):
         self._key_order: Optional[OrderedDict] = None
         if lru:
             self._key_order = OrderedDict()
-        # this is a performance yuck, create a batched option
+        # Note: Performance could be improved with a batched option
         if current_dictionary:
             for key, value in current_dictionary.items():
                 self[key] = value
