@@ -63,26 +63,26 @@ class TestCliIntegration(unittest.TestCase):
         self.assertTrue(os.path.exists(self.manifest_path))
 
         # 2. Run with --no-walk and --delete in a separate process
-        run_result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "dedupe_copy",
-                "--no-walk",
-                "--delete",
-                "--dry-run",
-                "-i",
-                self.manifest_path,
-                "--min-delete-size",
-                "4",  # c.txt and d.txt are smaller than this
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(
-            run_result.returncode, 0, f"No-walk run failed: {run_result.stderr}"
-        )
+        try:
+            run_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "dedupe_copy",
+                    "--no-walk",
+                    "--delete",
+                    "--dry-run",
+                    "--manifest-read-path",
+                    self.manifest_path,
+                    "--min-delete-size",
+                    "4",  # c.txt and d.txt are smaller than this
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            self.fail(f"No-walk run failed with stderr:\n{e.stderr}")
         output = run_result.stdout
 
         # Assert that the duplicates are found and processed for deletion
@@ -132,25 +132,25 @@ class TestCliIntegration(unittest.TestCase):
         self.assertTrue(os.path.exists(self.manifest_path))
 
         # 2. Run with --no-walk and --delete in a separate process
-        run_result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "dedupe_copy",
-                "--no-walk",
-                "--delete",
-                "-i",
-                self.manifest_path,
-                "--min-delete-size",
-                "4",  # c.txt and d.txt are smaller than this
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(
-            run_result.returncode, 0, f"No-walk run failed: {run_result.stderr}"
-        )
+        try:
+            run_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "dedupe_copy",
+                    "--no-walk",
+                    "--delete",
+                    "--manifest-read-path",
+                    self.manifest_path,
+                    "--min-delete-size",
+                    "4",  # c.txt and d.txt are smaller than this
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            self.fail(f"No-walk run failed with stderr:\n{e.stderr}")
         output = run_result.stdout
 
         self.assertIn(
@@ -166,12 +166,12 @@ class TestCliIntegration(unittest.TestCase):
 
         # Confirm correct deletions occurred
         remaining_files = os.listdir(self.files_dir)
-        self.assertEqual(len(remaining_files), 3)
+        self.assertEqual(len(remaining_files), 4)
         self.assertIn("a.txt", remaining_files)
-        self.assertIn("b.txt", remaining_files)
+        self.assertNotIn("b.txt", remaining_files)
+        self.assertIn("c.txt", remaining_files)
+        self.assertIn("d.txt", remaining_files)
         self.assertIn("e.txt", remaining_files)
-        self.assertNotIn("c.txt", remaining_files)
-        self.assertNotIn("d.txt", remaining_files)
 
     def test_walk_delete_with_subprocess(self):
         """

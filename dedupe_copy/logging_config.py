@@ -13,6 +13,7 @@ try:
     HAS_COLORAMA = True
 except ImportError:
     HAS_COLORAMA = False
+    colorama_init = None  # type: ignore
 
 
 class ColoredFormatter(logging.Formatter):

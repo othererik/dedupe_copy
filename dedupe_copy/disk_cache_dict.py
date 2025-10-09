@@ -367,6 +367,27 @@ class CacheDict(collections.abc.MutableMapping):
                 self._key_order[key] = None
         return value
 
+    # the type here is not ItemsView - may look into aligning
+    # with parent class at a later date
+    def items(self) -> Iterator[Tuple[Any, Any]]:  # type: ignore[override]
+        """Return an iterator over the items of the dictionary.
+
+        This is a non-destructive iterator. It will not fault items
+        into the cache.
+        """
+        # First, yield all items from the in-memory cache.
+        yield from self._cache.items()
+
+        # Then, iterate over items in the database backend.
+        # For each item, if its key is NOT already in the cache (which we just yielded),
+        # then yield it. This avoids yielding duplicate keys.
+        # This implementation assumes self._db.items() is an efficient way
+        # to iterate over all items in the backend storage.
+        db_items = self._db.items()
+        for key, value in db_items:
+            if key not in self._cache:
+                yield key, value
+
     def __setitem__(self, key: Any, value: Any) -> None:
         """Put an items into the mappings, if key doesn't exist, create it"""
         if key not in self._cache and key in self._db:
@@ -478,6 +499,11 @@ class CacheDict(collections.abc.MutableMapping):
         # clear out local cache so we're correctly in sync
         self._db.save(db_file=db_file or self._db_file, remove_old_db=remove_old_db)
         self._cache.clear()
+
+    def close(self) -> None:
+        """Close the underlying database connection."""
+        if hasattr(self._db, "close"):
+            self._db.close()
 
 
 class DefaultCacheDict(CacheDict):

@@ -91,17 +91,33 @@ class Manifest:
             self.save_event.set()
         path = path or self.path
         try:
-            # First populate read_sources from md5_data, then save both.
-            self._write_manifest(path=path, keys=keys)
+            # Save the main data first, then populate and save sources.
+            # This ensures that if a read happens during save, the main
+            # data is consistent.
+            logger.info("Writing manifest of %d hashes to %s", len(self.md5_data), path)
             self.md5_data.save(db_file=path)
+
+            self._populate_read_sources(keys=keys)
+
+            logger.info(
+                "Writing sources of %d files to %s.read", len(self.read_sources), path
+            )
             self.read_sources.save(db_file=f"{path}.read")
         finally:
             if self.save_event:
                 self.save_event.clear()
 
+    def close(self) -> None:
+        """Close the manifest and its underlying database files."""
+        if hasattr(self, "md5_data") and hasattr(self.md5_data, "close"):
+            self.md5_data.close()
+        if hasattr(self, "read_sources") and hasattr(self.read_sources, "close"):
+            self.read_sources.close()
+
     def load(self, path: Optional[str] = None) -> None:
         """Load manifest from disk at specified path."""
         path = path or self.path
+        self.close()
         self.md5_data, self.read_sources = self._load_manifest(path=path)
 
     def items(self) -> Any:
@@ -112,14 +128,8 @@ class Manifest:
         """Deprecated: Use items() instead"""
         return self.md5_data.items()
 
-    def _write_manifest(
-        self, path: Optional[str] = None, keys: Optional[List[str]] = None
-    ) -> None:
-        path = path or self.path
-        logger.info("Writing manifest of %d hashes to %s", len(self.md5_data), path)
-        logger.info(
-            "Writing sources of %d files to %s.read", len(self.read_sources), path
-        )
+    def _populate_read_sources(self, keys: Optional[List[str]] = None) -> None:
+        """Populate the read_sources list from the md5_data."""
         if not keys:
             dict_iter = self.md5_data.items()
         else:
@@ -139,39 +149,70 @@ class Manifest:
         logger.info("Reading manifest from %r...", path)
         # Would be nice to just get the fd, but backends require a path
         md5_data = DefaultCacheDict(list, db_file=path, max_size=self.cache_size)
+        md5_data.load()
         logger.info("... read %d hashes", len(md5_data))
         read_sources = CacheDict(db_file=f"{path}.read", max_size=self.cache_size)
+        read_sources.load()
         logger.info("... in %d files", len(read_sources))
         return md5_data, read_sources
 
     @staticmethod
-    def _combine_manifests(manifests: List[Tuple[Any, Any]]) -> Tuple[Any, Any]:
+    def _combine_manifests(
+        manifests: List[Tuple[Any, Any]], temp_directory: Optional[str]
+    ) -> Tuple[Any, Any]:
         """Combine multiple manifest data structures into one.
-
         Args:
             manifests: List of (md5_data, read_sources) tuples to combine
-
+            temp_directory: The directory to use for temporary files.
         Returns:
             Tuple of (combined_md5_data, combined_read_sources)
         """
-        base, read = manifests[0]
-        for m, r in manifests[1:]:
+        assert temp_directory is not None
+        combined_md5_path = os.path.join(
+            temp_directory, f"combined_md5_{random.getrandbits(16)}.dict"
+        )
+        combined_read_path = f"{combined_md5_path}.read"
+        combined_md5 = DefaultCacheDict(list, db_file=combined_md5_path)
+        combined_read = CacheDict(db_file=combined_read_path)
+
+        for m, r in manifests:
             for key, files in m.items():
                 for info in files:
-                    if info not in base[key]:
-                        base[key].append(info)
+                    current_files = combined_md5[key]
+                    if info not in current_files:
+                        current_files.append(info)
+                        combined_md5[key] = current_files
             for key in r:
-                read[key] = None
-        return base, read
+                combined_read[key] = None
+        return combined_md5, combined_read
 
     def _load_manifest_list(self, manifests: List[str]) -> None:
         if not isinstance(manifests, list):
             raise TypeError("manifests must be a list")
-        read_manifest_data, read_sources = self._load_manifest(manifests[0])
-        loaded = [(read_manifest_data, read_sources)]
-        for src in manifests[1:]:
-            loaded.append(self._load_manifest(src))
-        self.md5_data, self.read_sources = Manifest._combine_manifests(loaded)
+
+        # If there's only one manifest, load it directly without combining.
+        if len(manifests) == 1:
+            self.load(manifests[0])
+            return
+
+        loaded = []
+        try:
+            for src in manifests:
+                loaded.append(self._load_manifest(src))
+
+            # Close existing manifests before replacing them
+            self.close()
+
+            self.md5_data, self.read_sources = self._combine_manifests(
+                loaded, self.temp_directory
+            )
+        finally:
+            # Ensure temporary manifest dicts used for loading are closed
+            for md5_data, read_sources in loaded:
+                if hasattr(md5_data, "close"):
+                    md5_data.close()
+                if hasattr(read_sources, "close"):
+                    read_sources.close()
 
     def convert_manifest_paths(
         self, paths_from: str, paths_to: str, temp_directory: Optional[str] = None

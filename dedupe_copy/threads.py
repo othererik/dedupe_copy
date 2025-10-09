@@ -223,13 +223,14 @@ class ResultProcessor(threading.Thread):
                     collision = md5 in self.md5_data
                     if self.empty and md5 == "d41d8cd98f00b204e9800998ecf8427e":
                         collision = False
-                    # IMPORTANT: In-place modification of the list won't trigger
-                    # the cache's __setitem__. We must re-assign a new object.
+                    # In-place modification of the list won't trigger the cache's
+                    # __setitem__ unless we re-assign it.
                     current_files = self.md5_data[md5]
                     current_files.append([src, size, mtime])
-                    self.md5_data[md5] = current_files[:]  # Create a copy
+                    self.md5_data[md5] = current_files
 
                     if collision:
+                        # Make sure the collisions dict gets the full list
                         self.collisions[md5] = self.md5_data[md5]
                     processed += 1
                 except (KeyError, ValueError, TypeError) as err:
