@@ -506,8 +506,10 @@ def run_dupe_copy(
         for item in no_copy:
             compare[item] = None
 
-    if no_walk and not manifest:
-        raise ValueError("If --no-walk is specified, a manifest must be supplied.")
+    if no_walk:
+        if not manifests_in_paths:
+            raise ValueError("If --no-walk is specified, a manifest must be supplied.")
+
     if read_from_path and not isinstance(read_from_path, list):
         read_from_path = [read_from_path]
     path_rules_func: Optional[Callable[..., Tuple[str, str]]] = None
@@ -600,10 +602,24 @@ def run_dupe_copy(
             (HIGH_PRIORITY, "message", "Saving complete manifest from search")
         )
         all_data.save(path=manifest_out_path)
+
     if delete_duplicates:
         if copy_to_path:
             logger.error("Cannot use --delete and --copy-path at the same time.")
         else:
+            # If we are deleting, we should save the manifest so we don't
+            # have to re-scan next time.
+            if not manifest_out_path and manifests_in_paths:
+                if isinstance(manifests_in_paths, list):
+                    manifest_out_path = manifests_in_paths[0]
+                else:
+                    manifest_out_path = manifests_in_paths
+            if manifest_out_path:
+                progress_queue.put(
+                    (HIGH_PRIORITY, "message", "Saving complete manifest from search")
+                )
+                all_data.save(path=manifest_out_path)
+
             delete_job = DeleteJob(
                 delete_threads=copy_threads,
                 dry_run=dry_run,
@@ -648,6 +664,8 @@ def run_dupe_copy(
     all_stop.set()
     while progress_thread.is_alive():
         progress_thread.join(5)
+    manifest.close()
+    compare.close()
     del collisions
     try:
         time.sleep(1)
