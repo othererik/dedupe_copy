@@ -1,3 +1,8 @@
+"""Test covering a race condition in the copy operation found in 1.1.1 release.
+Will expand this test module later to cover other similar edges around the end
+of operations.
+"""
+
 import os
 import unittest
 from functools import partial
@@ -20,6 +25,7 @@ do_copy = partial(
     no_walk=False,
     preserve_stat=False,
 )
+
 
 class TestCopyRaceCondition(unittest.TestCase):
     """Test for race condition in file copying."""
@@ -71,8 +77,9 @@ class TestCopyRaceCondition(unittest.TestCase):
                     len(copied_files),
                     file_count,
                     f"Subtest {i}: Expected {file_count} files, but found {len(copied_files)}. "
-                    "The copy operation likely terminated prematurely."
+                    "The copy operation likely terminated prematurely.",
                 )
+
 
 if __name__ == "__main__":
     unittest.main()
