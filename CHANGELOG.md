@@ -1,5 +1,17 @@
 # Changelog
 
+
+## [1.1.1] - 2025-10-09
+
+### Documentation
+- Added Architecture section to README explaining the multi-threaded pipeline design
+- Documented thread stages (Walk, Read, Result Processing, Copy/Delete, Progress)
+- Added data structure explanations (Manifest, Disk Cache Dictionary)
+
+### Notes
+This is a documentation and code quality release with no functional changes.
+
+
 ## [1.1.0] - 2025-10-09
 - Add new optional hashing algorithm choice
 - Add delete and dry-run options
@@ -9,7 +21,7 @@
 
 
 ## [1.0.1] - 2025-10-07
-- Drop support for anything eariler than 3.11
+- Drop support for anything earlier than 3.11
 - Lots of internal cleanup, CI related stuff
 
 

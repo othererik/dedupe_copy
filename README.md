@@ -8,6 +8,7 @@ A multi-threaded command-line tool for finding duplicate files and copying/restr
 ## Table of Contents
 
 - [Overview](#overview)
+- [Architecture](#architecture)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Key Concepts](#key-concepts)
@@ -42,6 +43,137 @@ DedupeCopy is designed for consolidating and restructuring sprawling file system
 - Real-time progress with processing rates
 
 **Note:** This is *not* a replacement for rsync or Robocopy for incremental synchronization. Those are good tools that might work for you, so do try them.
+
+## Architecture
+
+DedupeCopy uses a multi-threaded pipeline architecture to maximize performance when processing large file systems. Understanding this architecture helps explain performance characteristics and tuning options.
+
+### High-Level Design
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         MAIN THREAD                              │
+│  • Orchestrates the entire operation                             │
+│  • Manages thread lifecycle and coordination                     │
+│  • Handles manifest loading/saving                               │
+└─────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     THREAD POOLS (Queues)                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  ┌────────────────┐    ┌────────────────┐    ┌───────────────┐ │
+│  │  Walk Threads  │───▶│  Read Threads  │───▶│ Copy/Delete   │ │
+│  │  (4 default)   │    │  (8 default)   │    │   Threads     │ │
+│  │                │    │                │    │  (8 default)  │ │
+│  └────────────────┘    └────────────────┘    └───────────────┘ │
+│         │                      │                      │          │
+│         ▼                      ▼                      ▼          │
+│   Walk Queue            Work Queue            Copy/Delete       │
+│   (directories)         (files to hash)         Queue           │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      PROGRESS THREAD                             │
+│  • Collects status updates from all worker threads               │
+│  • Displays progress, rates, and statistics                      │
+│  • Logs errors and warnings                                      │
+└─────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    RESULT PROCESSOR                              │
+│  • Processes file hashes from read threads                       │
+│  • Detects duplicate files                                       │
+│  • Updates manifest and collision dictionaries                   │
+│  • Performs incremental saves every 50,000 files                 │
+└─────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    PERSISTENT STORAGE                            │
+│  • Manifest: Maps hash → list of files with that hash           │
+│  • Collision DB: Tracks duplicate files                          │
+│  • SQLite-backed with disk caching (LRU-like eviction)          │
+│  • Auto-saves every 50,000 files for crash recovery             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Pipeline Stages
+
+#### 1. **Walk Stage** (WalkThread)
+- **Purpose**: Discover files and directories in the source paths
+- **Thread Count**: 4 by default (configurable with `--walk-threads`)
+- **Output**: Adds directories to `walk_queue` and files to `work_queue`
+- **Filtering**: Applies extension filters and ignore patterns
+
+#### 2. **Read Stage** (ReadThread)
+- **Purpose**: Hash file contents to detect duplicates
+- **Thread Count**: 8 by default (configurable with `--read-threads`)
+- **Input**: Files from `work_queue`
+- **Output**: Tuple of (hash, size, mtime, filepath) to `result_queue`
+- **Algorithm**: MD5 or SHA256 (configurable with `--hash-algo`)
+
+#### 3. **Result Processing** (ResultProcessor)
+- **Purpose**: Aggregate hashes and detect collisions
+- **Thread Count**: 1 (single-threaded for data consistency)
+- **Input**: Hash results from `result_queue`
+- **Output**: Updates `manifest` and `collisions` dictionaries
+- **Auto-save**: Incremental saves every 50,000 processed files
+
+#### 4. **Copy/Delete Stage** (CopyThread/DeleteThread)
+- **Purpose**: Perform file operations based on duplicate analysis
+- **Thread Count**: 8 by default (configurable with `--copy-threads`)
+- **Input**: Files from `copy_queue` or `delete_queue`
+- **Operations**:
+  - Copy unique files to destination (with optional path rules)
+  - Delete duplicate files (keeping first occurrence)
+
+#### 5. **Progress Monitoring** (ProgressThread)
+- **Purpose**: Centralized logging and status updates
+- **Thread Count**: 1 (collects events from all other threads)
+- **Features**:
+  - Real-time progress with processing rates
+  - Queue size monitoring (to detect bottlenecks)
+  - Error aggregation and reporting
+  - Final summary statistics
+
+### Data Structures
+
+#### Manifest
+- **Storage**: Disk-backed dictionary (SQLite + cache layer)
+- **Format**: `hash → [(filepath, size, mtime), ...]`
+- **Cache**: In-memory LRU cache (10,000 items default)
+- **Persistence**: Auto-saved during operation and on completion
+
+#### Disk Cache Dictionary
+- **Purpose**: Handle datasets larger than available RAM
+- **Backend**: SQLite with Write-Ahead Logging (WAL)
+- **Optimization**: Batched commits (100 items) for performance
+- **Eviction**: LRU or random eviction when cache is full
+
+### Performance Characteristics
+
+**Queue-Based Throttling**: When queues exceed 100,000 items, the system introduces deliberate delays to prevent memory exhaustion.
+
+**Bottleneck Detection**: Progress thread monitors queue sizes:
+- **Walk queue growing**: Too many directories, consider reducing `--walk-threads`
+- **Work queue growing**: Hashing is slower than discovery, increase `--read-threads`
+- **Copy queue growing**: I/O is slower than hashing, increase `--copy-threads`
+
+**I/O Patterns**:
+- **Walk threads**: Mostly metadata operations (directory listings)
+- **Read threads**: Sequential reads of entire files
+- **Copy threads**: Large sequential writes
+
+### Thread Safety
+
+- **Queues**: Python's `queue.Queue` provides thread-safe operations
+- **Manifest**: Uses database-level locking (SQLite RLock)
+- **Save operations**: Coordinated via `save_event` to pause workers during saves
 
 ## Installation
 

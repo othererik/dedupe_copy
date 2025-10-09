@@ -187,7 +187,7 @@ class CopyThread(threading.Thread):
 class ResultProcessor(threading.Thread):
     """Takes results of work queue and builds result data structure"""
 
-    INCREMENTIAL_SAVE_SIZE = 50000
+    INCREMENTAL_SAVE_SIZE = 50000
 
     def __init__(
         self,
@@ -248,7 +248,7 @@ class ResultProcessor(threading.Thread):
             except queue.Empty:
                 pass
 
-            if processed > self.INCREMENTIAL_SAVE_SIZE:
+            if processed > self.INCREMENTAL_SAVE_SIZE:
                 if self.progress_queue:
                     self.progress_queue.put(
                         (
@@ -444,7 +444,7 @@ class ProgressThread(threading.Thread):
         logger.info(message)
 
     def run(self) -> None:
-        """Run loop that slurps items off the progress queue and dispatches the correct handler."""
+        """Run loop that retrieves items from the progress queue and dispatches to the correct handler."""
         last_update = time.time()
         while not self.stop_event.is_set() or not self.progress_queue.empty():
             try:
