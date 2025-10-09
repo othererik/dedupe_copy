@@ -334,6 +334,7 @@ def copy_data(
         copied,
         copy_job=copy_job,
     )
+    copy_queue.join()
     stop_event.set()
     for c in workers:
         c.join()

@@ -1,6 +1,9 @@
 # Changelog
 
 
+## [1.1.2] - TBD
+- Bugfixes (race condition on copy)
+
 ## [1.1.1] - 2025-10-09
 
 ### Documentation
