@@ -188,6 +188,7 @@ def make_file_tree(
     extensions: Optional[List[str]] = None,
     file_size: int = 1000,
     prefix: Optional[str] = None,
+    use_unique_files: bool = True,
 ) -> List[List[Union[str, float]]]:
     """Create a tree of files with various extensions off of root,
     returns a list if lists such as [[item, hash, mtime], [item, hash, mtime]]
@@ -204,7 +205,8 @@ def make_file_tree(
             prefix=prefix,
         )
         src = os.path.join(root, fn)
-        check, mtime = write_file(src, 0, size=file_size, initial=str(i))
+        initial_content = str(i) if use_unique_files else "same_content"
+        check, mtime = write_file(src, 0, size=file_size, initial=initial_content)
         file_list.append([src, check, mtime])
     return file_list
 
