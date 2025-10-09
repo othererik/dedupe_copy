@@ -444,7 +444,8 @@ class ProgressThread(threading.Thread):
         logger.info(message)
 
     def run(self) -> None:
-        """Run loop that retrieves items from the progress queue and dispatches to the correct handler."""
+        """Run loop that retrieves items from the progress queue and
+        dispatches to the correct handler."""
         last_update = time.time()
         while not self.stop_event.is_set() or not self.progress_queue.empty():
             try:
