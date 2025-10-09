@@ -133,7 +133,6 @@ class TestDelete(unittest.TestCase):
             final_file_count, 6, "Should have 6 files after selective deletion"
         )
 
-
     def test_delete_is_deterministic(self):
         """Test that file deletion is deterministic, preserving the first path alphabetically."""
         # Create directories in a non-alphabetical order to ensure test validity
@@ -149,7 +148,7 @@ class TestDelete(unittest.TestCase):
 
         # Create identical files
         for path in file_paths:
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 f.write("identical content")
 
         initial_file_count = len(list(utils.walk_tree(self.temp_dir)))

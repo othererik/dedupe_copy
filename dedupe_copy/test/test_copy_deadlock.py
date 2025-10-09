@@ -1,3 +1,5 @@
+"""Test for deadlock in copy operations"""
+
 import os
 import queue
 import shutil
@@ -66,7 +68,9 @@ class TestCopyDeadlock(unittest.TestCase):
         stat_txt = os.stat(source_file_txt)
         stat_jpg = os.stat(source_file_jpg)
         work_queue.put((source_file_txt, "2024_01", int(stat_txt.st_size)))
-        work_queue.put((source_file_jpg, "2024_01", int(stat_jpg.st_size)))  # This item should be skipped
+        work_queue.put(
+            (source_file_jpg, "2024_01", int(stat_jpg.st_size))
+        )  # This item should be skipped
 
         # This function will block if the deadlock occurs
         def wait_for_queue_to_finish():
@@ -79,7 +83,9 @@ class TestCopyDeadlock(unittest.TestCase):
         # If the thread deadlocks, this join will time out.
         join_thread.join(timeout=5)
 
-        self.assertFalse(join_thread.is_alive(), "CopyThread deadlocked on filtered item!")
+        self.assertFalse(
+            join_thread.is_alive(), "CopyThread deadlocked on filtered item!"
+        )
 
         # Clean up the copy thread
         if join_thread.is_alive():
@@ -88,7 +94,6 @@ class TestCopyDeadlock(unittest.TestCase):
             pass
         else:
             copy_thread.join()
-
 
         # Verify that the correct file was copied
         dest_file_txt = os.path.join(self.target_dir, "txt", "2024_01", "source.txt")
