@@ -135,7 +135,12 @@ def clean_extensions(extensions: Optional[List[str]]) -> List[str]:
     if extensions is not None:
         for ext in extensions:
             ext = ext.strip().lower()
-            if ext.startswith(".") and len(ext) > 1:
-                ext = ext[1:]
-            clean.append(f"*.{ext}")
+            if ext == ".":
+                clean.append("*.")
+            elif ext.startswith("*"):
+                clean.append(ext)
+            elif ext.startswith("."):
+                clean.append(f"*{ext}")
+            else:
+                clean.append(f"*.{ext}")
     return clean
