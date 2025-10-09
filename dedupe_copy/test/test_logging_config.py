@@ -1,17 +1,29 @@
+"""Unit tests for logging configuration in dedupe_copy."""
+
 import unittest
 import logging
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-from dedupe_copy.logging_config import setup_logging, ColoredFormatter, get_logger, HAS_COLORAMA
+from dedupe_copy.logging_config import (
+    setup_logging,
+    ColoredFormatter,
+    get_logger,
+    HAS_COLORAMA,
+)
+
 
 class TestLoggingConfig(unittest.TestCase):
+    """Tests for logging configuration in dedupe_copy.logging_config"""
+
     def setUp(self):
         # Reset logging configuration before each test
         logging.getLogger("dedupe_copy").handlers = []
 
     @patch("dedupe_copy.logging_config.sys.stdout.isatty", return_value=True)
     @patch("dedupe_copy.logging_config.colorama_init")
-    def test_setup_logging_with_colors(self, mock_colorama_init, mock_isatty):
+    def test_setup_logging_with_colors(
+        self, mock_colorama_init, mock_isatty
+    ):  # pylint: disable=W0613
         """Test that setup_logging uses ColoredFormatter when colors are enabled."""
         if not HAS_COLORAMA:
             self.skipTest("colorama is not installed")
@@ -24,7 +36,7 @@ class TestLoggingConfig(unittest.TestCase):
         mock_colorama_init.assert_called_once()
 
     @patch("dedupe_copy.logging_config.sys.stdout.isatty", return_value=False)
-    def test_setup_logging_without_tty(self, mock_isatty):
+    def test_setup_logging_without_tty(self, mock_isatty):  # pylint: disable=W0613
         """Test that setup_logging does not use ColoredFormatter when not in a TTY."""
         setup_logging(verbosity="normal", use_colors=True)
         logger = logging.getLogger("dedupe_copy")
@@ -62,7 +74,10 @@ class TestLoggingConfig(unittest.TestCase):
         logger = get_logger(logger_name)
         self.assertEqual(logger.name, logger_name)
 
+
 class TestColoredFormatter(unittest.TestCase):
+    """Tests for the ColoredFormatter class."""
+
     def setUp(self):
         self.record = logging.LogRecord(
             name="test",
@@ -75,7 +90,9 @@ class TestColoredFormatter(unittest.TestCase):
         )
 
     @patch("dedupe_copy.logging_config.sys.stdout.isatty", return_value=True)
-    def test_colored_formatter_applies_colors(self, mock_isatty):
+    def test_colored_formatter_applies_colors(
+        self, mock_isatty
+    ):  # pylint: disable=W0613
         """Test that ColoredFormatter applies colors to the log level name."""
         if not HAS_COLORAMA:
             self.skipTest("colorama is not installed")
@@ -83,11 +100,11 @@ class TestColoredFormatter(unittest.TestCase):
         formatter = ColoredFormatter("%(levelname)s: %(message)s")
 
         level_colors = {
-            logging.DEBUG: "\x1b[36m",    # Fore.CYAN
-            logging.INFO: "",             # No color for INFO
+            logging.DEBUG: "\x1b[36m",  # Fore.CYAN
+            logging.INFO: "",  # No color for INFO
             logging.WARNING: "\x1b[33m",  # Fore.YELLOW
-            logging.ERROR: "\x1b[31m",    # Fore.RED
-            logging.CRITICAL: "\x1b[31m\x1b[1m", # Fore.RED + Style.BRIGHT
+            logging.ERROR: "\x1b[31m",  # Fore.RED
+            logging.CRITICAL: "\x1b[31m\x1b[1m",  # Fore.RED + Style.BRIGHT
         }
 
         for level, color_code in level_colors.items():
@@ -104,13 +121,14 @@ class TestColoredFormatter(unittest.TestCase):
                     self.assertIn("\x1b[0m", formatted_message)
 
     @patch("dedupe_copy.logging_config.sys.stdout.isatty", return_value=False)
-    def test_colored_formatter_no_tty(self, mock_isatty):
+    def test_colored_formatter_no_tty(self, mock_isatty):  # pylint: disable=W0613
         """Test that ColoredFormatter does not add color when not in a TTY."""
         formatter = ColoredFormatter("%(levelname)s: %(message)s")
         self.record.levelno = logging.WARNING
         self.record.levelname = "WARNING"
         formatted_message = formatter.format(self.record)
         self.assertEqual(formatted_message, "WARNING: Test message")
+
 
 if __name__ == "__main__":
     unittest.main()

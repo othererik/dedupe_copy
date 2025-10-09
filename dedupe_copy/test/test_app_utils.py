@@ -1,9 +1,11 @@
+"""Utility function tests for dedupe_copy."""
+
 import unittest
-import sys
 import importlib
 from unittest.mock import patch
 from dedupe_copy.utils import format_error_message, clean_extensions
 from dedupe_copy import utils as app_utils
+
 
 class TestAppUtils(unittest.TestCase):
     """Tests for functions in dedupe_copy.utils"""
@@ -12,13 +14,14 @@ class TestAppUtils(unittest.TestCase):
         """Test that a warning is logged if xxhash is not installed."""
         # Mock the import of xxhash to simulate it not being installed
         original_import = __import__
+
         def import_mock(name, *args, **kwargs):
-            if name == 'xxhash':
+            if name == "xxhash":
                 raise ImportError
             return original_import(name, *args, **kwargs)
 
-        with patch('builtins.__import__', side_effect=import_mock):
-            with self.assertLogs('dedupe_copy.utils', level='WARNING') as cm:
+        with patch("builtins.__import__", side_effect=import_mock):
+            with self.assertLogs("dedupe_copy.utils", level="WARNING") as cm:
                 importlib.reload(app_utils)
                 self.assertEqual(len(cm.output), 1)
                 self.assertIn("xxhash module not found", cm.output[0])
@@ -95,6 +98,7 @@ class TestAppUtils(unittest.TestCase):
         ext_list4 = [".", "txt"]
         cleaned4 = clean_extensions(ext_list4)
         self.assertEqual(cleaned4, ["*.", "*.txt"])
+
 
 if __name__ == "__main__":
     unittest.main()
