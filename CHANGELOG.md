@@ -2,7 +2,9 @@
 
 
 ## [1.1.2] - TBD
-- Bugfixes (race condition on copy)
+- Bugfix: race condition on copy
+- Bugfix: close manifests on combine to prevent resource leak
+
 
 ## [1.1.1] - 2025-10-09
 

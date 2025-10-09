@@ -184,6 +184,8 @@ class Manifest:
                         combined_md5[key] = current_files
             for key in r:
                 combined_read[key] = None
+            m.close()
+            r.close()
         return combined_md5, combined_read
 
     def _load_manifest_list(self, manifests: List[str]) -> None:
