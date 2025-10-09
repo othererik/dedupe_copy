@@ -75,6 +75,7 @@ class SqliteBackend:
         return self._conn  # type: ignore
 
     def _get_key_id(self, key: Any) -> int:
+        """Get the database ID for a given key, or raise KeyError if not found."""
         with self._lock:
             cursor = self.conn.execute(
                 f"select key,id from {self.table} where hash=?;", (hash(key),)
@@ -85,6 +86,7 @@ class SqliteBackend:
             raise KeyError(key)
 
     def __getitem__(self, key: Any) -> Any:
+        """Get item from the dictionary."""
         with self._lock:
             cursor = self.conn.execute(
                 f"select key,value from {self.table} where hash=?;", (hash(key),)
@@ -95,6 +97,7 @@ class SqliteBackend:
             raise KeyError(key)
 
     def __setitem__(self, key: Any, value: Any) -> None:
+        """Set item in the dictionary."""
         with self._lock:
             self._insert(key, value)
             self._commit_needed = True
@@ -103,6 +106,7 @@ class SqliteBackend:
                 self.commit()
 
     def __delitem__(self, key: Any) -> None:
+        """Delete item from the dictionary."""
         with self._lock:
             db_id = self._get_key_id(key)
             self.conn.execute(f"delete from {self.table} where id=?;", (db_id,))
@@ -112,6 +116,7 @@ class SqliteBackend:
                 self.commit()
 
     def __iter__(self) -> Iterator[Any]:
+        """Return an iterator over the keys of the dictionary."""
         with self._lock:
             # Fetch all keys at once to avoid lock contention during iteration
             keys = [
@@ -121,12 +126,14 @@ class SqliteBackend:
         return iter(keys)
 
     def __len__(self) -> int:
+        """Return the number of items in the dictionary."""
         with self._lock:
-            return self.conn.execute(
-                f"select count(*) from {self.table};"
-            ).fetchone()[0]
+            return self.conn.execute(f"select count(*) from {self.table};").fetchone()[
+                0
+            ]
 
     def __contains__(self, key: Any) -> bool:
+        """Check if key exists in the dictionary."""
         try:
             self._get_key_id(key)
             return True
@@ -135,6 +142,7 @@ class SqliteBackend:
 
     @staticmethod
     def _dump(value: Any, version: int = -1) -> bytes:
+        """Serialize value for storage in the database."""
         # Fast path for primitive types - avoid pickle overhead
         if isinstance(value, str):
             return sqlite3.Binary(b"S" + value.encode("utf-8"))
@@ -152,6 +160,7 @@ class SqliteBackend:
     # pylint: disable=too-many-return-statements
     @staticmethod
     def _load(value: bytes) -> Any:
+        """Inverse of _dump."""
         value_bytes = bytes(value)
         if not value_bytes:
             return None
@@ -187,15 +196,20 @@ class SqliteBackend:
             )
 
     def pop(self, key: Any) -> Any:
+        """Remove specified key and return the corresponding value.
+        Raises KeyError if key is not found.
+        """
         with self._lock:
             value = self[key]
             del self[key]
             return value
 
     def keys(self) -> Iterator[Any]:
+        """Return an iterator over the keys of the dictionary."""
         return iter(self)
 
     def values(self) -> List[Any]:
+        """Return a list of all values in the dictionary."""
         with self._lock:
             return [
                 self._load(x[0])
@@ -203,6 +217,7 @@ class SqliteBackend:
             ]
 
     def items(self) -> List[Tuple[Any, Any]]:
+        """Return a list of all key-value pairs in the dictionary."""
         with self._lock:
             return [
                 (self._load(items[0]), self._load(items[1]))
@@ -210,6 +225,7 @@ class SqliteBackend:
             ]
 
     def commit(self, force: bool = False) -> None:
+        """Commit any pending transactions to the database."""
         with self._lock:
             if self._commit_needed or force:
                 self.conn.commit()
@@ -217,9 +233,11 @@ class SqliteBackend:
             self._write_count = 0
 
     def db_file_path(self) -> str:
+        """Return the db file path if there is one"""
         return self._db_file
 
     def close(self) -> None:
+        """Close the database connection."""
         with self._lock:
             if self._conn:
                 try:
@@ -230,12 +248,14 @@ class SqliteBackend:
             self._conn = None
 
     def __del__(self) -> None:
+        """Destructor to ensure the database connection is closed."""
         try:
             self.close()
-        except Exception:  # pylint: disable=broad-except-clause
+        except Exception:  # pylint: disable=W0718
             pass
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
+        """Save to a new database file, optionally removing the old one."""
         with self._lock:
             self.commit(force=True)
             current_db_file = self._db_file
@@ -251,6 +271,7 @@ class SqliteBackend:
                     self._init_conn()
 
     def load(self, db_file: Optional[str] = None) -> None:
+        """Load from a different database file."""
         with self._lock:
             self.commit(force=True)
             self.close()
@@ -406,6 +427,7 @@ class CacheDict(collections.abc.MutableMapping):
         self._db[key] = value
 
     def get(self, key: Any, default: Any = None) -> Any:
+        """Get item or default if not found"""
         if key not in self:
             return default
         return self[key]

@@ -521,6 +521,7 @@ class DeleteThread(threading.Thread):
         self.daemon = True
 
     def run(self) -> None:
+        # pylint: disable=R1702
         while not self.stop_event.is_set() or not self.work.empty():
             try:
                 src = self.work.get(True, 0.1)
