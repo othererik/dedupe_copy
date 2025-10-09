@@ -667,9 +667,8 @@ def run_dupe_copy(
         progress_thread.join(5)
     manifest.close()
     compare.close()
-    del collisions
+    collisions.close()
     try:
-        time.sleep(1)
         shutil.rmtree(temp_directory)
     except OSError as err:
         logger.warning(
