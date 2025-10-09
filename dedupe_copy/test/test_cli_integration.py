@@ -39,7 +39,7 @@ class TestCliIntegration(unittest.TestCase):
 
     def test_no_walk_delete_dry_run_with_subprocess(self):
         """
-        Tests the failing --no-walk scenario by running commands in separate
+        Tests --no-walk scenario by running commands in separate
         subprocesses to ensure manifest file handles are closed and reopened.
         """
         # 1. Generate manifest in a separate process
@@ -108,7 +108,7 @@ class TestCliIntegration(unittest.TestCase):
 
     def test_no_walk_delete_with_subprocess(self):
         """
-        Tests the failing --no-walk scenario by running commands in separate
+        Tests  --no-walk scenario by running commands in separate
         subprocesses to ensure manifest file handles are closed and reopened.
         """
         # 1. Generate manifest in a separate process
@@ -172,3 +172,46 @@ class TestCliIntegration(unittest.TestCase):
         self.assertIn("e.txt", remaining_files)
         self.assertNotIn("c.txt", remaining_files)
         self.assertNotIn("d.txt", remaining_files)
+
+    def test_walk_delete_with_subprocess(self):
+        """
+        Test deleting while walking
+        """
+        run_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "dedupe_copy",
+                "--delete",
+                "-p",
+                self.files_dir,
+                "--min-delete-size",
+                "4",  # c.txt and d.txt are smaller than this
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            run_result.returncode, 0, f"Walk and delete run failed: {run_result.stderr}"
+        )
+        output = run_result.stdout
+
+        self.assertIn(
+            "Starting deletion of 1 files.",
+            output,
+            "Incorrect number of files reported for deletion.",
+        )
+        self.assertIn(
+            "Skipping deletion of files with size 3 bytes",
+            output,
+            "Size threshold message not found.",
+        )
+
+        # Confirm correct deletions occurred
+        remaining_files = os.listdir(self.files_dir)
+        self.assertIn("c.txt", remaining_files)
+        self.assertIn("d.txt", remaining_files)
+        self.assertIn("e.txt", remaining_files)
+        # one of the dupes is kept
+        self.assertEqual(len(remaining_files), 4)

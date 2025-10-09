@@ -228,12 +228,13 @@ def find_duplicates(
                 )
             )
         time.sleep(5)
+    work_queue.join()
     work_stop_event.set()
     for worker in work_threads:
         worker.join()
     result_stop_event.set()
     while result_processor.is_alive():
-        result_processor.join(5)
+        result_processor.join()
     if collisions:
         logger.info("Hash Collisions:")
         for md5, info in collisions.items():
@@ -604,6 +605,8 @@ def run_dupe_copy(
             save_event=save_event,
             walk_queue=walk_queue,
         )
+    work_queue.join()
+    result_queue.join()
     total_size = _extension_report(all_data)
     logger.info("Total Size of accepted: %s bytes", total_size)
     if csv_report_path:
