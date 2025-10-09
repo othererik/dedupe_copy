@@ -15,9 +15,34 @@ class TestNoWalk(unittest.TestCase):
     """Test --no-walk functionality"""
 
     def setUp(self):
+        """Set up a test environment with pre-existing files and a manifest."""
         self.root = tempfile.mkdtemp()
         self.files_dir = os.path.join(self.root, "files")
         os.makedirs(self.files_dir)
+        self.manifest_path = os.path.join(self.root, "manifest.db")
+
+        # Create a common set of files for all tests
+        self._create_file("a.txt", "content1")  # 8 bytes, duplicate
+        self._create_file("b.txt", "content1")  # 8 bytes, duplicate
+        self._create_file("c.txt", "sho")  # 3 bytes, duplicate
+        self._create_file("d.txt", "sho")  # 3 bytes, duplicate
+        self._create_file("e.txt", "unique")  # 6 bytes, unique
+
+        # Generate the manifest once for all tests
+        with patch(
+            "sys.argv",
+            [
+                "dedupecopy",
+                "-p",
+                self.files_dir,
+                "-m",
+                self.manifest_path,
+            ],
+        ):
+            # Capture stdout to avoid polluting test output
+            f = io.StringIO()
+            with redirect_stdout(f):
+                run_cli()
 
     def tearDown(self):
         shutil.rmtree(self.root)
@@ -31,26 +56,6 @@ class TestNoWalk(unittest.TestCase):
 
     def test_no_walk_delete(self):
         """--no-walk with --delete deletes files"""
-        self._create_file("a.txt", "content1")
-        self._create_file("b.txt", "content1")
-        self._create_file("c.txt", "content2")
-
-        manifest_path = os.path.join(self.root, "manifest.db")
-
-        # 1. Generate manifest
-        with patch(
-            "sys.argv",
-            [
-                "dedupecopy",
-                "-p",
-                self.files_dir,
-                "-m",
-                manifest_path,
-            ],
-        ):
-            run_cli()
-
-        # 2. Run with --no-walk and --delete
         with patch(
             "sys.argv",
             [
@@ -58,46 +63,25 @@ class TestNoWalk(unittest.TestCase):
                 "--no-walk",
                 "--delete",
                 "-i",
-                manifest_path,
+                self.manifest_path,
                 "--min-delete-size",
-                "1",
+                "1",  # delete all duplicates
             ],
         ):
             run_cli()
 
-        # One of the duplicates should be deleted
         remaining_files = os.listdir(self.files_dir)
-        self.assertEqual(len(remaining_files), 2)
-        self.assertIn("c.txt", remaining_files)
-        # only one of a or b should exist
-        self.assertTrue(
-            ("a.txt" in remaining_files and "b.txt" not in remaining_files)
-            or ("b.txt" in remaining_files and "a.txt" not in remaining_files)
-        )
+        self.assertEqual(len(remaining_files), 3)
+        self.assertIn("e.txt", remaining_files)
+        # Check first group of duplicates
+        self.assertTrue(("a.txt" in remaining_files) ^ ("b.txt" in remaining_files))
+        # Check second group of duplicates
+        self.assertTrue(("c.txt" in remaining_files) ^ ("d.txt" in remaining_files))
 
     def test_no_walk_report(self):
         """--no-walk with -r generates a report"""
-        self._create_file("a.txt", "content1")
-        self._create_file("b.txt", "content1")
-        self._create_file("c.txt", "content2")
-
-        manifest_path = os.path.join(self.root, "manifest.db")
         report_path = os.path.join(self.root, "report.csv")
 
-        # 1. Generate manifest
-        with patch(
-            "sys.argv",
-            [
-                "dedupecopy",
-                "-p",
-                self.files_dir,
-                "-m",
-                manifest_path,
-            ],
-        ):
-            run_cli()
-
-        # 2. Run with --no-walk and -r
         with patch(
             "sys.argv",
             [
@@ -106,7 +90,7 @@ class TestNoWalk(unittest.TestCase):
                 "-r",
                 report_path,
                 "-i",
-                manifest_path,
+                self.manifest_path,
             ],
         ):
             run_cli()
@@ -116,32 +100,12 @@ class TestNoWalk(unittest.TestCase):
             content = f.read()
             self.assertIn("a.txt", content)
             self.assertIn("b.txt", content)
-            self.assertNotIn("c.txt", content)
+            self.assertIn("c.txt", content)
+            self.assertIn("d.txt", content)
+            self.assertNotIn("e.txt", content)
 
     def test_no_walk_delete_dry_run_min_size(self):
         """--no-walk --delete --dry-run with --min-delete-size"""
-        self._create_file("a.txt", "content1")  # 8 bytes
-        self._create_file("b.txt", "content1")  # 8 bytes
-        self._create_file("c.txt", "sho")  # 3 bytes
-        self._create_file("d.txt", "sho")  # 3 bytes
-        self._create_file("e.txt", "unique")  # 6 bytes
-
-        manifest_path = os.path.join(self.root, "manifest.db")
-
-        # 1. Generate manifest
-        with patch(
-            "sys.argv",
-            [
-                "dedupecopy",
-                "-p",
-                self.files_dir,
-                "-m",
-                manifest_path,
-            ],
-        ):
-            run_cli()
-
-        # 2. Run with --no-walk and --delete and --dry-run
         f = io.StringIO()
         with redirect_stdout(f):
             with patch(
@@ -152,7 +116,7 @@ class TestNoWalk(unittest.TestCase):
                     "--delete",
                     "--dry-run",
                     "-i",
-                    manifest_path,
+                    self.manifest_path,
                     "--min-delete-size",
                     "4",  # c.txt and d.txt are smaller than this
                 ],
@@ -161,13 +125,9 @@ class TestNoWalk(unittest.TestCase):
 
         output = f.getvalue()
 
-        # Check that it would delete one of the larger files
         self.assertIn("[DRY RUN] Would delete", output)
         self.assertIn("Starting deletion of 1 files.", output)
-
-        # Check that it skips the smaller files
         self.assertIn("Skipping deletion of files with size 3 bytes", output)
 
-        # Check that original files are still there
         remaining_files = os.listdir(self.files_dir)
         self.assertEqual(len(remaining_files), 5)

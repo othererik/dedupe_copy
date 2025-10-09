@@ -168,13 +168,18 @@ class CopyThread(threading.Thread):
         return os.path.join(self.config.target_path, ext, mtime, os.path.basename(src))
 
     def run(self) -> None:
-        while not self.work.empty() or not self.stop_event.is_set():
+        while not self.stop_event.is_set() or not self.work.empty():
             try:
                 src, mtime, size = self.work.get(True, 0.1)
-                if not match_extension(self.config.extensions, src):
-                    continue
-                dest = self._get_destination_path(src, mtime, size)
-                _copy_file(src, dest, self.config.preserve_stat, self.progress_queue)
+                try:
+                    if not match_extension(self.config.extensions, src):
+                        continue
+                    dest = self._get_destination_path(src, mtime, size)
+                    _copy_file(
+                        src, dest, self.config.preserve_stat, self.progress_queue
+                    )
+                finally:
+                    self.work.task_done()
             except queue.Empty:
                 pass
 
@@ -207,32 +212,41 @@ class ResultProcessor(threading.Thread):
 
     def run(self) -> None:
         processed = 0
-        while not self.results.empty() or not self.stop_event.is_set():
+        while not self.stop_event.is_set() or not self.results.empty():
             if self.save_event and self.save_event.is_set():
                 time.sleep(1)
                 continue
             src = ""
             try:
                 md5, size, mtime, src = self.results.get(True, 0.1)
-                collision = md5 in self.md5_data
-                if self.empty and md5 == "d41d8cd98f00b204e9800998ecf8427e":
-                    collision = False
-                self.md5_data[md5].append([src, size, mtime])
-                if collision:
-                    self.collisions[md5] = self.md5_data[md5]
-                processed += 1
+                try:
+                    collision = md5 in self.md5_data
+                    if self.empty and md5 == "d41d8cd98f00b204e9800998ecf8427e":
+                        collision = False
+                    # IMPORTANT: In-place modification of the list won't trigger
+                    # the cache's __setitem__. We must re-assign it.
+                    current_files = self.md5_data[md5]
+                    current_files.append([src, size, mtime])
+                    self.md5_data[md5] = current_files
+
+                    if collision:
+                        self.collisions[md5] = self.md5_data[md5]
+                    processed += 1
+                except (KeyError, ValueError, TypeError) as err:
+                    if self.progress_queue:
+                        self.progress_queue.put(
+                            (
+                                MEDIUM_PRIORITY,
+                                "error",
+                                src,
+                                f"ERROR in result processing: {err}",
+                            )
+                        )
+                finally:
+                    self.results.task_done()
             except queue.Empty:
                 pass
-            except (KeyError, ValueError, TypeError) as err:
-                if self.progress_queue:
-                    self.progress_queue.put(
-                        (
-                            MEDIUM_PRIORITY,
-                            "error",
-                            src,
-                            f"ERROR in result processing: {err}",
-                        )
-                    )
+
             if processed > self.INCREMENTIAL_SAVE_SIZE:
                 if self.progress_queue:
                     self.progress_queue.put(
@@ -251,7 +265,7 @@ class ResultProcessor(threading.Thread):
                             (
                                 MEDIUM_PRIORITY,
                                 "error",
-                                self.md5_data.path,
+                                self.md5_data.db_file_path(),
                                 f"ERROR Saving incremental: {e}",
                             )
                         )
@@ -295,6 +309,8 @@ class ReadThread(threading.Thread):
                 except (OSError, IOError) as e:
                     if self.progress_queue:
                         self.progress_queue.put((MEDIUM_PRIORITY, "error", src, e))
+                finally:
+                    self.work.task_done()
             except queue.Empty:
                 pass
             except (OSError, IOError, ValueError, TypeError) as err:
@@ -505,22 +521,32 @@ class DeleteThread(threading.Thread):
         self.daemon = True
 
     def run(self) -> None:
-        while not self.work.empty() or not self.stop_event.is_set():
+        # pylint: disable=R1702
+        while not self.stop_event.is_set() or not self.work.empty():
             try:
                 src = self.work.get(True, 0.1)
-                if self.dry_run:
-                    if self.progress_queue:
-                        self.progress_queue.put(
-                            (HIGH_PRIORITY, "message", f"[DRY RUN] Would delete {src}")
-                        )
-                else:
-                    try:
-                        os.remove(src)
+                try:
+                    if self.dry_run:
                         if self.progress_queue:
-                            self.progress_queue.put((LOW_PRIORITY, "deleted", src))
-                    except OSError as e:
-                        if self.progress_queue:
-                            self.progress_queue.put((MEDIUM_PRIORITY, "error", src, e))
+                            self.progress_queue.put(
+                                (
+                                    HIGH_PRIORITY,
+                                    "message",
+                                    f"[DRY RUN] Would delete {src}",
+                                )
+                            )
+                    else:
+                        try:
+                            os.remove(src)
+                            if self.progress_queue:
+                                self.progress_queue.put((LOW_PRIORITY, "deleted", src))
+                        except OSError as e:
+                            if self.progress_queue:
+                                self.progress_queue.put(
+                                    (MEDIUM_PRIORITY, "error", src, e)
+                                )
+                finally:
+                    self.work.task_done()
             except queue.Empty:
                 pass
 
@@ -553,22 +579,25 @@ class WalkThread(threading.Thread):
         self.daemon = True
 
     def run(self) -> None:
-        while not self.walk_queue.empty() or not self.stop_event.is_set():
+        while not self.stop_event.is_set() or not self.walk_queue.empty():
             if self.save_event and self.save_event.is_set():
                 time.sleep(1)
                 continue
             src = None
             try:
                 src = self.walk_queue.get(True, 0.5)
-                if not os.path.exists(src):
-                    time.sleep(3)
+                try:
                     if not os.path.exists(src):
-                        raise RuntimeError(
-                            f"Directory disappeared during walk: {src!r}"
-                        )
-                if not os.path.isdir(src):
-                    raise ValueError(f"Unexpected file in work queue: {src!r}")
-                distribute_work(src, self.distribute_config)
+                        time.sleep(3)
+                        if not os.path.exists(src):
+                            raise RuntimeError(
+                                f"Directory disappeared during walk: {src!r}"
+                            )
+                    if not os.path.isdir(src):
+                        raise ValueError(f"Unexpected file in work queue: {src!r}")
+                    distribute_work(src, self.distribute_config)
+                finally:
+                    self.walk_queue.task_done()
             except queue.Empty:
                 pass
             except (OSError, ValueError, RuntimeError) as e:
