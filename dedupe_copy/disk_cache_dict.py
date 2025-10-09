@@ -367,7 +367,9 @@ class CacheDict(collections.abc.MutableMapping):
                 self._key_order[key] = None
         return value
 
-    def items(self) -> Iterator[Tuple[Any, Any]]:
+    # the type here is not ItemsView - may look into aligning
+    # with parent class at a later date
+    def items(self) -> Iterator[Tuple[Any, Any]]:  # type: ignore[override]
         """Return an iterator over the items of the dictionary.
 
         This is a non-destructive iterator. It will not fault items
@@ -473,10 +475,6 @@ class CacheDict(collections.abc.MutableMapping):
         for key in keys:
             newcd[key] = default
         return newcd
-
-    def close(self) -> None:
-        """Close the underlying database connection."""
-        super().close()
 
     def db_file_path(self) -> str:
         """Return the db file path if there is one"""
