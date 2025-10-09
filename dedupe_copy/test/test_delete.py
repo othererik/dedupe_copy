@@ -133,6 +133,37 @@ class TestDelete(unittest.TestCase):
             final_file_count, 6, "Should have 6 files after selective deletion"
         )
 
+    def test_delete_is_deterministic(self):
+        """Test that file deletion is deterministic, preserving the first path alphabetically."""
+        # Create directories in a non-alphabetical order to ensure test validity
+        os.makedirs(os.path.join(self.temp_dir, "b"))
+        os.makedirs(os.path.join(self.temp_dir, "a"))
+        os.makedirs(os.path.join(self.temp_dir, "c"))
+
+        file_paths = [
+            os.path.join(self.temp_dir, "b", "dup.txt"),
+            os.path.join(self.temp_dir, "a", "dup.txt"),
+            os.path.join(self.temp_dir, "c", "dup.txt"),
+        ]
+
+        # Create identical files
+        for path in file_paths:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("identical content")
+
+        initial_file_count = len(list(utils.walk_tree(self.temp_dir)))
+        self.assertEqual(initial_file_count, 3, "Should have 3 files initially")
+
+        # Run with --delete
+        do_copy(read_from_path=self.temp_dir, delete_duplicates=True)
+
+        remaining_files = list(utils.walk_tree(self.temp_dir))
+        self.assertEqual(len(remaining_files), 1, "Should have 1 file after deletion")
+
+        # The file with the lexicographically first path should be preserved
+        preserved_file = os.path.join(self.temp_dir, "a", "dup.txt")
+        self.assertEqual(remaining_files[0], preserved_file)
+
 
 if __name__ == "__main__":
     unittest.main()

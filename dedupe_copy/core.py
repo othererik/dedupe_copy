@@ -217,24 +217,13 @@ def find_duplicates(
         walk_threads=walk_threads,
         save_event=save_event,
     )
-    while not work_queue.empty():
-        if progress_queue:
-            progress_queue.put(
-                (
-                    HIGH_PRIORITY,
-                    "message",
-                    f"Waiting for work queue to empty: {work_queue.qsize()} "
-                    f"items remain",
-                )
-            )
-        time.sleep(5)
     work_queue.join()
     work_stop_event.set()
     for worker in work_threads:
         worker.join()
+    result_queue.join()
     result_stop_event.set()
-    while result_processor.is_alive():
-        result_processor.join()
+    result_processor.join()
     if collisions:
         logger.info("Hash Collisions:")
         for md5, info in collisions.items():
@@ -368,11 +357,15 @@ def delete_files(
     files_to_delete = []
 
     for _hash, file_list in duplicates.items():
+        if not file_list:
+            continue
+        # Sort by path to ensure we always keep the same file
+        sorted_file_list = sorted(file_list, key=lambda x: x[0])
         # Check size against the threshold
-        size = file_list[0][1]
+        size = sorted_file_list[0][1]
         if size >= delete_job.min_delete_size_bytes:
             # Keep the first file, queue the rest for deletion
-            for file_info in file_list[1:]:
+            for file_info in sorted_file_list[1:]:
                 files_to_delete.append(file_info[0])
                 files_to_delete_count += 1
         elif progress_queue:
@@ -415,9 +408,7 @@ def delete_files(
         _throttle_puts(delete_queue.qsize())
         delete_queue.put(path_to_delete)
 
-    # Wait for queue to empty
-    while not delete_queue.empty():
-        time.sleep(1)
+    delete_queue.join()
 
     stop_event.set()
     for d in workers:
@@ -562,27 +553,15 @@ def run_dupe_copy(
                 "Not walking file system. Using stored manifests",
             )
         )
-        # Use a new manifest to avoid duplicate processing
-        all_data = Manifest(None, temp_directory=temp_directory, save_event=save_event)
-        # Re-process all files from the original manifest
-        for _, file_list in manifest.items():
-            for file_info in file_list:
-                work_queue.put(file_info[0])
-        collisions.clear()
-        dupes, all_data = find_duplicates(
-            [],  # No paths to walk
-            work_queue,
-            result_queue,
-            all_data,  # Use the new, empty manifest
-            collisions,
-            walk_config=walk_config,
-            progress_queue=progress_queue,
-            walk_threads=walk_threads,
-            read_threads=read_threads,
-            keep_empty=keep_empty,
-            save_event=save_event,
-            walk_queue=walk_queue,
-        )
+        # Rebuild collision list from the manifest
+        if manifest:
+            logger.info("Manifest loaded with %d items.", len(manifest))
+            for md5, info in manifest.items():
+                if len(info) > 1:
+                    collisions[md5] = info
+            logger.info("Found %d collisions in manifest.", len(collisions))
+        dupes = collisions
+        all_data = manifest
     else:
         progress_queue.put(
             (

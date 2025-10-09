@@ -91,10 +91,9 @@ class Manifest:
             self.save_event.set()
         path = path or self.path
         try:
-            # Save the main data first, as _write_manifest iterates the cache
-            # and can cause state changes before the data is persisted.
-            self.md5_data.save(db_file=path)
+            # First populate read_sources from md5_data, then save both.
             self._write_manifest(path=path, keys=keys)
+            self.md5_data.save(db_file=path)
             self.read_sources.save(db_file=f"{path}.read")
         finally:
             if self.save_event:
