@@ -131,3 +131,58 @@ class TestNoWalk(unittest.TestCase):
 
         remaining_files = os.listdir(self.files_dir)
         self.assertEqual(len(remaining_files), 5)
+
+    def test_no_walk_does_not_modify_read_manifest(self):
+        """--no-walk should not modify the .read manifest file, even if inconsistent."""
+        from dedupe_copy.disk_cache_dict import CacheDict
+
+        read_manifest_path = self.manifest_path + ".read"
+
+        # 1. Create inconsistent manifest by removing an entry from the .read file
+        read_manifest = CacheDict(db_file=read_manifest_path)
+        read_manifest.load()
+        self.assertEqual(
+            len(read_manifest), 5, "Initial manifest should have 5 files."
+        )
+
+        key_to_remove = os.path.join(self.files_dir, "a.txt")
+        del read_manifest[key_to_remove]
+        read_manifest.save()
+        read_manifest.close()
+
+        # 2. Verify inconsistency and get count
+        read_manifest_reloaded = CacheDict(db_file=read_manifest_path)
+        read_manifest_reloaded.load()
+        inconsistent_count = len(read_manifest_reloaded)
+        self.assertEqual(
+            inconsistent_count, 4, "Manifest should now be inconsistent with 4 files."
+        )
+        read_manifest_reloaded.close()
+
+        # 3. Run with --no-walk, which will trigger a save operation
+        with patch(
+            "sys.argv",
+            [
+                "dedupecopy",
+                "--no-walk",
+                "-i",
+                self.manifest_path,
+                "-m",
+                self.manifest_path,
+            ],
+        ):
+            f = io.StringIO()
+            with redirect_stdout(f):
+                run_cli()
+
+        # 4. Check that the file count has NOT changed
+        final_read_manifest = CacheDict(db_file=read_manifest_path)
+        final_read_manifest.load()
+        final_count = len(final_read_manifest)
+        final_read_manifest.close()
+
+        self.assertEqual(
+            final_count,
+            inconsistent_count,
+            "The number of files in .read manifest should not change on a --no-walk run.",
+        )
