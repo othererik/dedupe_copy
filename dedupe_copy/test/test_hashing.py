@@ -34,12 +34,10 @@ class TestHashing(unittest.TestCase):
     def test_xxhash_hashing_fails_if_not_installed(self):
         """Verify hash_file raises RuntimeError if xxh64 is requested but not installed."""
         # Patch 'xxhash' in the utils module to None to simulate it not being installed
-        with mock.patch('dedupe_copy.utils.xxhash', None):
+        with mock.patch("dedupe_copy.utils.xxhash", None):
             with self.assertRaises(RuntimeError) as cm:
                 hash_file(self.test_file, hash_algo="xxh64")
-            self.assertIn(
-                "the 'xxhash' library is not installed", str(cm.exception)
-            )
+            self.assertIn("the 'xxhash' library is not installed", str(cm.exception))
 
 
 if __name__ == "__main__":
