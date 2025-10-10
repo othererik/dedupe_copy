@@ -94,6 +94,11 @@ def hash_file(src: str, hash_algo: str = "md5") -> str:
     :param hash_algo: Hashing algorithm to use ('md5' or 'xxh64').
     :type hash_algo: str
     """
+    if hash_algo == "xxh64" and not xxhash:
+        raise RuntimeError(
+            "xxh64 algorithm requested, but the 'xxhash' library is not installed. "
+            "Please install it with 'pip install xxhash'."
+        )
     if xxhash and hash_algo == "xxh64":
         checksum = xxhash.xxh64()
     else:
