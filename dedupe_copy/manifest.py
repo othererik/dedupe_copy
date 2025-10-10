@@ -84,7 +84,10 @@ class Manifest:
         return len(self.md5_data)
 
     def save(
-        self, path: Optional[str] = None, keys: Optional[List[str]] = None
+        self,
+        path: Optional[str] = None,
+        keys: Optional[List[str]] = None,
+        no_walk: bool = False,
     ) -> None:
         """Save manifest to disk at specified path."""
         if self.save_event:
@@ -97,7 +100,8 @@ class Manifest:
             logger.info("Writing manifest of %d hashes to %s", len(self.md5_data), path)
             self.md5_data.save(db_file=path)
 
-            self._populate_read_sources(keys=keys)
+            if not no_walk:
+                self._populate_read_sources(keys=keys)
 
             logger.info(
                 "Writing sources of %d files to %s.read", len(self.read_sources), path

@@ -602,7 +602,7 @@ def run_dupe_copy(
         progress_queue.put(
             (HIGH_PRIORITY, "message", "Saving complete manifest from search")
         )
-        all_data.save(path=manifest_out_path)
+        all_data.save(path=manifest_out_path, no_walk=no_walk)
 
     if delete_duplicates:
         if copy_to_path:
@@ -619,7 +619,7 @@ def run_dupe_copy(
                 progress_queue.put(
                     (HIGH_PRIORITY, "message", "Saving complete manifest from search")
                 )
-                all_data.save(path=manifest_out_path)
+                all_data.save(path=manifest_out_path, no_walk=no_walk)
 
             delete_job = DeleteJob(
                 delete_threads=copy_threads,
