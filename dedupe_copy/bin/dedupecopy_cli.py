@@ -266,16 +266,6 @@ def _create_parser():
 
 def _handle_arguments(args):
     """Take the cli args and process them in prep for calling run_dedupe_copy"""
-    # Setup logging based on verbosity flags
-    verbosity = "normal"
-    if args.quiet:
-        verbosity = "quiet"
-    elif args.debug:
-        verbosity = "debug"
-    elif args.verbose:
-        verbosity = "verbose"
-
-    setup_logging(verbosity=verbosity, use_colors=not args.no_color)
     logger = logging.getLogger(__name__)
 
     if args.read_path:
@@ -321,10 +311,21 @@ def run_cli():
     """Main entry point for the command-line interface."""
     parser = _create_parser()
     args = parser.parse_args()
-    # _handle_arguments also sets up logging
-    processed_args = _handle_arguments(args)
+
+    # Setup logging based on verbosity flags
+    verbosity = "normal"
+    if args.quiet:
+        verbosity = "quiet"
+    elif args.debug:
+        verbosity = "debug"
+    elif args.verbose:
+        verbosity = "verbose"
+    setup_logging(verbosity=verbosity, use_colors=not args.no_color)
+
     logger = logging.getLogger(__name__)
     logger.debug("Running with arguments: %s", args)
+
+    processed_args = _handle_arguments(args)
     return run_dupe_copy(**processed_args)
 
 
