@@ -205,7 +205,9 @@ def _create_parser():
     )
     performance.add_argument(
         "--hash-algo",
-        help="Hashing algorithm to use (md5 or xxh64)",
+        help="Hashing algorithm to use ('md5' or 'xxh64'). "
+        "'xxh64' requires the 'fast_hash' extra "
+        "('pip install dedupe_copy[fast_hash]')",
         required=False,
         default="md5",
         choices=["md5", "xxh64"],
@@ -225,7 +227,7 @@ def _create_parser():
     verbosity_group.add_argument(
         "--verbose",
         "-v",
-        help="Show detailed progress information",
+        help="Show more detailed progress information, including processing rates.",
         action="store_true",
         required=False,
         default=False,
@@ -319,20 +321,10 @@ def run_cli():
     """Main entry point for the command-line interface."""
     parser = _create_parser()
     args = parser.parse_args()
-    # Setup logging first before any output
-    verbosity = "normal"
-    if args.quiet:
-        verbosity = "quiet"
-    elif args.debug:
-        verbosity = "debug"
-    elif args.verbose:
-        verbosity = "verbose"
-
-    setup_logging(verbosity=verbosity, use_colors=not args.no_color)
-    logger = logging.getLogger(__name__)
-
-    logger.debug("Running with arguments: %s", args)
+    # _handle_arguments also sets up logging
     processed_args = _handle_arguments(args)
+    logger = logging.getLogger(__name__)
+    logger.debug("Running with arguments: %s", args)
     return run_dupe_copy(**processed_args)
 
 
