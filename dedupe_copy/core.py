@@ -9,7 +9,6 @@ import queue
 import shutil
 import tempfile
 import threading
-import time
 from collections import Counter
 from typing import Any, Callable, Iterator, List, Literal, Optional, Tuple, Union
 
