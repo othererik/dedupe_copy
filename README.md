@@ -115,7 +115,7 @@ DedupeCopy uses a multi-threaded pipeline architecture to maximize performance w
 - **Thread Count**: 8 by default (configurable with `--read-threads`)
 - **Input**: Files from `work_queue`
 - **Output**: Tuple of (hash, size, mtime, filepath) to `result_queue`
-- **Algorithm**: MD5 or SHA256 (configurable with `--hash-algo`)
+- **Algorithm**: `md5` or `xxh64` (configurable with `--hash-algo`)
 
 #### 3. **Result Processing** (ResultProcessor)
 - **Purpose**: Aggregate hashes and detect collisions
@@ -189,6 +189,13 @@ For colored console output (errors in red, warnings in yellow, etc.):
 
 ```bash
 pip install DedupeCopy[color]
+```
+
+### With fast hashing (optional)
+
+For faster file hashing using xxhash:
+```bash
+pip install DedupeCopy[fast_hash]
 ```
 
 ### From source
@@ -414,6 +421,7 @@ Different organization rules for different file types.
 | `--keep-empty` | Treat empty (0-byte) files as unique rather than duplicates. |
 | `--ignore-old-collisions` | Only detect new duplicates (ignore duplicates already in loaded manifest). |
 | `--dry-run` | Simulate operations without making any changes to the filesystem. |
+| `--min-delete-size BYTES` | Minimum size of a file to be considered for deletion (e.g., `1048576` for 1MB). Default: `0`. |
 
 ### Output Control Options
 
@@ -426,10 +434,10 @@ Different organization rules for different file types.
 
 
 **Output Verbosity Levels:**
-- **Normal** (default): Standard progress updates every 1,000 files, errors, and summaries
-- **Quiet** (`--quiet`): Only warnings, errors, and final summary
-- **Verbose** (`--verbose`): Detailed progress with processing rates and timing
-- **Debug** (`--debug`): All output including queue states and internal operations
+- **Normal** (default): Standard progress updates, errors, and summaries.
+- **Quiet** (`--quiet`): Only warnings, errors, and the final summary.
+- **Verbose** (`--verbose`): More frequent progress updates that include processing rates and timing details.
+- **Debug** (`--debug`): All output including queue states and internal operations for troubleshooting.
 
 ### Performance Options
 
@@ -438,6 +446,7 @@ Different organization rules for different file types.
 | `--walk-threads N` | 4 | Number of threads for file system traversal. |
 | `--read-threads N` | 8 | Number of threads for reading and hashing files. |
 | `--copy-threads N` | 8 | Number of threads for copying files. |
+| `--hash-algo ALGO` | `md5` | Hashing algorithm to use (`md5` or `xxh64`). `xxh64` requires the `fast_hash` extra. |
 
 ### Path Conversion Options
 

@@ -116,15 +116,20 @@ class TestPathRules(unittest.TestCase):
             elif ext == "mp3":
                 mp3_count += 1
 
+        listing = list(utils.walk_tree(copy_to_path, include_dirs=True))
+
         # Verify directories exist for each extension
         self.assertTrue(
-            jpg_count > 0 or os.path.exists(os.path.join(copy_to_path, "jpg"))
+            jpg_count > 0 or os.path.exists(os.path.join(copy_to_path, "jpg")),
+            f"failed to find jpg dir: {listing}",
         )
         self.assertTrue(
-            png_count > 0 or os.path.exists(os.path.join(copy_to_path, "png"))
+            png_count > 0 or os.path.exists(os.path.join(copy_to_path, "png")),
+            f"failed to find png dir: {listing}",
         )
         self.assertTrue(
-            mp3_count > 0 or os.path.exists(os.path.join(copy_to_path, "mp3"))
+            mp3_count > 0 or os.path.exists(os.path.join(copy_to_path, "mp3")),
+            f"failed to find mp3 dir: {listing}",
         )
 
     def test_combined_rules_extension_then_mtime(self):

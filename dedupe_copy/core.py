@@ -334,7 +334,10 @@ def copy_data(
         copied,
         copy_job=copy_job,
     )
+    # Wait for all tasks to be processed by the workers
     copy_queue.join()
+
+    # Signal threads to stop and wait for them to terminate
     stop_event.set()
     for c in workers:
         c.join()
