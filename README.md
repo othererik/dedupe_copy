@@ -85,11 +85,11 @@ DedupeCopy uses a multi-threaded pipeline architecture to maximize performance w
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    RESULT PROCESSOR                              │
-│  • Processes file hashes from read threads                       │
-│  • Detects duplicate files                                       │
-│  • Updates manifest and collision dictionaries                   │
-│  • Performs incremental saves every 50,000 files                 │
+│                    RESULT PROCESSOR                             │
+│  • Processes file hashes from read threads                      │
+│  • Detects duplicate files                                      │
+│  • Updates manifest and collision dictionaries                  │
+│  • Performs incremental saves every 50,000 files                │
 └─────────────────────────────────────────────────────────────────┘
                                  │
                                  ▼
