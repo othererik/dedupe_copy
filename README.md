@@ -52,35 +52,35 @@ DedupeCopy uses a multi-threaded pipeline architecture to maximize performance w
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         MAIN THREAD                              │
-│  • Orchestrates the entire operation                             │
-│  • Manages thread lifecycle and coordination                     │
-│  • Handles manifest loading/saving                               │
+│                         MAIN THREAD                             │
+│  • Orchestrates the entire operation                            │
+│  • Manages thread lifecycle and coordination                    │
+│  • Handles manifest loading/saving                              │
 └─────────────────────────────────────────────────────────────────┘
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     THREAD POOLS (Queues)                        │
+│                     THREAD POOLS (Queues)                       │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌────────────────┐    ┌────────────────┐    ┌───────────────┐ │
-│  │  Walk Threads  │───▶│  Read Threads  │───▶│ Copy/Delete   │ │
-│  │  (4 default)   │    │  (8 default)   │    │   Threads     │ │
-│  │                │    │                │    │  (8 default)  │ │
-│  └────────────────┘    └────────────────┘    └───────────────┘ │
-│         │                      │                      │          │
-│         ▼                      ▼                      ▼          │
+│                                                                 │
+│  ┌────────────────┐    ┌────────────────┐    ┌───────────────┐  │
+│  │  Walk Threads  │───▶│  Read Threads  │───▶│ Copy/Delete   │  │
+│  │  (4 default)   │    │  (8 default)   │    │   Threads     │  │
+│  │                │    │                │    │  (8 default)  │  │
+│  └────────────────┘    └────────────────┘    └───────────────┘  │
+│         │                      │                      │         │
+│         ▼                      ▼                      ▼         │
 │   Walk Queue            Work Queue            Copy/Delete       │
 │   (directories)         (files to hash)         Queue           │
-│                                                                   │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      PROGRESS THREAD                             │
-│  • Collects status updates from all worker threads               │
-│  • Displays progress, rates, and statistics                      │
-│  • Logs errors and warnings                                      │
+│                      PROGRESS THREAD                            │
+│  • Collects status updates from all worker threads              │
+│  • Displays progress, rates, and statistics                     │
+│  • Logs errors and warnings                                     │
 └─────────────────────────────────────────────────────────────────┘
                                  │
                                  ▼
@@ -94,9 +94,9 @@ DedupeCopy uses a multi-threaded pipeline architecture to maximize performance w
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    PERSISTENT STORAGE                            │
+│                    PERSISTENT STORAGE                           │
 │  • Manifest: Maps hash → list of files with that hash           │
-│  • Collision DB: Tracks duplicate files                          │
+│  • Collision DB: Tracks duplicate files                         │
 │  • SQLite-backed with disk caching (LRU-like eviction)          │
 │  • Auto-saves every 50,000 files for crash recovery             │
 └─────────────────────────────────────────────────────────────────┘
