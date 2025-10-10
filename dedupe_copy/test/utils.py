@@ -199,9 +199,11 @@ def make_file_tree(
     # this set is grown by the get_random_dir_path function
     existing_dirs: Set[str] = set()
     for i in range(file_count):
+        # if given extensions, round-robin them
+        ext = extensions[i % len(extensions)]
         fn = get_random_file_name(
             root=get_random_dir_path(root, existing_dirs=existing_dirs),
-            extensions=extensions,
+            extensions=[ext],
             prefix=prefix,
         )
         src = os.path.join(root, fn)

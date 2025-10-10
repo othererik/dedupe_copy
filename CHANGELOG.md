@@ -6,6 +6,7 @@
 - Bugfix: close manifests on combine to prevent resource leak
 - Bugfix: prevent doubling of source files when using --no-walk
 - Bugfix: better feedback when trying to use xxhash but it isn't installed
+- Bugfix: fix flaky extension test
 
 
 ## [1.1.1] - 2025-10-09
