@@ -65,6 +65,7 @@ def _walk_fs(
     for src in read_paths:
         _throttle_puts(walk_queue.qsize())
         walk_queue.put(src)
+    walk_queue.join()
     walk_done.set()
     for w in walkers:
         w.join()
