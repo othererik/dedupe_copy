@@ -27,7 +27,7 @@ class TestWalkRaceCondition(unittest.TestCase):
             sub_dir = os.path.join(self.source_dir, f"dir_{i}")
             os.makedirs(sub_dir)
             file_path = os.path.join(sub_dir, f"file_{i}.txt")
-            with open(file_path, "w") as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(f"content_{i}")
             self.expected_files.add(file_path)
 
