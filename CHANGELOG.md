@@ -1,7 +1,7 @@
 # Changelog
 
 
-## [1.1.2] - TBD
+## [1.1.2] - 2025-10-10
 - Bugfix: race condition on copy
 - Bugfix: close manifests on combine to prevent resource leak
 - Bugfix: prevent doubling of source files when using --no-walk
