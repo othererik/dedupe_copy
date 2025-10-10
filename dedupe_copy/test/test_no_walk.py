@@ -9,6 +9,7 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from dedupe_copy.bin.dedupecopy_cli import run_cli
+from dedupe_copy.disk_cache_dict import CacheDict
 
 
 class TestNoWalk(unittest.TestCase):
@@ -134,16 +135,13 @@ class TestNoWalk(unittest.TestCase):
 
     def test_no_walk_does_not_modify_read_manifest(self):
         """--no-walk should not modify the .read manifest file, even if inconsistent."""
-        from dedupe_copy.disk_cache_dict import CacheDict
 
         read_manifest_path = self.manifest_path + ".read"
 
         # 1. Create inconsistent manifest by removing an entry from the .read file
         read_manifest = CacheDict(db_file=read_manifest_path)
         read_manifest.load()
-        self.assertEqual(
-            len(read_manifest), 5, "Initial manifest should have 5 files."
-        )
+        self.assertEqual(len(read_manifest), 5, "Initial manifest should have 5 files.")
 
         key_to_remove = os.path.join(self.files_dir, "a.txt")
         del read_manifest[key_to_remove]
