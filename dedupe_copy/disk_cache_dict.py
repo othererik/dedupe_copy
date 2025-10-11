@@ -142,9 +142,12 @@ class SqliteBackend:
     @staticmethod
     def _dump(value: Any, version: int = -1) -> bytes:
         """Serialize value for storage in the database."""
+        # pylint: disable=too-many-return-statements
         # Fast path for primitive types - avoid pickle overhead
         if isinstance(value, str):
             return sqlite3.Binary(b"S" + value.encode("utf-8"))
+        if isinstance(value, bool):
+            return sqlite3.Binary(b"B" + (b"1" if value else b"0"))
         if isinstance(value, int):
             return sqlite3.Binary(b"I" + str(value).encode("utf-8"))
         if isinstance(value, float):
@@ -169,9 +172,11 @@ class SqliteBackend:
             return value_bytes[1:].decode("utf-8")
         if type_marker == b"I":
             return int(value_bytes[1:].decode("utf-8"))
+        if type_marker == b"B":
+            return value_bytes[1:] == b"1"
         if type_marker == b"F":
             return float(value_bytes[1:].decode("utf-8"))
-        if type_marker == b"B":
+        if type_marker == b"X":
             return value_bytes[1:] == b"1"
         if type_marker == b"N":
             return None
