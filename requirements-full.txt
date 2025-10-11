@@ -1,0 +1,14 @@
+# All dependencies for development, testing, and optional features
+# To install, run: pip install -r requirements-full.txt
+pandas
+colorama
+xxhash
+pylint
+flake8
+pytest
+pytest-xdist
+mypy
+colorama
+types-colorama
+pandas-stubs
+matplotlib

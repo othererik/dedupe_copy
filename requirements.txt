@@ -1,2 +1,4 @@
+# minimial set of dependencies to run the application with all features
+# these are also optional and the main workflow will work without them
 colorama
 xxhash
