@@ -52,5 +52,8 @@ dedupecopy = "dedupe_copy.bin.dedupecopy_cli:run_cli"
 [tool.setuptools]
 packages = ["dedupe_copy", "dedupe_copy.bin", "dedupe_copy.test"]
 
+[tool.coverage.run]
+relative_files = true
+
 [tool.pylint."MESSAGES CONTROL"]
 disable = ["R0913", "R0914", "R0902", "R0801", "R0917"]
