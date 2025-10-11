@@ -619,6 +619,33 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
             custom_backend.close()
 
 
+class TestDefaultCacheDict(unittest.TestCase):
+    def test_init_raises_type_error(self):
+        with self.assertRaises(TypeError):
+            disk_cache_dict.DefaultCacheDict(default_factory="not_callable")
+
+    def test_copy_method(self):
+        dcd = disk_cache_dict.DefaultCacheDict(default_factory=list)
+        dcd_copy = dcd.copy()
+        self.assertIsInstance(dcd_copy, disk_cache_dict.DefaultCacheDict)
+        self.assertEqual(dcd_copy.default_factory, list)
+
+    def test_fromkeys_method(self):
+        dcd = disk_cache_dict.DefaultCacheDict(default_factory=list)
+        keys = ["a", "b", "c"]
+        dcd_fromkeys = dcd.fromkeys(keys)
+        self.assertIsInstance(dcd_fromkeys, disk_cache_dict.DefaultCacheDict)
+        self.assertEqual(dcd_fromkeys.default_factory, list)
+
+    def test_dump_load_bytes_and_bool(self):
+        """Test that bytes and bool types are dumped and loaded correctly"""
+        # Test boolean
+        self.assertEqual(disk_cache_dict.SqliteBackend._load(disk_cache_dict.SqliteBackend._dump(True)), True)
+        self.assertEqual(disk_cache_dict.SqliteBackend._load(disk_cache_dict.SqliteBackend._dump(False)), False)
+        # Test bytes
+        self.assertEqual(disk_cache_dict.SqliteBackend._load(disk_cache_dict.SqliteBackend._dump(b"hello")), b"hello")
+
+
 class TestDefaultDiskDictFunctional(DcdActionSuite, unittest.TestCase):
     """Functional tests around the DefualtDict version of the disk_cache_dict."""
 
