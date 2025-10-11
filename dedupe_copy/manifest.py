@@ -132,6 +132,31 @@ class Manifest:
         """Deprecated: Use items() instead"""
         return self.md5_data.items()
 
+    def remove_files(self, files_to_remove: List[str]) -> None:
+        """Remove a list of files from the manifest."""
+        # Create a reverse lookup from path to hash
+        path_to_hash = {}
+        for hash_val, file_list in self.md5_data.items():
+            for file_info in file_list:
+                path_to_hash[file_info[0]] = hash_val
+
+        for path in files_to_remove:
+            if path in self.read_sources:
+                del self.read_sources[path]
+
+            if path in path_to_hash:
+                hash_val = path_to_hash[path]
+                if hash_val in self.md5_data:
+                    new_file_list = [
+                        file_info
+                        for file_info in self.md5_data[hash_val]
+                        if file_info[0] != path
+                    ]
+                    if new_file_list:
+                        self.md5_data[hash_val] = new_file_list
+                    else:
+                        del self.md5_data[hash_val]
+
     def _populate_read_sources(self, keys: Optional[List[str]] = None) -> None:
         """Populate the read_sources list from the md5_data."""
         # Clear existing sources to prevent duplication when re-populating

@@ -352,7 +352,7 @@ def delete_files(
     progress_queue: Optional["queue.PriorityQueue[Any]"],
     *,
     delete_job: "DeleteJob",
-) -> None:
+) -> List[str]:
     """Queues up and deletes duplicate files."""
     stop_event = threading.Event()
     delete_queue: "queue.Queue[str]" = queue.Queue()
@@ -417,6 +417,8 @@ def delete_files(
     stop_event.set()
     for d in workers:
         d.join()
+
+    return files_to_delete
 
 
 # pylint: disable=too-many-statements
@@ -601,16 +603,24 @@ def run_dupe_copy(
             read_paths=read_from_path,
             hash_algo=hash_algo,
         )
-    if manifest_out_path:
-        progress_queue.put(
-            (HIGH_PRIORITY, "message", "Saving complete manifest from search")
-        )
-        all_data.save(path=manifest_out_path, no_walk=no_walk)
-
     if delete_duplicates:
         if copy_to_path:
             logger.error("Cannot use --delete and --copy-path at the same time.")
         else:
+            delete_job = DeleteJob(
+                delete_threads=copy_threads,
+                dry_run=dry_run,
+                min_delete_size_bytes=min_delete_size,
+            )
+            deleted_files = delete_files(
+                dupes,
+                progress_queue,
+                delete_job=delete_job,
+            )
+            # Update the manifest with the deleted files
+            if deleted_files:
+                all_data.remove_files(deleted_files)
+
             # If we are deleting, we should save the manifest so we don't
             # have to re-scan next time.
             if not manifest_out_path and manifests_in_paths:
@@ -618,22 +628,12 @@ def run_dupe_copy(
                     manifest_out_path = manifests_in_paths[0]
                 else:
                     manifest_out_path = manifests_in_paths
+
             if manifest_out_path:
                 progress_queue.put(
-                    (HIGH_PRIORITY, "message", "Saving complete manifest from search")
+                    (HIGH_PRIORITY, "message", "Saving updated manifest after deletion")
                 )
-                all_data.save(path=manifest_out_path, no_walk=no_walk)
-
-            delete_job = DeleteJob(
-                delete_threads=copy_threads,
-                dry_run=dry_run,
-                min_delete_size_bytes=min_delete_size,
-            )
-            delete_files(
-                dupes,
-                progress_queue,
-                delete_job=delete_job,
-            )
+                all_data.save(path=manifest_out_path, no_walk=True)
     elif copy_to_path is not None:
         # Warning: strip dupes out of all data, this assumes dupes correctly
         # follows handling of keep_empty (not a dupe even if md5 is same for
@@ -665,6 +665,18 @@ def run_dupe_copy(
             progress_queue,
             copy_job=copy_job,
         )
+        if manifest_out_path:
+            progress_queue.put(
+                (HIGH_PRIORITY, "message", "Saving complete manifest after copy")
+            )
+            all_data.save(path=manifest_out_path, no_walk=no_walk)
+    else:
+        # If not deleting or copying, save the manifest if a path is provided
+        if manifest_out_path:
+            progress_queue.put(
+                (HIGH_PRIORITY, "message", "Saving complete manifest from search")
+            )
+            all_data.save(path=manifest_out_path, no_walk=no_walk)
     all_stop.set()
     while progress_thread.is_alive():
         progress_thread.join(5)

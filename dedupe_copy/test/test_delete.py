@@ -6,6 +6,7 @@ from functools import partial
 
 from dedupe_copy.test import utils
 from dedupe_copy.core import run_dupe_copy
+from dedupe_copy.manifest import Manifest
 
 do_copy = partial(
     run_dupe_copy,
@@ -163,6 +164,45 @@ class TestDelete(unittest.TestCase):
         # The file with the lexicographically first path should be preserved
         preserved_file = os.path.join(self.temp_dir, "a", "dup.txt")
         self.assertEqual(remaining_files[0], preserved_file)
+
+    def test_manifest_updated_after_delete(self):
+        """Ensure the manifest is saved *after* deletions occur."""
+        # Create 2 unique files and 2 duplicates of one of them
+        unique_files = utils.make_file_tree(self.temp_dir, file_count=2, file_size=100)
+        duplicate_content_file = unique_files[0]
+
+        for i in range(2):
+            dupe_path = os.path.join(self.temp_dir, f"dupe_{i}.txt")
+            with open(dupe_path, "wb") as f:
+                with open(duplicate_content_file[0], "rb") as original:
+                    f.write(original.read())
+
+        initial_file_count = len(list(utils.walk_tree(self.temp_dir)))
+        self.assertEqual(initial_file_count, 4, "Should have 4 files initially")
+
+        manifest_path = os.path.join(self.manifest_dir, "manifest.db")
+
+        # First run: generate manifest
+        do_copy(read_from_path=self.temp_dir, manifest_out_path=manifest_path)
+
+        # Second run: delete with the same manifest for in and out
+        do_copy(
+            read_from_path=self.temp_dir,
+            manifests_in_paths=manifest_path,
+            manifest_out_path=manifest_path,
+            delete_duplicates=True,
+        )
+
+        final_file_count = len(list(utils.walk_tree(self.temp_dir)))
+        self.assertEqual(final_file_count, 2, "Should have 2 files after deletion")
+
+        # Now, load the manifest and verify its contents
+        manifest = Manifest(manifest_path, save_path=None, temp_directory=self.temp_dir)
+        manifest_file_count = sum(len(file_list) for _, file_list in manifest.items())
+
+        self.assertEqual(
+            manifest_file_count, 2, "Manifest should contain 2 files after deletion"
+        )
 
 
 if __name__ == "__main__":
