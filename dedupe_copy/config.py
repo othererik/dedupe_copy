@@ -1,5 +1,4 @@
-"""Configuration classes for dedupe_copy
-"""
+"""Configuration classes for dedupe_copy"""
 
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, Tuple
