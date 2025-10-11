@@ -56,5 +56,10 @@ packages = ["dedupe_copy", "dedupe_copy.bin", "dedupe_copy.test"]
 [tool.coverage.run]
 relative_files = true
 
+[tool.coverage.report]
+omit = [
+    "dedupe_copy/test/record_disk_cache_dict_performance.py",
+]
+
 [tool.pylint."MESSAGES CONTROL"]
 disable = ["R0913", "R0914", "R0902", "R0801", "R0917"]
