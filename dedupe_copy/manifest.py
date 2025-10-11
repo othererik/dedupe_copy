@@ -148,7 +148,8 @@ class Manifest:
                 hash_val = path_to_hash[path]
                 if hash_val in self.md5_data:
                     new_file_list = [
-                        file_info for file_info in self.md5_data[hash_val]
+                        file_info
+                        for file_info in self.md5_data[hash_val]
                         if file_info[0] != path
                     ]
                     if new_file_list:

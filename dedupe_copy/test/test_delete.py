@@ -6,6 +6,7 @@ from functools import partial
 
 from dedupe_copy.test import utils
 from dedupe_copy.core import run_dupe_copy
+from dedupe_copy.manifest import Manifest
 
 do_copy = partial(
     run_dupe_copy,
@@ -196,12 +197,12 @@ class TestDelete(unittest.TestCase):
         self.assertEqual(final_file_count, 2, "Should have 2 files after deletion")
 
         # Now, load the manifest and verify its contents
-        from dedupe_copy.manifest import Manifest
         manifest = Manifest(manifest_path, save_path=None, temp_directory=self.temp_dir)
         manifest_file_count = sum(len(file_list) for _, file_list in manifest.items())
 
-        self.assertEqual(manifest_file_count, 2,
-                         "Manifest should contain 2 files after deletion")
+        self.assertEqual(
+            manifest_file_count, 2, "Manifest should contain 2 files after deletion"
+        )
 
 
 if __name__ == "__main__":
