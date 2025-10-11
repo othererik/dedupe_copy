@@ -134,6 +134,8 @@ class Manifest:
 
     def _populate_read_sources(self, keys: Optional[List[str]] = None) -> None:
         """Populate the read_sources list from the md5_data."""
+        # Clear existing sources to prevent duplication when re-populating
+        self.read_sources.clear()
         if not keys:
             dict_iter = self.md5_data.items()
         else:
