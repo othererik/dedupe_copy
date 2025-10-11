@@ -152,7 +152,7 @@ DedupeCopy uses a multi-threaded pipeline architecture to maximize performance w
 #### Disk Cache Dictionary
 - **Purpose**: Handle datasets larger than available RAM
 - **Backend**: SQLite with Write-Ahead Logging (WAL)
-- **Optimization**: Batched commits (100 items) for performance
+- **Optimization**: Batched commits for performance
 - **Eviction**: LRU or random eviction when cache is full
 
 ### Performance Characteristics
@@ -210,7 +210,7 @@ pip install -e .[color]
 
 ### Requirements
 
-- Python 3.8 or later
+- Python 3.11 or later
 - Sufficient disk space for manifest files (typically small, but can grow for very large file sets)
 - Optional: colorama for colored console output (installed with `[color]` extra)
 
@@ -642,7 +642,7 @@ For very large directories (millions of files):
 
 ### Manifest Storage
 
-- Manifest files are stored as Berkeley DB files
+- Manifest files are stored as SQLite database files
 - Size is proportional to number of unique files (typically a few MB per 100k files)
 - Keep manifests on fast storage (SSD) for best performance
 - Manifests are incrementally saved every 50,000 processed files
