@@ -1,8 +1,11 @@
 # Changelog
 
-## [1.1.3] - TBD
+## [1.1.3] - 2025-10-11
 - Bugfix: clear manifest sources before reuse with walk to avoid duplicate entries
 - More DCD performance measurments and optional charts
+- Improve test coverage
+- Remove entries from manifest when using --delete
+
 
 ## [1.1.2] - 2025-10-10
 - Bugfix: race condition on copy

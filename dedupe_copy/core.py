@@ -1,5 +1,4 @@
-"""Core application logic for dedupe_copy
-"""
+"""Core application logic for dedupe_copy"""
 
 import datetime
 import fnmatch
