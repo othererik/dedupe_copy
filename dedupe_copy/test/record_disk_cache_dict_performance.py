@@ -8,11 +8,44 @@ import collections
 import contextlib
 import os
 import random
+import statistics
 import time
 
 from dedupe_copy.test import utils
 from dedupe_copy import disk_cache_dict
 
+
+def generate_string_data(item_count):
+    """Generate string key/value pairs."""
+    keys = [str(i) for i in range(item_count)]
+    items = [(k, f"value_{k}") for k in keys]
+    return keys, items
+
+
+def generate_int_data(item_count):
+    """Generate integer key/value pairs."""
+    keys = list(range(item_count))
+    items = [(k, k * 10) for k in keys]
+    return keys, items
+
+
+def generate_complex_data(item_count):
+    """Generate string keys and complex dict values."""
+    keys = [str(i) for i in range(item_count)]
+    items = [
+        (k, {"id": k, "value": random.random(), "payload": "x" * 20}) for k in keys
+    ]
+    return keys, items
+
+
+DATA_TYPES = {
+    "string": generate_string_data,
+    "int": generate_int_data,
+    "complex": generate_complex_data,
+}
+
+# number of times to run each test configuration
+NUM_RUNS = 3
 
 # data set sizes, should be one larger and one smaller than cache sizes
 SMALL_SET = 1000
@@ -128,10 +161,12 @@ def iterate(container, keys):
         next(citer)
 
 
-def log(  # pylint: disable=too-many-arguments
+def log(  # pylint: disable=too-many-arguments,too-many-locals
     name,
-    py,
-    dcd,
+    py_mean,
+    py_std,
+    dcd_mean,
+    dcd_std,
     *,
     log_fd=None,
     lru=None,
@@ -139,28 +174,35 @@ def log(  # pylint: disable=too-many-arguments
     backend=None,
     item_count=None,
     max_size=None,
+    data_type=None,
 ):
     """Log performance test results to console and optionally to file."""
-    percent = ((dcd - py) / py) * 100
+    percent = ((dcd_mean - py_mean) / py_mean) * 100 if py_mean > 0 else 0
     print(
-        f"{name:<30}\tdifference: {percent:<5.2f}%\tpy: {py:.4f}s\t" f"dcd: {dcd:.4f}s"
+        f"{name:<20}\t"
+        f"d: {percent:<5.2f}%\t"
+        f"py: {py_mean:.4f}s (±{py_std:.4f})\t"
+        f"dcd: {dcd_mean:.4f}s (±{dcd_std:.4f})"
     )
     log_spec = (
-        "{name}, {percent}, {py}, {dcd}, {lru}, "
-        "{in_cache}, {backend}, {item_count}, {max_size}\n"
+        "{name},{percent},{py_mean},{py_std},{dcd_mean},{dcd_std},"
+        "{lru},{in_cache},{backend},{item_count},{max_size},{data_type}\n"
     )
     if log_fd:
         log_fd.write(
             log_spec.format(
                 name=name,
                 percent=percent,
-                py=py,
-                dcd=dcd,
+                py_mean=py_mean,
+                py_std=py_std,
+                dcd_mean=dcd_mean,
+                dcd_std=dcd_std,
                 lru=lru,
                 max_size=max_size,
                 in_cache=in_cache,
                 backend=backend,
                 item_count=item_count,
+                data_type=data_type,
             )
         )
 
@@ -168,156 +210,218 @@ def log(  # pylint: disable=too-many-arguments
 # pylint: disable=too-many-nested-blocks
 def gen_tests():
     """Generate test configurations and write results to CSV."""
-    with open("perflog.csv", "a", encoding="utf-8") as fd:
+    with open("perflog.csv", "w", encoding="utf-8") as fd:
         fd.write(
-            "name, percent, py, dcd, lru, in_cache, backend, item_count, max_size\n"
+            "name,percent,py_mean,py_std,dcd_mean,dcd_std,lru,in_cache,"
+            "backend,item_count,max_size,data_type\n"
         )
-        for item_count in [SMALL_SET, LARGE_SET]:
-            for max_size in [SMALL_CACHE, LARGE_CACHE]:
-                for backend in [
-                    None,
-                ]:
-                    for lru in [True, False]:
-                        for in_cache in [True, False]:
-                            if not item_count or not max_size:
-                                continue
-                            if in_cache and max_size < LARGE_CACHE:
-                                continue
-                            yield item_count, lru, max_size, backend, in_cache, fd
+        for data_type in DATA_TYPES:
+            for item_count in [SMALL_SET, LARGE_SET]:
+                for max_size in [SMALL_CACHE, LARGE_CACHE]:
+                    for backend in [
+                        None,
+                    ]:
+                        for lru in [True, False]:
+                            for in_cache in [True, False]:
+                                if not item_count or not max_size:
+                                    continue
+                                if in_cache and max_size < LARGE_CACHE:
+                                    continue
+                                yield (
+                                    item_count,
+                                    lru,
+                                    max_size,
+                                    backend,
+                                    in_cache,
+                                    data_type,
+                                    fd,
+                                )
 
 
-def main():  # pylint: disable=too-many-locals
-    """Run performance tests on disk cache dict."""
-    for item_count, lru, max_size, backend, in_cache, logfd in gen_tests():
-        keys = [str(i) for i in range(item_count)]
-        items = [(str(i), str(i)) for i in keys]
+def run_and_summarize_tests(  # pylint: disable=too-many-arguments
+    pydict,
+    dcd,
+    test_keys,
+    logfd,
+    item_count,
+    lru,
+    max_size,
+    backend,
+    in_cache,
+    data_type,
+):
+    """Run all tests and summarize the results."""
+    tests_to_run = [
+        ("Rand Access", random_access),
+        ("Rand Update", random_update),
+        ("Sequential Access", sequential_access),
+        ("Sequential Update", sequential_update),
+        ("Iterate", iterate),
+        ("Random Actions", random_actions),
+    ]
+
+    for test_name, test_func in tests_to_run:
+        py_times, dcd_times = [], []
+        for _ in range(NUM_RUNS):
+            py_times.append(test_func(pydict, test_keys))
+            dcd_times.append(test_func(dcd, test_keys))
+
+        log(
+            test_name,
+            statistics.mean(py_times),
+            statistics.stdev(py_times) if len(py_times) > 1 else 0,
+            statistics.mean(dcd_times),
+            statistics.stdev(dcd_times) if len(dcd_times) > 1 else 0,
+            log_fd=logfd,
+            item_count=item_count,
+            lru=lru,
+            max_size=max_size,
+            backend=backend,
+            in_cache=in_cache,
+            data_type=data_type,
+        )
+
+
+def run_test_config(  # pylint: disable=too-many-locals,too-many-arguments
+    item_count, lru, max_size, backend, in_cache, data_type, logfd
+):
+    """Run a single performance test configuration."""
+    keys, items = DATA_TYPES[data_type](item_count)
+    print("-" * 80)
+    print(
+        f"Running: lru={lru}, max_size={max_size}, backend={backend or 'default'}, "
+        f"item_count={item_count}, in_cache_only={in_cache}, data_type={data_type}"
+    )
+    print("-" * 80)
+
+    with temp_db() as db_file:
+        pydict = collections.defaultdict(list)
+        dcd = disk_cache_dict.DefaultCacheDict(
+            default_factory=list,
+            max_size=max_size,
+            db_file=db_file,
+            lru=lru,
+            current_dictionary=None,
+            backend=backend,
+        )
+
+        # Populate is a special case, so we run it once
+        py_time = populate(pydict, items)
+        dcd_time = populate(dcd, items)
+        log("Populate", py_time, 0, dcd_time, 0, data_type=data_type)
+
+        if in_cache:
+            # pylint: disable=protected-access
+            test_keys = list(dcd._cache.keys())
+        else:
+            test_keys = keys
+
+        run_and_summarize_tests(
+            pydict,
+            dcd,
+            test_keys,
+            logfd,
+            item_count,
+            lru,
+            max_size,
+            backend,
+            in_cache,
+            data_type,
+        )
+
+
+def visualize_results(log_file="perflog.csv"):
+    """Generate plots from the performance log file."""
+    # pylint: disable=import-outside-toplevel
+    try:
+        import pandas as pd
+        import matplotlib.pyplot as plt
+    except ImportError:
         print(
-            f"Running lru: {lru} max_size: {max_size} backend: {backend or 'default'} "
-            f"item_count: {item_count} in_cache_only: {in_cache}"
+            "\n---"
+            "\nPandas and Matplotlib are required for visualization."
+            "\nPlease install them: pip install pandas matplotlib"
+            "\n---"
         )
-        with temp_db() as db_file:
-            pydict = collections.defaultdict(list)
-            dcd = disk_cache_dict.DefaultCacheDict(
-                default_factory=list,
-                max_size=max_size,
-                db_file=db_file,
-                lru=lru,
-                current_dictionary=None,
-                backend=backend,
-            )
+        return
 
-            # populate is a special case - doesn't compare to must stuff
-            # so we don't keep the time in the aggregate which is slightly a
-            # lie
-            py_time = populate(pydict, items)
-            dcd_time = populate(dcd, items)
-            log("Populate", py_time, dcd_time)
+    df = pd.read_csv(log_file)
 
-            py_sum = dcd_sum = 0
+    # Plot 1: Overall Performance Comparison by Data Type
+    fig, ax = plt.subplots(figsize=(12, 7))
+    for data_type, group in df.groupby("data_type"):
+        ax.bar(
+            group["name"],
+            group["dcd_mean"],
+            yerr=group["dcd_std"],
+            label=f"DCD ({data_type})",
+            alpha=0.7,
+        )
+    ax.set_title("Overall Performance Comparison by Data Type")
+    ax.set_xlabel("Test Name")
+    ax.set_ylabel("Mean Time (s)")
+    ax.legend()
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig("performance_comparison_by_datatype.png")
+    plt.close(fig)
 
-            if in_cache:
-                # pylint: disable=protected-access
-                test_keys = list(dcd._cache.keys())
-            else:
-                test_keys = keys
+    # Plot 2: LRU Cache Impact
+    fig, ax = plt.subplots(figsize=(12, 7))
+    for lru, group in df.groupby("lru"):
+        ax.bar(
+            group["name"],
+            group["dcd_mean"],
+            yerr=group["dcd_std"],
+            label=f"LRU: {lru}",
+            alpha=0.7,
+        )
+    ax.set_title("LRU Cache Impact on Performance")
+    ax.set_xlabel("Test Name")
+    ax.set_ylabel("Mean Time (s)")
+    ax.legend()
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig("lru_impact.png")
+    plt.close(fig)
 
-            py_time = random_access(pydict, test_keys)
-            dcd_time = random_access(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Rand Access",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
+    # Plot 3: Cache Size Impact
+    fig, ax = plt.subplots(figsize=(12, 7))
+    for max_size, group in df.groupby("max_size"):
+        ax.bar(
+            group["name"],
+            group["dcd_mean"],
+            yerr=group["dcd_std"],
+            label=f"Max Size: {max_size}",
+            alpha=0.7,
+        )
+    ax.set_title("Cache Size Impact on Performance")
+    ax.set_xlabel("Test Name")
+    ax.set_ylabel("Mean Time (s)")
+    ax.legend()
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig("cache_size_impact.png")
+    plt.close(fig)
 
-            py_time = random_update(pydict, test_keys)
-            dcd_time = random_update(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Rand Update",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
+    print("\nVisualizations saved to PNG files.")
 
-            py_time = sequential_access(pydict, test_keys)
-            dcd_time = sequential_access(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Sequential Access",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
 
-            py_time = sequential_update(pydict, test_keys)
-            dcd_time = sequential_update(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Sequential Update",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
+def main():
+    """Run performance tests on disk cache dict."""
+    log_file = "perflog.csv"
+    for (
+        item_count,
+        lru,
+        max_size,
+        backend,
+        in_cache,
+        data_type,
+        logfd,
+    ) in gen_tests():
+        run_test_config(item_count, lru, max_size, backend, in_cache, data_type, logfd)
 
-            py_time = iterate(pydict, test_keys)
-            dcd_time = iterate(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Iterate",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
-
-            py_time = random_actions(pydict, test_keys)
-            dcd_time = random_actions(dcd, test_keys)
-            py_sum += py_time
-            dcd_sum += dcd_time
-            log(
-                "Random Actions",
-                py_time,
-                dcd_time,
-                log_fd=logfd,
-                item_count=item_count,
-                lru=lru,
-                max_size=max_size,
-                backend=backend,
-                in_cache=in_cache,
-            )
-
-            print(f"Run Average: {(dcd_sum / py_sum) * 100}%\n\n")
+    visualize_results(log_file)
 
 
 if __name__ == "__main__":
