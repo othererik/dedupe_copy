@@ -6,7 +6,6 @@ performance estimation!
 
 import collections
 import contextlib
-import functools
 import os
 import random
 import statistics
@@ -333,6 +332,7 @@ def run_test_config(  # pylint: disable=too-many-locals,too-many-arguments
 
 def visualize_results(log_file="perflog.csv"):
     """Generate plots from the performance log file."""
+    # pylint: disable=import-outside-toplevel
     try:
         import pandas as pd
         import matplotlib.pyplot as plt
