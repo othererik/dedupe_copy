@@ -142,6 +142,7 @@ class SqliteBackend:
     @staticmethod
     def _dump(value: Any, version: int = -1) -> bytes:
         """Serialize value for storage in the database."""
+        # pylint: disable=too-many-return-statements
         # Fast path for primitive types - avoid pickle overhead
         if isinstance(value, str):
             return sqlite3.Binary(b"S" + value.encode("utf-8"))

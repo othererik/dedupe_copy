@@ -1,3 +1,5 @@
+"""Tests for dedupe_copy.__main__. - Just picking up coverage, not super useful."""
+
 import runpy
 import unittest
 from unittest.mock import patch

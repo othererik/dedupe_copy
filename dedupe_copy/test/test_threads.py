@@ -1,7 +1,14 @@
+"""
+Test module for dedupe_copy.threads module.
+
+This module contains comprehensive tests for all thread classes and utility functions
+in the dedupe_copy.threads module, including error handling, thread synchronization,
+and various threading scenarios.
+"""
+
 import unittest
 import queue
 import threading
-import time
 from unittest.mock import MagicMock, patch
 from dedupe_copy.threads import (
     DeleteThread,
@@ -15,7 +22,10 @@ from dedupe_copy.config import WalkConfig
 
 
 class TestIsFileProcessingRequired(unittest.TestCase):
+    """Test cases for the _is_file_processing_required utility function."""
+
     def test_ignored_with_progress_queue(self):
+        """Test that ignored files are properly handled and reported to progress queue."""
         filepath = "/tmp/some/file.txt"
         already_processed = set()
         ignore = ["*.txt"]
@@ -33,7 +43,10 @@ class TestIsFileProcessingRequired(unittest.TestCase):
 
 
 class TestResultProcessor(unittest.TestCase):
+    """Test cases for the ResultProcessor thread class."""
+
     def setUp(self):
+        """Set up test environment with reduced incremental save size for faster tests."""
         # Monkey patch the incremental save size to speed up tests
         self.original_save_size = ResultProcessor.INCREMENTAL_SAVE_SIZE
         ResultProcessor.INCREMENTAL_SAVE_SIZE = 2
@@ -43,6 +56,7 @@ class TestResultProcessor(unittest.TestCase):
         ResultProcessor.INCREMENTAL_SAVE_SIZE = self.original_save_size
 
     def test_result_processor_handles_processing_error(self):
+        """Test that ResultProcessor properly handles and logs processing errors."""
         stop_event = threading.Event()
         result_queue = queue.Queue()
         progress_queue = queue.PriorityQueue()
@@ -82,6 +96,7 @@ class TestResultProcessor(unittest.TestCase):
         self.assertIn("mocked type error", error_msg)
 
     def test_result_processor_incremental_save(self):
+        """Test that ResultProcessor performs incremental saves at configured intervals."""
         stop_event = threading.Event()
         result_queue = queue.Queue()
         progress_queue = queue.PriorityQueue()
@@ -111,6 +126,7 @@ class TestResultProcessor(unittest.TestCase):
         self.assertFalse(progress_queue.empty())
 
     def test_result_processor_incremental_save_error(self):
+        """Test that ResultProcessor handles and logs errors during incremental saves."""
         stop_event = threading.Event()
         result_queue = queue.Queue()
         progress_queue = queue.PriorityQueue()
@@ -141,15 +157,19 @@ class TestResultProcessor(unittest.TestCase):
         # The first message is the "Hit incremental save size..." message
         progress_queue.get()
         # The second message is the error from the save
-        _priority, msg_type, path, error_msg = progress_queue.get()
+        _priority, msg_type, _, error_msg = progress_queue.get()
         self.assertEqual(msg_type, "error")
         self.assertIn("ERROR Saving incremental", error_msg)
         self.assertIn("mocked save error", error_msg)
 
 
 class TestReadThread(unittest.TestCase):
+    """Test cases for the ReadThread class."""
+
     @patch("dedupe_copy.threads.read_file", side_effect=OSError("mocked os error"))
     def test_read_thread_handles_os_error(self, mock_read_file):
+        """Test that ReadThread properly handles and logs OS errors during file reading."""
+        # pylint: disable=unused-argument
         stop_event = threading.Event()
         work_queue = queue.Queue()
         result_queue = queue.Queue()
@@ -183,9 +203,8 @@ class TestReadThread(unittest.TestCase):
 
     @patch("dedupe_copy.threads.time.sleep")
     @patch("dedupe_copy.threads.read_file")
-    def test_read_thread_pauses_on_save_event(
-        self, mock_read_file, mock_sleep
-    ):
+    def test_read_thread_pauses_on_save_event(self, mock_read_file, mock_sleep):
+        """Test that ReadThread pauses execution when save event is set."""
         stop_event = threading.Event()
         save_event = threading.Event()
         work_queue = queue.Queue()
@@ -226,7 +245,11 @@ class TestReadThread(unittest.TestCase):
 
 
 class TestDeleteThread(unittest.TestCase):
+    """Test cases for the DeleteThread class."""
+
     def test_delete_thread_dry_run(self):
+        """Test that DeleteThread in dry-run mode logs actions without performing
+        actual deletions."""
         stop_event = threading.Event()
         work_queue = queue.Queue()
         progress_queue = queue.PriorityQueue()
@@ -254,11 +277,12 @@ class TestDeleteThread(unittest.TestCase):
 
 
 class TestWalkThread(unittest.TestCase):
+    """Test cases for the WalkThread class."""
+
     @patch("dedupe_copy.threads.time.sleep")
     @patch("dedupe_copy.threads.distribute_work")
-    def test_walk_thread_pauses_on_save_event(
-        self, mock_distribute_work, mock_sleep
-    ):
+    def test_walk_thread_pauses_on_save_event(self, mock_distribute_work, mock_sleep):
+        """Test that WalkThread pauses execution when save event is set."""
         stop_event = threading.Event()
         save_event = threading.Event()
         walk_queue = queue.Queue()
@@ -300,8 +324,11 @@ class TestWalkThread(unittest.TestCase):
 
 
 class TestProgressThread(unittest.TestCase):
+    """Test cases for the ProgressThread class."""
+
     @patch("dedupe_copy.threads.time.sleep")
     def test_progress_thread_pauses_on_save_event(self, mock_sleep):
+        """Test that ProgressThread pauses execution when save event is set."""
         stop_event = threading.Event()
         save_event = threading.Event()
         work_queue = queue.Queue()
