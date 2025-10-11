@@ -1,5 +1,8 @@
 # Changelog
 
+## [1.1.3] - TBD
+- Bugfix: clear manifest sources before reuse with walk to avoid duplicate entries
+
 
 ## [1.1.2] - 2025-10-10
 - Bugfix: race condition on copy
