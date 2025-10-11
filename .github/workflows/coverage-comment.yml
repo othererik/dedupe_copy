@@ -28,7 +28,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests and generate coverage report
-        run: pytest --cov=./ --cov-report=xml
+        run: |
+            echo -n '[run]\n  relative_files = true' > .coveragerc
+            pytest --cov=./ --cov-report=xml
 
       - name: Python Coverage Comment
         uses: py-cov-action/python-coverage-comment-action@v3
