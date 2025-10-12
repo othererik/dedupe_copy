@@ -420,6 +420,59 @@ def delete_files(
     return files_to_delete
 
 
+def verify_manifest(manifest: Manifest) -> bool:
+    """
+    Verifies that files in the manifest exist and their sizes match.
+
+    Args:
+        manifest: The Manifest object to verify.
+
+    Returns:
+        True if all files are verified successfully, False otherwise.
+    """
+    logger.info("Starting manifest verification for %d hashes...", len(manifest))
+    verified_count = 0
+    error_count = 0
+
+    for _, file_list in manifest.items():
+        for file_path, expected_size, _ in file_list:
+            try:
+                if not os.path.exists(file_path):
+                    logger.error("VERIFY FAILED: File not found: %s", file_path)
+                    error_count += 1
+                    continue
+
+                actual_size = os.path.getsize(file_path)
+                if actual_size != expected_size:
+                    logger.error(
+                        "VERIFY FAILED: Size mismatch for %s: expected %d, got %d",
+                        file_path,
+                        expected_size,
+                        actual_size,
+                    )
+                    error_count += 1
+                else:
+                    verified_count += 1
+            except OSError as e:
+                logger.error("VERIFY FAILED: Could not access %s: %s", file_path, e)
+                error_count += 1
+
+    total_files = verified_count + error_count
+    logger.info(
+        "Verification complete. Total files checked: %d. Verified: %d. Errors: %d.",
+        total_files,
+        verified_count,
+        error_count,
+    )
+
+    if error_count == 0:
+        logger.info("Manifest verification successful.")
+        return True
+
+    logger.error("Manifest verification failed.")
+    return False
+
+
 # pylint: disable=too-many-statements
 def run_dupe_copy(
     read_from_path: Optional[Union[str, List[str]]] = None,
@@ -446,6 +499,7 @@ def run_dupe_copy(
     delete_duplicates: bool = False,
     dry_run: bool = False,
     min_delete_size: int = 0,
+    verify_manifest: bool = False,
 ) -> None:
     """For external callers this is the entry point for dedupe + copy"""
     # Ensure logging is configured for programmatic calls
@@ -506,6 +560,19 @@ def run_dupe_copy(
         save_event=save_event,
     )
     compare = Manifest(compare_manifests, save_path=None, temp_directory=temp_directory)
+
+    if verify_manifest:
+        verify_manifest(manifest)
+        manifest.close()
+        try:
+            shutil.rmtree(temp_directory)
+        except OSError as err:
+            logger.warning(
+                "Failed to cleanup the temp_directory: %s with err: %s",
+                temp_directory,
+                err,
+            )
+        return
 
     if no_copy:
         for item in no_copy:
