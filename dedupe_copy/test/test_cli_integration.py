@@ -8,7 +8,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch, ANY
+from unittest.mock import patch
+
+from dedupe_copy.bin import dedupecopy_cli
 
 
 class TestCliIntegration(unittest.TestCase):
@@ -220,7 +222,6 @@ class TestCliIntegration(unittest.TestCase):
     @patch("dedupe_copy.bin.dedupecopy_cli.run_dupe_copy")
     def test_progress_bar_enabled(self, mock_run_dupe_copy):
         """Test that the --progress flag enables the progress bar."""
-        from dedupe_copy.bin import dedupecopy_cli
 
         test_args = [
             "dedupecopy",

@@ -24,7 +24,7 @@ from .utils import (
 try:
     from tqdm import tqdm
 except ImportError:
-    tqdm = None
+    tqdm = None  # type: ignore
 
 # For message output
 HIGH_PRIORITY = 1
@@ -226,7 +226,7 @@ class ResultProcessor(threading.Thread):
                 md5, size, mtime, src = self.results.get(True, 0.1)
                 try:
                     collision = md5 in self.md5_data
-                    if self.empty and md5 == "d41d8cd98f00b204e9800998ecf8427e":
+                    if self.empty and size == 0:
                         collision = False
                     # In-place modification of the list won't trigger the cache's
                     # __setitem__ unless we re-assign it.

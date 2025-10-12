@@ -262,7 +262,8 @@ def copy_data(
     stop_event = threading.Event()
     copy_queue: "queue.Queue[Tuple[str, str, int]]" = queue.Queue()
     workers = []
-    copied = copy_job.no_copy
+    # Convert no_copy manifest to a set for efficient membership testing
+    copied = copy_job.no_copy if copy_job.no_copy is not None else {}
     if progress_queue:
         progress_queue.put(
             (
@@ -293,7 +294,7 @@ def copy_data(
     to_copy = []
     for data in [dupes, all_data]:
         for md5, path, mtime, size in info_parser(data):
-            is_empty_file = (md5 == "d41d8cd98f00b204e9800998ecf8427e")
+            is_empty_file = size == 0
 
             # When keep_empty is true, we don't treat empty files as duplicates
             should_treat_as_dupe = not (is_empty_file and copy_job.keep_empty)
@@ -317,7 +318,8 @@ def copy_data(
 
             to_copy.append((path, mtime, size))
             if should_treat_as_dupe:
-                copied[md5] = None
+                if md5:
+                    copied[md5] = None
 
     if progress_queue:
         progress_queue.put((HIGH_PRIORITY, "set_copy_total", len(to_copy)))
@@ -525,9 +527,12 @@ def run_dupe_copy(
     result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
     progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
     walk_queue: "queue.Queue[str]" = queue.Queue()
+    progress_thread: Union[ProgressThread, TQDMProgressThread]
     if use_progress_bar:
         if tqdm is None:
-            raise RuntimeError("tqdm is not installed, please install with progress extra")
+            raise RuntimeError(
+                "tqdm is not installed, please install with progress extra"
+            )
         progress_thread = TQDMProgressThread(
             work_queue,
             result_queue,
