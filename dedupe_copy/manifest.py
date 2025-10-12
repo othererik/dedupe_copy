@@ -208,11 +208,19 @@ class Manifest:
 
         for m, r in manifests:
             for key, files in m.items():
+                current_files = combined_md5[key]
+                # Use a set for faster lookups
+                existing_files = {tuple(f) for f in current_files}
+                new_files_added = False
                 for info in files:
-                    current_files = combined_md5[key]
-                    if info not in current_files:
+                    info_tuple = tuple(info)
+                    if info_tuple not in existing_files:
                         current_files.append(info)
-                        combined_md5[key] = current_files
+                        existing_files.add(info_tuple)
+                        new_files_added = True
+
+                if new_files_added:
+                    combined_md5[key] = current_files
             for key in r:
                 combined_read[key] = None
             m.close()
