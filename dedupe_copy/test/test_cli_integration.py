@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch, ANY
 
 
 class TestCliIntegration(unittest.TestCase):
@@ -215,3 +216,22 @@ class TestCliIntegration(unittest.TestCase):
         self.assertIn("e.txt", remaining_files)
         # one of the dupes is kept
         self.assertEqual(len(remaining_files), 4)
+
+    @patch("dedupe_copy.bin.dedupecopy_cli.run_dupe_copy")
+    def test_progress_bar_enabled(self, mock_run_dupe_copy):
+        """Test that the --progress flag enables the progress bar."""
+        from dedupe_copy.bin import dedupecopy_cli
+
+        test_args = [
+            "dedupecopy",
+            "-p",
+            self.files_dir,
+            "--progress",
+        ]
+        with patch.object(sys, "argv", test_args):
+            dedupecopy_cli.run_cli()
+
+        # Check that run_dupe_copy was called with use_progress_bar=True
+        mock_run_dupe_copy.assert_called_once()
+        _, kwargs = mock_run_dupe_copy.call_args
+        self.assertTrue(kwargs.get("use_progress_bar"))

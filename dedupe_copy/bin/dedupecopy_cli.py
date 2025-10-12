@@ -246,6 +246,13 @@ def _create_parser():
         required=False,
         default=False,
     )
+    output_group.add_argument(
+        "--progress",
+        help="Show progress bars.",
+        action="store_true",
+        required=False,
+        default=False,
+    )
 
     group = parser.add_argument_group("Path conversion")
     group.add_argument(
@@ -304,6 +311,7 @@ def _handle_arguments(args):
         "delete_duplicates": args.delete,
         "dry_run": args.dry_run,
         "min_delete_size": args.min_delete_size,
+        "use_progress_bar": args.progress,
     }
 
 

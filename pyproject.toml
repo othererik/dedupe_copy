@@ -42,6 +42,7 @@ classifiers = [
 color = ["colorama>=0.4.0"]
 fast_hash = ["xxhash>=3.4.1"]
 plot = ["pandas", "matplotlib"]
+progress = ["tqdm>=4.0.0"]
 
 [project.urls]
 Homepage = "https://pypi.python.org/pypi/DedupeCopy/"

@@ -23,7 +23,9 @@ from .threads import (
     ProgressThread,
     ReadThread,
     ResultProcessor,
+    TQDMProgressThread,
     WalkThread,
+    tqdm,
 )
 from .utils import _throttle_puts, ensure_logging_configured, lower_extension
 
@@ -249,37 +251,6 @@ def info_parser(data: Any) -> Iterator[Tuple[str, str, str, int]]:
                 yield md5, item[0], year_month, item[1]
 
 
-def queue_copy_work(
-    copy_queue: "queue.Queue[Tuple[str, str, int]]",
-    data: Any,
-    progress_queue: Optional["queue.PriorityQueue[Any]"],
-    copied: Any,
-    *,
-    copy_job: "CopyJob",
-) -> Any:
-    """Queue copy operations for file duplication."""
-    for md5, path, mtime, size in info_parser(data):
-        if md5 not in copied:
-            action_required = True
-            if copy_job.ignore:
-                for ignored_pattern in copy_job.ignore:
-                    if fnmatch.fnmatch(path, ignored_pattern):
-                        action_required = False
-                        break
-            if action_required:
-                if not copy_job.ignore_empty_files:
-                    copied[md5] = None
-                elif md5 != "d41d8cd98f00b204e9800998ecf8427e":
-                    copied[md5] = None
-                _throttle_puts(copy_queue.qsize())
-                copy_queue.put((path, mtime, size))
-            elif progress_queue:
-                progress_queue.put((LOW_PRIORITY, "not_copied", path))
-        elif progress_queue:
-            progress_queue.put((LOW_PRIORITY, "not_copied", path))
-    return copied
-
-
 def copy_data(
     dupes: Any,
     all_data: Any,
@@ -317,23 +288,44 @@ def copy_data(
                 f"Copying to {copy_job.copy_config.target_path}",
             )
         )
-    # copied is passed to here so we don't try to copy "comparison" manifests
-    # copied is a dict-like, so it's update in place
-    queue_copy_work(
-        copy_queue,
-        dupes,
-        progress_queue,
-        copied,
-        copy_job=copy_job,
-    )
-    queue_copy_work(
-        copy_queue,
-        all_data,
-        progress_queue,
-        copied,
-        copy_job=copy_job,
-    )
-    # Wait for all tasks to be processed by the workers
+
+    # This combines total calculation and queueing
+    to_copy = []
+    for data in [dupes, all_data]:
+        for md5, path, mtime, size in info_parser(data):
+            is_empty_file = (md5 == "d41d8cd98f00b204e9800998ecf8427e")
+
+            # When keep_empty is true, we don't treat empty files as duplicates
+            should_treat_as_dupe = not (is_empty_file and copy_job.keep_empty)
+
+            if md5 in copied and should_treat_as_dupe:
+                if progress_queue:
+                    progress_queue.put((LOW_PRIORITY, "not_copied", path))
+                continue
+
+            action_required = True
+            if copy_job.ignore:
+                for ignored_pattern in copy_job.ignore:
+                    if fnmatch.fnmatch(path, ignored_pattern):
+                        action_required = False
+                        break
+
+            if not action_required:
+                if progress_queue:
+                    progress_queue.put((LOW_PRIORITY, "not_copied", path))
+                continue
+
+            to_copy.append((path, mtime, size))
+            if should_treat_as_dupe:
+                copied[md5] = None
+
+    if progress_queue:
+        progress_queue.put((HIGH_PRIORITY, "set_copy_total", len(to_copy)))
+
+    for path, mtime, size in to_copy:
+        _throttle_puts(copy_queue.qsize())
+        copy_queue.put((path, mtime, size))
+
     copy_queue.join()
 
     # Signal threads to stop and wait for them to terminate
@@ -382,6 +374,13 @@ def delete_files(
             )
 
     if progress_queue:
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
+                "set_delete_total",
+                files_to_delete_count,
+            )
+        )
         progress_queue.put(
             (
                 HIGH_PRIORITY,
@@ -446,6 +445,7 @@ def run_dupe_copy(
     delete_duplicates: bool = False,
     dry_run: bool = False,
     min_delete_size: int = 0,
+    use_progress_bar: bool = False,
 ) -> None:
     """For external callers this is the entry point for dedupe + copy"""
     # Ensure logging is configured for programmatic calls
@@ -525,14 +525,26 @@ def run_dupe_copy(
     result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
     progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
     walk_queue: "queue.Queue[str]" = queue.Queue()
-    progress_thread = ProgressThread(
-        work_queue,
-        result_queue,
-        progress_queue,
-        walk_queue=walk_queue,
-        stop_event=all_stop,
-        save_event=save_event,
-    )
+    if use_progress_bar:
+        if tqdm is None:
+            raise RuntimeError("tqdm is not installed, please install with progress extra")
+        progress_thread = TQDMProgressThread(
+            work_queue,
+            result_queue,
+            progress_queue,
+            walk_queue=walk_queue,
+            stop_event=all_stop,
+            save_event=save_event,
+        )
+    else:
+        progress_thread = ProgressThread(
+            work_queue,
+            result_queue,
+            progress_queue,
+            walk_queue=walk_queue,
+            stop_event=all_stop,
+            save_event=save_event,
+        )
     progress_thread.start()
     collisions = None
     if manifest and (convert_manifest_paths_to or convert_manifest_paths_from):
@@ -655,7 +667,7 @@ def run_dupe_copy(
             copy_config=copy_config,
             ignore=ignored_patterns,
             no_copy=compare,
-            ignore_empty_files=keep_empty,
+            keep_empty=keep_empty,
             copy_threads=copy_threads,
         )
         copy_data(

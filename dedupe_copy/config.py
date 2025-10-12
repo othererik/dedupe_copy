@@ -31,7 +31,7 @@ class CopyJob:
     copy_config: CopyConfig
     ignore: Optional[List[str]] = None
     no_copy: Optional[Any] = None
-    ignore_empty_files: bool = False
+    keep_empty: bool = False
     copy_threads: int = 8
 
 

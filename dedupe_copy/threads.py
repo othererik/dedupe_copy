@@ -21,6 +21,11 @@ from .utils import (
     read_file,
 )
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
 # For message output
 HIGH_PRIORITY = 1
 MEDIUM_PRIORITY = 5
@@ -443,6 +448,12 @@ class ProgressThread(threading.Thread):
         """Log a generic message."""
         logger.info(message)
 
+    def do_log_set_copy_total(self, total: int) -> None:
+        """Sets the total for the copy progress bar."""
+
+    def do_log_set_delete_total(self, total: int) -> None:
+        """Sets the total for the delete progress bar."""
+
     def run(self) -> None:
         """Run loop that retrieves items from the progress queue and
         dispatches to the correct handler."""
@@ -502,6 +513,71 @@ class ProgressThread(threading.Thread):
             "Total elapsed time: %.1f seconds (%.1f minutes)", elapsed, elapsed / 60
         )
         logger.info("=" * 60)
+
+
+class TQDMProgressThread(ProgressThread):
+    """Progress thread that uses tqdm for progress bars."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.walk_bar: Optional["tqdm"] = None
+        self.hash_bar: Optional["tqdm"] = None
+        self.copy_bar: Optional["tqdm"] = None
+        self.delete_bar: Optional["tqdm"] = None
+
+    def do_log_set_copy_total(self, total: int) -> None:
+        """Sets the total for the copy progress bar."""
+        if not self.copy_bar:
+            self.copy_bar = tqdm(total=total, unit="files", desc="Copying")
+        else:
+            self.copy_bar.total = total
+
+    def do_log_set_delete_total(self, total: int) -> None:
+        """Sets the total for the delete progress bar."""
+        if not self.delete_bar:
+            self.delete_bar = tqdm(total=total, unit="files", desc="Deleting")
+        else:
+            self.delete_bar.total = total
+
+    def do_log_file(self, path: str) -> None:
+        self.file_count += 1
+        if not self.walk_bar:
+            self.walk_bar = tqdm(total=0, unit="files", desc="Walking")
+        self.walk_bar.update(1)
+        self.walk_bar.set_description(f"Walking: {os.path.basename(path)}")
+
+    def do_log_accepted(self, path: str) -> None:
+        self.accepted_count += 1
+        self.last_accepted = path
+        if not self.hash_bar:
+            self.hash_bar = tqdm(total=0, unit="files", desc="Hashing")
+        self.hash_bar.update(1)
+
+    def do_log_copied(self, src: str, dest: str) -> None:
+        self.copied_count += 1
+        if not self.copy_bar:
+            self.copy_bar = tqdm(total=0, unit="files", desc="Copying")
+        self.copy_bar.update(1)
+        self.copy_bar.set_description(f"Copying: {os.path.basename(src)}")
+
+    def do_log_deleted(self, path: str) -> None:
+        self.deleted_count += 1
+        if not self.delete_bar:
+            self.delete_bar = tqdm(total=0, unit="files", desc="Deleting")
+        self.delete_bar.update(1)
+        self.delete_bar.set_description(f"Deleting: {os.path.basename(path)}")
+
+    def log_final_summary(self) -> None:
+        """Close tqdm bars and log final summary."""
+        if self.walk_bar:
+            self.walk_bar.close()
+        if self.hash_bar:
+            self.hash_bar.close()
+        if self.copy_bar:
+            self.copy_bar.close()
+        if self.delete_bar:
+            self.delete_bar.close()
+        super().log_final_summary()
 
 
 class DeleteThread(threading.Thread):
