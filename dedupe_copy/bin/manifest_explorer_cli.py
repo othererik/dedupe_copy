@@ -6,8 +6,9 @@ import os
 import sys
 import tempfile
 
+# pylint: disable=wrong-import-position
 # Add the project root to the Python path to allow importing from dedupe_copy
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from dedupe_copy.manifest import Manifest
 
@@ -16,13 +17,16 @@ logger = logging.getLogger(__name__)
 
 class ManifestExplorer(cmd.Cmd):
     """Interactive command-line tool for exploring manifest files."""
-    intro = 'Welcome to the Manifest Explorer. Type help or ? to list commands.\\n'
-    prompt = '(manifest_explorer) '
+
+    intro = "Welcome to the Manifest Explorer. Type help or ? to list commands.\\n"
+    prompt = "(manifest_explorer) "
 
     def __init__(self):
         super().__init__()
         self.manifest = None
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = (
+            tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
+        )
 
     def do_load(self, arg):
         """Load a manifest file. Usage: load <path_to_manifest>"""
@@ -35,13 +39,16 @@ class ManifestExplorer(cmd.Cmd):
         if self.manifest:
             self.manifest.close()
         try:
-            self.manifest = Manifest(manifest_paths=arg, temp_directory=self.temp_dir.name)
+            self.manifest = Manifest(
+                manifest_paths=arg, temp_directory=self.temp_dir.name
+            )
             print(f"Manifest '{arg}' loaded successfully.")
+        # pylint: disable=broad-except
         except Exception as e:
             print(f"An error occurred while loading the manifest: {e}")
             self.manifest = None
 
-    def do_info(self, arg):
+    def do_info(self, _arg):
         """Display information about the loaded manifest."""
         if not self.manifest:
             print("No manifest loaded. Use 'load <path>' to load a manifest.")
@@ -96,7 +103,7 @@ class ManifestExplorer(cmd.Cmd):
         if not found:
             print("No matching hash or file found.")
 
-    def do_exit(self, arg):
+    def do_exit(self, _arg):
         """Exit the manifest explorer."""
         if self.manifest:
             self.manifest.close()
@@ -112,5 +119,5 @@ def main():
         print("\\nExiting.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
