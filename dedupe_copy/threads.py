@@ -202,6 +202,7 @@ class ResultProcessor(threading.Thread):
         save_event: Optional[threading.Event] = None,
     ) -> None:
         super().__init__()
+
         self.stop_event = stop_event
         self.results = result_queue
         self.collisions = collisions
@@ -210,7 +211,7 @@ class ResultProcessor(threading.Thread):
         self.empty = keep_empty
         self.save_event = save_event
         self.daemon = True
-        self._local_cache = {}
+        self._local_cache: dict[str, list[tuple[str, int, float]]] = {}
         self._batch_count = 0
 
     def _commit_batch(self) -> None:
@@ -275,7 +276,7 @@ class ResultProcessor(threading.Thread):
                 try:
                     if md5 not in self._local_cache:
                         self._local_cache[md5] = []
-                    self._local_cache[md5].append([src, size, mtime])
+                    self._local_cache[md5].append((src, size, mtime))
                     self._batch_count += 1
                     processed += 1
 
