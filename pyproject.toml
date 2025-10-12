@@ -49,6 +49,7 @@ Repository = "https://www.github.com/othererik/dedupe_copy"
 
 [project.scripts]
 dedupecopy = "dedupe_copy.bin.dedupecopy_cli:run_cli"
+manifest_explorer = "dedupe_copy.bin.manifest_explorer_cli:main"
 
 [tool.setuptools]
 packages = ["dedupe_copy", "dedupe_copy.bin", "dedupe_copy.test"]
