@@ -89,7 +89,24 @@ class TestResultProcessor(unittest.TestCase):
 
         # Check that an error was logged to the progress queue
         self.assertFalse(progress_queue.empty())
-        _priority, msg_type, path, error_msg = progress_queue.get()
+
+        # Drain the queue to find the error message, as other messages may be present
+        error_item = None
+        all_items = []
+        while not progress_queue.empty():
+            item = progress_queue.get()
+            all_items.append(item)
+            # Error messages have 4 items: priority, type, path, message
+            if len(item) == 4 and item[1] == "error":
+                error_item = item
+                break  # Found the error message
+
+        self.assertIsNotNone(
+            error_item, f"Error message not found in progress queue. Found: {all_items}"
+        )
+
+        # Now we can safely unpack and assert
+        _priority, msg_type, path, error_msg = error_item
         self.assertEqual(msg_type, "error")
         self.assertEqual(path, "a/file/path")
         self.assertIn("ERROR in result processing", error_msg)
@@ -154,10 +171,22 @@ class TestResultProcessor(unittest.TestCase):
 
         manifest.save.assert_called_once()
         self.assertFalse(progress_queue.empty())
-        # The first message is the "Hit incremental save size..." message
-        progress_queue.get()
-        # The second message is the error from the save
-        _priority, msg_type, _, error_msg = progress_queue.get()
+
+        # Drain the queue to find the error message
+        error_item = None
+        all_items = []
+        while not progress_queue.empty():
+            item = progress_queue.get()
+            all_items.append(item)
+            if len(item) == 4 and item[1] == "error":
+                error_item = item
+                break
+
+        self.assertIsNotNone(
+            error_item, f"Error message not found in progress queue. Found: {all_items}"
+        )
+
+        _priority, msg_type, _, error_msg = error_item
         self.assertEqual(msg_type, "error")
         self.assertIn("ERROR Saving incremental", error_msg)
         self.assertIn("mocked save error", error_msg)

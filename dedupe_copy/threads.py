@@ -188,6 +188,7 @@ class ResultProcessor(threading.Thread):
     """Takes results of work queue and builds result data structure"""
 
     INCREMENTAL_SAVE_SIZE = 50000
+    BATCH_SIZE = 1000
 
     def __init__(
         self,
@@ -201,6 +202,7 @@ class ResultProcessor(threading.Thread):
         save_event: Optional[threading.Event] = None,
     ) -> None:
         super().__init__()
+
         self.stop_event = stop_event
         self.results = result_queue
         self.collisions = collisions
@@ -209,6 +211,58 @@ class ResultProcessor(threading.Thread):
         self.empty = keep_empty
         self.save_event = save_event
         self.daemon = True
+        self._local_cache: dict[str, list[tuple[str, int, float]]] = {}
+        self._batch_count = 0
+
+    def _commit_batch(self) -> None:
+        """Commits the local cache to the main manifest."""
+        if not self._local_cache:
+            return
+
+        if self.progress_queue:
+            self.progress_queue.put(
+                (
+                    HIGH_PRIORITY,
+                    "message",
+                    f"Committing batch of {len(self._local_cache)} hashes.",
+                )
+            )
+
+        for md5, new_files in self._local_cache.items():
+            try:
+                # A collision exists if the hash is already in the manifest,
+                # OR if we are adding more than one file with this hash in the current batch.
+                already_existed = md5 in self.md5_data
+                is_collision = already_existed or (len(new_files) > 1)
+
+                if self.empty and new_files and new_files[0][1] == 0:
+                    # For empty files, it's only a collision if it was already in the manifest.
+                    # Collisions between multiple empty files in the same batch are ignored.
+                    is_collision = already_existed
+
+                # Efficiently update the manifest
+                current_files = self.md5_data[md5]
+                current_files.extend(new_files)
+                self.md5_data[md5] = current_files
+
+                if is_collision:
+                    self.collisions[md5] = self.md5_data[md5]
+            except (KeyError, ValueError, TypeError) as err:
+                if self.progress_queue:
+                    # In case of an error, we might have multiple files for one hash
+                    for file_info in new_files:
+                        src = file_info[0]
+                        self.progress_queue.put(
+                            (
+                                MEDIUM_PRIORITY,
+                                "error",
+                                src,
+                                f"ERROR in result processing: {err}",
+                            )
+                        )
+
+        self._local_cache.clear()
+        self._batch_count = 0
 
     def run(self) -> None:
         processed = 0
@@ -220,19 +274,15 @@ class ResultProcessor(threading.Thread):
             try:
                 md5, size, mtime, src = self.results.get(True, 0.1)
                 try:
-                    collision = md5 in self.md5_data
-                    if self.empty and size == 0:
-                        collision = False
-                    # In-place modification of the list won't trigger the cache's
-                    # __setitem__ unless we re-assign it.
-                    current_files = self.md5_data[md5]
-                    current_files.append([src, size, mtime])
-                    self.md5_data[md5] = current_files
-
-                    if collision:
-                        # Make sure the collisions dict gets the full list
-                        self.collisions[md5] = self.md5_data[md5]
+                    if md5 not in self._local_cache:
+                        self._local_cache[md5] = []
+                    self._local_cache[md5].append((src, size, mtime))
+                    self._batch_count += 1
                     processed += 1
+
+                    if self._batch_count >= self.BATCH_SIZE:
+                        self._commit_batch()
+
                 except (KeyError, ValueError, TypeError) as err:
                     if self.progress_queue:
                         self.progress_queue.put(
@@ -257,6 +307,7 @@ class ResultProcessor(threading.Thread):
                             "Hit incremental save size, will save manifest files",
                         )
                     )
+                self._commit_batch()  # Commit any remaining items before saving
                 processed = 0
                 try:
                     self.md5_data.save()
@@ -270,6 +321,8 @@ class ResultProcessor(threading.Thread):
                                 f"ERROR Saving incremental: {e}",
                             )
                         )
+        # Commit any final items
+        self._commit_batch()
 
 
 class ReadThread(threading.Thread):
