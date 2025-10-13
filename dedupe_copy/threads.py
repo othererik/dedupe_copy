@@ -184,6 +184,9 @@ class CopyThread(threading.Thread):
                 pass
 
 
+from .manifest import Manifest
+
+
 class ResultProcessor(threading.Thread):
     """Takes results of work queue and builds result data structure"""
 
@@ -206,7 +209,12 @@ class ResultProcessor(threading.Thread):
         self.stop_event = stop_event
         self.results = result_queue
         self.collisions = collisions
-        self.md5_data = manifest
+        self.manifest = manifest
+        # Handle cases where a raw DefaultCacheDict is passed for testing
+        if isinstance(manifest, Manifest):
+            self.md5_data = self.manifest.md5_data
+        else:
+            self.md5_data = manifest
         self.progress_queue = progress_queue
         self.empty = keep_empty
         self.save_event = save_event
@@ -246,8 +254,9 @@ class ResultProcessor(threading.Thread):
                 self.md5_data[md5] = current_files
 
                 # Add the new file paths to read_sources as well
-                for file_info in new_files:
-                    self.md5_data.read_sources[file_info[0]] = None
+                if isinstance(self.manifest, Manifest):
+                    for file_info in new_files:
+                        self.manifest.read_sources[file_info[0]] = None
 
                 if is_collision:
                     self.collisions[md5] = self.md5_data[md5]
@@ -314,14 +323,20 @@ class ResultProcessor(threading.Thread):
                 self._commit_batch()  # Commit any remaining items before saving
                 processed = 0
                 try:
-                    self.md5_data.save(rebuild_sources=False)
+                    if isinstance(self.manifest, Manifest):
+                        self.manifest.save(rebuild_sources=False)
+                    else:
+                        self.manifest.save()
                 except (OSError, IOError) as e:
                     if self.progress_queue:
+                        db_path = ""
+                        if hasattr(self.manifest, "db_file_path"):
+                            db_path = self.manifest.db_file_path()
                         self.progress_queue.put(
                             (
                                 MEDIUM_PRIORITY,
                                 "error",
-                                self.md5_data.db_file_path(),
+                                db_path,
                                 f"ERROR Saving incremental: {e}",
                             )
                         )
