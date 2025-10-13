@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
 from .config import CopyConfig, WalkConfig
+from .manifest import Manifest
 from .utils import (
     _throttle_puts,
     format_error_message,
@@ -184,9 +185,6 @@ class CopyThread(threading.Thread):
                 pass
 
 
-from .manifest import Manifest
-
-
 class ResultProcessor(threading.Thread):
     """Takes results of work queue and builds result data structure"""
 
@@ -277,8 +275,10 @@ class ResultProcessor(threading.Thread):
         self._local_cache.clear()
         self._batch_count = 0
 
+    # pylint: disable=R0912
     def run(self) -> None:
         processed = 0
+        # this code is getting complex, refactor
         while not self.stop_event.is_set() or not self.results.empty():
             if self.save_event and self.save_event.is_set():
                 time.sleep(1)
