@@ -215,3 +215,76 @@ class TestCliIntegration(unittest.TestCase):
         self.assertIn("e.txt", remaining_files)
         # one of the dupes is kept
         self.assertEqual(len(remaining_files), 4)
+
+    def test_verify_with_subprocess(self):
+        """
+        Tests manifest verification via the --verify flag.
+        """
+        # 1. Generate manifest
+        gen_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "dedupe_copy",
+                "-p",
+                self.files_dir,
+                "-m",
+                self.manifest_path,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            gen_result.returncode, 0, f"Manifest generation failed: {gen_result.stderr}"
+        )
+
+        # 2. Run verification (success case)
+        verify_success_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "dedupe_copy",
+                "--no-walk",
+                "--verify",
+                "--manifest-read-path",
+                self.manifest_path,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn(
+            "Manifest verification successful.",
+            verify_success_result.stdout,
+            "Success message not found in verification output.",
+        )
+
+        # 3. Delete a file to trigger a verification failure
+        os.remove(os.path.join(self.files_dir, "a.txt"))
+
+        # 4. Run verification again (failure case)
+        verify_fail_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "dedupe_copy",
+                "--no-walk",
+                "--verify",
+                "--manifest-read-path",
+                self.manifest_path,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,  # Expect a non-zero exit code
+        )
+        self.assertIn(
+            "Manifest verification failed.",
+            verify_fail_result.stdout,
+            "Failure message not found in verification output.",
+        )
+        self.assertIn(
+            "VERIFY FAILED: File not found",
+            verify_fail_result.stdout,
+            "File not found error not in verification output.",
+        )

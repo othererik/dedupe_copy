@@ -151,6 +151,7 @@ class TestResultProcessor(unittest.TestCase):
         manifest = MagicMock()
         manifest.md5_data = {}
         manifest.save.side_effect = OSError("mocked save error")
+        manifest.db_file_path.return_value = "test.db"
 
         processor = ResultProcessor(
             stop_event,

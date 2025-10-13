@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.4] - 2025-10-13
+- Improve manifest save performance
+- Add manifest viewer tool
+- Add manifest validation option (confirm files exist and are the same size)
+
+
 ## [1.1.3] - 2025-10-11
 - Bugfix: clear manifest sources before reuse with walk to avoid duplicate entries
 - More DCD performance measurments and optional charts
