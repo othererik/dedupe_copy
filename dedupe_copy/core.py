@@ -420,7 +420,7 @@ def delete_files(
     return files_to_delete
 
 
-def verify_manifest(manifest: Manifest) -> bool:
+def verify_manifest_fs(manifest: Manifest) -> bool:
     """
     Verifies that files in the manifest exist and their sizes match.
 
@@ -562,7 +562,7 @@ def run_dupe_copy(
     compare = Manifest(compare_manifests, save_path=None, temp_directory=temp_directory)
 
     if verify_manifest:
-        verify_manifest(manifest)
+        verify_manifest_fs(manifest)
         manifest.close()
         try:
             shutil.rmtree(temp_directory)

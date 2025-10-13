@@ -26,6 +26,9 @@ Examples:
   Resume an interrupted run (assuming "-m manifest" used in prior run):
     dedupecopy -p /Users/ -r dupes_2.csv -i manifest -m manifest
 
+  Verify that files in a manifest exist and sizes match:
+    dedupecopy --no-walk --verify --manifest-read-path my_manifest
+
   Sequentially copy different sources into the same target, not copying
   duplicate files (2 sources and 1 target):
     1.) First record manifests for all devices
