@@ -26,6 +26,9 @@ Examples:
   Resume an interrupted run (assuming "-m manifest" used in prior run):
     dedupecopy -p /Users/ -r dupes_2.csv -i manifest -m manifest
 
+  Verify that files in a manifest exist and sizes match:
+    dedupecopy --no-walk --verify --manifest-read-path my_manifest
+
   Sequentially copy different sources into the same target, not copying
   duplicate files (2 sources and 1 target):
     1.) First record manifests for all devices
@@ -85,8 +88,23 @@ def _create_parser():
         default=None,
     )
 
-    parser.add_argument(
+    action_group = parser.add_mutually_exclusive_group()
+    action_group.add_argument(
         "-c", "--copy-path", help="Path to copy to", required=False, default=None
+    )
+    action_group.add_argument(
+        "--delete",
+        help="Delete duplicate files",
+        required=False,
+        default=False,
+        action="store_true",
+    )
+    action_group.add_argument(
+        "--verify",
+        help="Verify manifest files exist and sizes match",
+        required=False,
+        default=False,
+        action="store_true",
     )
     parser.add_argument(
         "--copy-metadata",
@@ -162,13 +180,6 @@ def _create_parser():
     parser.add_argument(
         "--keep-empty",
         help="Do not count empty files as duplicates",
-        required=False,
-        default=False,
-        action="store_true",
-    )
-    parser.add_argument(
-        "--delete",
-        help="Delete duplicate files",
         required=False,
         default=False,
         action="store_true",
@@ -304,6 +315,7 @@ def _handle_arguments(args):
         "delete_duplicates": args.delete,
         "dry_run": args.dry_run,
         "min_delete_size": args.min_delete_size,
+        "verify_manifest": args.verify,
     }
 
 
