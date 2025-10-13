@@ -21,6 +21,12 @@ keywords = [
     "deduplication",
     "file-copy",
     "backup",
+    "cleanup",
+    "disk-space",
+    "file-organization",
+    "command-line",
+    "hashing",
+    "manifest",
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
