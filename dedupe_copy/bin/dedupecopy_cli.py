@@ -106,20 +106,6 @@ def _create_parser():
         default=False,
         action="store_true",
     )
-    action_group.add_argument(
-        "--verify",
-        help="Verify manifest files exist and sizes match",
-        required=False,
-        default=False,
-        action="store_true",
-    )
-    action_group.add_argument(
-        "--verify",
-        help="Verify manifest files exist and sizes match",
-        required=False,
-        default=False,
-        action="store_true",
-    )
     parser.add_argument(
         "--copy-metadata",
         help="Copy file stat data on copy as well",
