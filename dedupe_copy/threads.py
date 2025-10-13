@@ -245,6 +245,10 @@ class ResultProcessor(threading.Thread):
                 current_files.extend(new_files)
                 self.md5_data[md5] = current_files
 
+                # Add the new file paths to read_sources as well
+                for file_info in new_files:
+                    self.md5_data.read_sources[file_info[0]] = None
+
                 if is_collision:
                     self.collisions[md5] = self.md5_data[md5]
             except (KeyError, ValueError, TypeError) as err:
@@ -310,7 +314,7 @@ class ResultProcessor(threading.Thread):
                 self._commit_batch()  # Commit any remaining items before saving
                 processed = 0
                 try:
-                    self.md5_data.save()
+                    self.md5_data.save(rebuild_sources=False)
                 except (OSError, IOError) as e:
                     if self.progress_queue:
                         self.progress_queue.put(

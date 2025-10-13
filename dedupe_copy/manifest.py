@@ -86,8 +86,8 @@ class Manifest:
     def save(
         self,
         path: Optional[str] = None,
-        keys: Optional[List[str]] = None,
         no_walk: bool = False,
+        rebuild_sources: bool = True,
     ) -> None:
         """Save manifest to disk at specified path."""
         if self.save_event:
@@ -100,8 +100,8 @@ class Manifest:
             logger.info("Writing manifest of %d hashes to %s", len(self.md5_data), path)
             self.md5_data.save(db_file=path)
 
-            if not no_walk:
-                self._populate_read_sources(keys=keys)
+            if rebuild_sources and not no_walk:
+                self._populate_read_sources()
 
             logger.info(
                 "Writing sources of %d files to %s.read", len(self.read_sources), path
@@ -157,14 +157,11 @@ class Manifest:
                     else:
                         del self.md5_data[hash_val]
 
-    def _populate_read_sources(self, keys: Optional[List[str]] = None) -> None:
+    def _populate_read_sources(self) -> None:
         """Populate the read_sources list from the md5_data."""
         # Clear existing sources to prevent duplication when re-populating
         self.read_sources.clear()
-        if not keys:
-            dict_iter = self.md5_data.items()
-        else:
-            dict_iter = ((k, self.md5_data[k]) for k in keys)
+        dict_iter = self.md5_data.items()
         for _, info in dict_iter:
             for file_data in info:
                 src = file_data[0]

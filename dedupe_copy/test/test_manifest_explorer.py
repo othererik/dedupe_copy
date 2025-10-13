@@ -35,12 +35,7 @@ class TestManifestExplorer(unittest.TestCase):
         """Clean up the dummy manifest."""
         if self.explorer.manifest:
             self.explorer.manifest.close()
-        if os.path.exists(self.manifest_path):
-            os.remove(self.manifest_path)
-        if os.path.exists(f"{self.manifest_path}.read"):
-            os.remove(f"{self.manifest_path}.read")
-        if os.path.exists(self.test_dir):
-            os.rmdir(self.test_dir)
+        # The temp directory and its contents will be cleaned up by addCleanup
 
     def test_load_manifest(self):
         """Test loading a manifest."""
