@@ -1,6 +1,7 @@
 """Tests for hashing functions."""
 
 import os
+import time
 import unittest
 from unittest import mock
 from dedupe_copy.utils import hash_file
@@ -10,7 +11,7 @@ class TestHashing(unittest.TestCase):
     """Quick test to verify hashing functions work as expected."""
 
     def setUp(self):
-        self.test_file = "test_file.txt"
+        self.test_file = f"test_file{time.time()}.txt"
         with open(self.test_file, "w", encoding="utf-8") as f:
             f.write("This is a test file for hashing.")
 
