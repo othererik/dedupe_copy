@@ -16,8 +16,19 @@ logger = logging.getLogger(__name__)
 
 
 class Manifest:
-    """Storage of manifest data. Presents the hash dict but tracks the
-    read files in a separate structure"""
+    """Manages the storage and retrieval of file hash and metadata.
+
+    This class provides a dictionary-like interface for accessing file data,
+    while also tracking which files have been read in a separate structure.
+    It supports loading from and saving to disk, as well as combining
+    multiple manifests.
+
+    Attributes:
+        path: The primary path for the manifest file.
+        md5_data: A dictionary-like object mapping hashes to file metadata.
+        read_sources: A set-like object tracking files that have been read.
+        save_event: An optional event to signal save operations.
+    """
 
     cache_size = 10000
 
@@ -28,6 +39,15 @@ class Manifest:
         temp_directory: Optional[str] = None,
         save_event: Optional[threading.Event] = None,
     ) -> None:
+        """Initializes the Manifest.
+
+        Args:
+            manifest_paths: A path or list of paths to load manifests from.
+            save_path: The default path for saving the manifest.
+            temp_directory: A directory for temporary files. Required if
+                            `save_path` is not provided.
+            save_event: An optional event to coordinate save operations.
+        """
         self.temp_directory = temp_directory
         if save_path:
             self.path = save_path
@@ -89,7 +109,19 @@ class Manifest:
         no_walk: bool = False,
         rebuild_sources: bool = True,
     ) -> None:
-        """Save manifest to disk at specified path."""
+        """Saves the manifest to disk.
+
+        This method writes the main hash data and the set of read sources to
+        their respective files.
+
+        Args:
+            path: The path to save the manifest to. If None, the default
+                  path is used.
+            no_walk: If True, the read sources are not repopulated from the
+                     main data before saving.
+            rebuild_sources: If True, the read sources are repopulated from
+                             the main data.
+        """
         if self.save_event:
             self.save_event.set()
         path = path or self.path
@@ -112,14 +144,22 @@ class Manifest:
                 self.save_event.clear()
 
     def close(self) -> None:
-        """Close the manifest and its underlying database files."""
+        """Closes the underlying database files for the manifest."""
         if hasattr(self, "md5_data") and hasattr(self.md5_data, "close"):
             self.md5_data.close()
         if hasattr(self, "read_sources") and hasattr(self.read_sources, "close"):
             self.read_sources.close()
 
     def load(self, path: Optional[str] = None) -> None:
-        """Load manifest from disk at specified path."""
+        """Loads a manifest from disk.
+
+        This method closes any existing manifest data and loads new data from
+        the specified path.
+
+        Args:
+            path: The path to the manifest file to load. If None, the default
+                  path is used.
+        """
         path = path or self.path
         self.close()
         self.md5_data, self.read_sources = self._load_manifest(path=path)
@@ -133,7 +173,14 @@ class Manifest:
         return self.md5_data.items()
 
     def remove_files(self, files_to_remove: List[str]) -> None:
-        """Remove a list of files from the manifest."""
+        """Removes a list of specified files from the manifest.
+
+        This method updates both the main hash data and the read sources to
+        remove all traces of the specified files.
+
+        Args:
+            files_to_remove: A list of file paths to be removed.
+        """
         # Create a reverse lookup from path to hash
         path_to_hash = {}
         for hash_val, file_list in self.md5_data.items():
@@ -169,7 +216,11 @@ class Manifest:
                     self.read_sources[src] = None
 
     def hash_set(self) -> Set[str]:
-        """Return set of all hash keys in manifest."""
+        """Returns a set of all hash keys present in the manifest.
+
+        Returns:
+            A set containing all the unique hash keys.
+        """
         return set(self.md5_data.keys())
 
     def _load_manifest(self, path: Optional[str] = None) -> Tuple[Any, Any]:
@@ -255,7 +306,17 @@ class Manifest:
     def convert_manifest_paths(
         self, paths_from: str, paths_to: str, temp_directory: Optional[str] = None
     ) -> None:
-        """Replaces all prefixes for all paths in the manifest with a new prefix"""
+        """Converts file paths in the manifest by replacing a prefix.
+
+        This method is useful for adapting a manifest to a new directory
+        structure, for example, when moving files to a different location.
+
+        Args:
+            paths_from: The prefix to be replaced in the file paths.
+            paths_to: The new prefix to substitute.
+            temp_directory: A directory for temporary files during the
+                            conversion.
+        """
         temp_directory = temp_directory or self.temp_directory
         for key, val in self.md5_data.items():
             new_values = []

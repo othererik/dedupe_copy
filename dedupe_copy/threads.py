@@ -48,7 +48,22 @@ def _is_file_processing_required(
     extensions: Optional[List[str]],
     progress_queue: Optional["queue.PriorityQueue[Any]"],
 ) -> bool:
-    """Check if a file needs to be processed based on rules."""
+    """Determines if a file should be processed based on various criteria.
+
+    This function checks if a file has already been processed, if it matches
+    any ignored patterns, or if it has a permitted extension.
+
+    Args:
+        filepath: The path to the file to check.
+        already_processed: A set-like object of paths that have already
+                           been processed.
+        ignore: A list of glob patterns for files to ignore.
+        extensions: A list of allowed file extensions.
+        progress_queue: An optional queue for reporting progress.
+
+    Returns:
+        True if the file should be processed, False otherwise.
+    """
     if filepath in already_processed:
         return False
     if ignore:
@@ -66,7 +81,16 @@ def _is_file_processing_required(
 
 
 def distribute_work(src: str, config: DistributeWorkConfig) -> None:
-    """Distributes files to the appropriate queues for processing."""
+    """Scans a directory and distributes its contents to worker queues.
+
+    This function iterates through the items in a given directory. Subdirectories
+    are added to the walk queue for further scanning, and files that meet the
+    processing criteria are added to the work queue.
+
+    Args:
+        src: The directory path to scan.
+        config: The configuration for the work distribution.
+    """
     if config.walk_config.ignore:
         for ignored_pattern in config.walk_config.ignore:
             if fnmatch.fnmatch(src, ignored_pattern):
@@ -133,7 +157,18 @@ def _copy_file(
 
 
 class CopyThread(threading.Thread):
-    """Copy to target_path for given extensions (all if None)"""
+    """A worker thread for copying files.
+
+    This thread processes file copy tasks from a queue, calculating the
+    destination path based on configured rules and performing the copy
+    operation.
+
+    Attributes:
+        work: The queue of files to be copied.
+        config: The configuration for the copy operation.
+        stop_event: An event to signal the thread to stop.
+        progress_queue: An optional queue for reporting progress.
+    """
 
     def __init__(
         self,
@@ -143,6 +178,14 @@ class CopyThread(threading.Thread):
         copy_config: "CopyConfig",
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
     ) -> None:
+        """Initializes the CopyThread.
+
+        Args:
+            work_queue: The queue of files to be copied.
+            stop_event: An event to signal the thread to stop.
+            copy_config: The configuration for the copy operation.
+            progress_queue: An optional queue for reporting progress.
+        """
         super().__init__()
         self.work = work_queue
         self.config = copy_config
@@ -169,6 +212,12 @@ class CopyThread(threading.Thread):
         return os.path.join(self.config.target_path, ext, mtime, os.path.basename(src))
 
     def run(self) -> None:
+        """The main execution loop for the thread.
+
+        This method continuously fetches tasks from the work queue and
+        performs the copy operation until the stop event is set and the
+        queue is empty.
+        """
         while not self.stop_event.is_set() or not self.work.empty():
             try:
                 src, mtime, size = self.work.get(True, 0.1)
@@ -186,7 +235,21 @@ class CopyThread(threading.Thread):
 
 
 class ResultProcessor(threading.Thread):
-    """Takes results of work queue and builds result data structure"""
+    """A worker thread for processing file hashing results.
+
+    This thread consumes results from the result queue, updates the main
+    manifest, and identifies hash collisions. It processes results in batches
+    for efficiency and supports incremental saving of the manifest.
+
+    Attributes:
+        stop_event: An event to signal the thread to stop.
+        results: The queue of file hashing results to process.
+        collisions: A dictionary-like object to store hash collisions.
+        manifest: The main manifest object.
+        progress_queue: An optional queue for reporting progress.
+        empty: If True, empty files are processed.
+        save_event: An optional event to coordinate save operations.
+    """
 
     INCREMENTAL_SAVE_SIZE = 50000
     BATCH_SIZE = 1000
@@ -202,6 +265,17 @@ class ResultProcessor(threading.Thread):
         keep_empty: bool = False,
         save_event: Optional[threading.Event] = None,
     ) -> None:
+        """Initializes the ResultProcessor.
+
+        Args:
+            stop_event: An event to signal the thread to stop.
+            result_queue: The queue of file hashing results.
+            collisions: A dictionary-like object for storing collisions.
+            manifest: The main manifest object.
+            progress_queue: An optional queue for reporting progress.
+            keep_empty: If True, empty files are processed.
+            save_event: An optional event to coordinate save operations.
+        """
         super().__init__()
 
         self.stop_event = stop_event
@@ -277,6 +351,12 @@ class ResultProcessor(threading.Thread):
 
     # pylint: disable=R0912
     def run(self) -> None:
+        """The main execution loop for the thread.
+
+        This method continuously fetches results from the results queue,
+        processes them in batches, and triggers incremental saves of the
+        manifest as needed.
+        """
         processed = 0
         # this code is getting complex, refactor
         while not self.stop_event.is_set() or not self.results.empty():
@@ -345,7 +425,19 @@ class ResultProcessor(threading.Thread):
 
 
 class ReadThread(threading.Thread):
-    """Thread worker for hashing"""
+    """A worker thread for reading and hashing files.
+
+    This thread consumes file paths from a work queue, reads the file content,
+    calculates its hash, and places the result in a result queue.
+
+    Attributes:
+        work: The queue of file paths to be processed.
+        results: The queue where hashing results are placed.
+        stop_event: An event to signal the thread to stop.
+        walk_config: Configuration for the file walk, including the hash algorithm.
+        progress_queue: An optional queue for reporting progress.
+        save_event: An optional event to coordinate save operations.
+    """
 
     def __init__(
         self,
@@ -357,6 +449,16 @@ class ReadThread(threading.Thread):
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
         save_event: Optional[threading.Event] = None,
     ) -> None:
+        """Initializes the ReadThread.
+
+        Args:
+            work_queue: The queue of file paths to be processed.
+            result_queue: The queue for hashing results.
+            stop_event: An event to signal the thread to stop.
+            walk_config: Configuration for the file walk.
+            progress_queue: An optional queue for reporting progress.
+            save_event: An optional event to coordinate save operations.
+        """
         super().__init__()
         self.work = work_queue
         self.results = result_queue
@@ -367,6 +469,12 @@ class ReadThread(threading.Thread):
         self.daemon = True
 
     def run(self) -> None:
+        """The main execution loop for the thread.
+
+        This method continuously fetches file paths from the work queue,
+        hashes them, and places the results in the result queue, until the
+        stop event is set and the queue is empty.
+        """
         while not self.stop_event.is_set() or not self.work.empty():
             if self.save_event and self.save_event.is_set():
                 time.sleep(1)
@@ -394,7 +502,21 @@ class ReadThread(threading.Thread):
 
 
 class ProgressThread(threading.Thread):
-    """All Status updates should come through here."""
+    """A thread for monitoring and reporting the application's progress.
+
+    This thread consumes progress messages from a priority queue and logs
+    them to provide real-time feedback on the application's status. It also
+    tracks various statistics and prints a summary at the end of the
+    operation.
+
+    Attributes:
+        work: The work queue, monitored for size.
+        result_queue: The result queue, monitored for size.
+        progress_queue: The queue of progress messages to be processed.
+        walk_queue: The walk queue, monitored for size.
+        stop_event: An event to signal the thread to stop.
+        save_event: An event to coordinate save operations.
+    """
 
     file_count_log_interval = 1000
 
@@ -408,6 +530,16 @@ class ProgressThread(threading.Thread):
         stop_event: threading.Event,
         save_event: threading.Event,
     ) -> None:
+        """Initializes the ProgressThread.
+
+        Args:
+            work_queue: The work queue to monitor.
+            result_queue: The result queue to monitor.
+            progress_queue: The queue of progress messages.
+            walk_queue: The walk queue to monitor.
+            stop_event: An event to signal the thread to stop.
+            save_event: An event to coordinate save operations.
+        """
         super().__init__()
         self.work = work_queue
         self.result_queue = result_queue
@@ -516,8 +648,12 @@ class ProgressThread(threading.Thread):
         logger.info(message)
 
     def run(self) -> None:
-        """Run loop that retrieves items from the progress queue and
-        dispatches to the correct handler."""
+        """The main execution loop for the thread.
+
+        This method continuously fetches messages from the progress queue and
+        dispatches them to the appropriate handler function. It also logs
+        periodic status updates.
+        """
         last_update = time.time()
         while not self.stop_event.is_set() or not self.progress_queue.empty():
             try:
@@ -577,7 +713,17 @@ class ProgressThread(threading.Thread):
 
 
 class DeleteThread(threading.Thread):
-    """Deletes files from a queue."""
+    """A worker thread for deleting files.
+
+    This thread consumes file paths from a queue and deletes them from the
+    filesystem. It supports a dry-run mode for simulating deletions.
+
+    Attributes:
+        work: The queue of file paths to be deleted.
+        stop_event: An event to signal the thread to stop.
+        progress_queue: An optional queue for reporting progress.
+        dry_run: If True, deletions are simulated but not performed.
+    """
 
     def __init__(
         self,
@@ -587,6 +733,14 @@ class DeleteThread(threading.Thread):
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
         dry_run: bool = False,
     ) -> None:
+        """Initializes the DeleteThread.
+
+        Args:
+            work_queue: The queue of file paths to be deleted.
+            stop_event: An event to signal the thread to stop.
+            progress_queue: An optional queue for reporting progress.
+            dry_run: If True, simulates deletions.
+        """
         super().__init__()
         self.work = work_queue
         self.stop_event = stop_event
@@ -595,6 +749,11 @@ class DeleteThread(threading.Thread):
         self.daemon = True
 
     def run(self) -> None:
+        """The main execution loop for the thread.
+
+        This method continuously fetches file paths from the work queue and
+        deletes them, until the stop event is set and the queue is empty.
+        """
         # pylint: disable=R1702
         while not self.stop_event.is_set() or not self.work.empty():
             try:
@@ -626,7 +785,18 @@ class DeleteThread(threading.Thread):
 
 
 class WalkThread(threading.Thread):
-    """Thread that walks directory trees to discover files."""
+    """A worker thread for walking directory trees to discover files.
+
+    This thread consumes directory paths from a walk queue, scans them for
+    subdirectories and files, and distributes them to the appropriate queues
+    for further processing.
+
+    Attributes:
+        walk_queue: The queue of directory paths to be walked.
+        stop_event: An event to signal the thread to stop.
+        distribute_config: The configuration for work distribution.
+        save_event: An optional event to coordinate save operations.
+    """
 
     def __init__(
         self,
@@ -639,6 +809,17 @@ class WalkThread(threading.Thread):
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
         save_event: Optional[threading.Event] = None,
     ) -> None:
+        """Initializes the WalkThread.
+
+        Args:
+            walk_queue: The queue of directory paths to be walked.
+            stop_event: An event to signal the thread to stop.
+            walk_config: The configuration for the filesystem walk.
+            work_queue: The queue for files to be processed.
+            already_processed: A set-like object of already processed paths.
+            progress_queue: An optional queue for reporting progress.
+            save_event: An optional event to coordinate save operations.
+        """
         super().__init__()
         self.walk_queue = walk_queue
         self.stop_event = stop_event
@@ -653,6 +834,12 @@ class WalkThread(threading.Thread):
         self.daemon = True
 
     def run(self) -> None:
+        """The main execution loop for the thread.
+
+        This method continuously fetches directory paths from the walk queue
+        and processes them, until the stop event is set and the queue is
+        empty.
+        """
         while not self.stop_event.is_set() or not self.walk_queue.empty():
             if self.save_event and self.save_event.is_set():
                 time.sleep(1)
