@@ -26,7 +26,26 @@ def path_rules_parser(
     src: str,
     read_paths: List[str],
 ) -> Tuple[str, str]:
-    """Builds a path based on the path rules for the given extension pattern"""
+    """Constructs a destination path for a file based on a set of rules.
+
+    This function applies a series of rules to determine the final directory
+    and file path for a copied file. The rules are matched based on the
+    file's extension.
+
+    Args:
+        rules: A dictionary mapping extension patterns to a list of path rules.
+        dest_dir: The base destination directory.
+        extension: The file extension of the source file.
+        mtime_str: A string representation of the file's modification time.
+        _size: The size of the file (currently unused).
+        source_dirs: The source directory of the file.
+        src: The source filename.
+        read_paths: A list of the root paths for the copy operation.
+
+    Returns:
+        A tuple containing the full destination path and the destination
+        directory.
+    """
     ext_key = extension if extension else ""
     best_match_key = _best_match(rules.keys(), ext_key)
     rule_list = (
@@ -77,7 +96,22 @@ def _best_match(extensions: Any, ext: str) -> Optional[str]:
 
 
 def build_path_rules(rule_pairs: List[str]) -> Callable[..., Tuple[str, str]]:
-    """Create the rule applying function for path rule pairs"""
+    """Parses a list of rule strings and returns a configured path rule function.
+
+    This function takes a list of strings, each defining a path rule for a
+    specific file extension pattern, and returns a partially configured
+    `path_rules_parser` function that is ready to be used in the copy process.
+
+    Args:
+        rule_pairs: A list of strings, where each string is in the format
+                    "extension:rule".
+
+    Returns:
+        A callable that takes file information and returns a destination path.
+
+    Raises:
+        ValueError: If an unknown path rule is encountered.
+    """
     rules: Dict[str, List[str]] = defaultdict(list)
     for rule in rule_pairs:
         extension, rule = rule.split(":")

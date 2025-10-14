@@ -238,7 +238,11 @@ This copies all files from source to destination, skipping any duplicates.
 dedupecopy -p /source/path -c /destination/path -m manifest.db
 ```
 
-Creates a manifest file that allows you to resume if interrupted.
+Creates a manifest file that allows you to resume if interrupted. For example, if the operation is stopped, you can resume it with:
+
+```bash
+dedupecopy -p /source/path -c /destination/path -i manifest.db -m manifest.db
+```
 
 ### Delete Duplicates
 
@@ -258,15 +262,16 @@ Manifests are database files that store:
 - Which files have been scanned
 
 **Benefits:**
-- Resume interrupted operations
-- Compare file systems without re-scanning
-- Incremental backup workflows
-- Track what has been processed
+- **Resumability**: If an operation is interrupted, you can resume it by loading the manifest. The tool will skip any files that have already been processed.
+- **Comparison**: Manifests can be used to compare file systems without re-scanning. For example, you can compare a source and a destination to see which files are missing from the destination.
+- **Incremental Backups**: By loading a manifest from a previous backup, you can process only new or modified files.
+- **Tracking**: Manifests keep a record of which files have been processed, which is useful for auditing and tracking.
 
 **Usage:**
 - `-m manifest.db` - Save manifest after processing
 - `-i manifest.db` - Load existing manifest before processing
-- Manifest files are stored in a disk-based cache format (`.db` extension)
+
+**Note:** Manifest files are SQLite databases. The main manifest file has a `.db` extension, and there is a corresponding `.db.read` file that tracks which files have been read.
 
 ### Duplicate Detection
 
@@ -416,7 +421,7 @@ Different organization rules for different file types.
 
 | Option | Description |
 |--------|-------------|
-| `--compare PATH` | Load manifest but don't copy its files (for comparison only). Can be specified multiple times. |
+| `--compare PATH` | Load manifest but don't copy its files (for comparison only). This is useful for excluding files that are already present in a destination or another source. Can be specified multiple times. |
 | `--copy-metadata` | Preserve file timestamps and permissions (uses `shutil.copy2` instead of `copyfile`). |
 | `--keep-empty` | Treat empty (0-byte) files as unique rather than duplicates. |
 | `--ignore-old-collisions` | Only detect new duplicates (ignore duplicates already in loaded manifest). |
@@ -579,15 +584,25 @@ Updates all paths in the manifest without re-scanning files.
 
 ### Incremental Backup
 
-```bash
-# Initial backup
-dedupecopy -p /photos -c /backup/photos -m backup_manifest.db
+To back up a directory and then incrementally update the backup with only new or modified files, you can use the following workflow:
 
-# Later, add new photos (resuming/adding to existing backup)
-dedupecopy -p /photos -c /backup/photos -i backup_manifest.db -m backup_manifest.db
+#### Step 1: Initial Backup
+
+Run an initial backup of the source directory, creating a manifest file.
+
+```bash
+dedupecopy -p /path/to/source -c /path/to/backup -m backup_manifest.db
 ```
 
-Only new or modified files are processed.
+#### Step 2: Incremental Update
+
+To perform an incremental backup, load the manifest from the previous backup. This will ensure that only new or modified files are processed.
+
+```bash
+dedupecopy -p /path/to/source -c /path/to/backup -i backup_manifest.db -m backup_manifest.db
+```
+
+This will scan the source directory and copy only the files that are not already in the backup (according to the manifest). The manifest will be updated with the new files.
 
 ### Comparison Without Copying
 
