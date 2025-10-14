@@ -6,7 +6,14 @@ from typing import Any, Callable, List, Optional, Tuple
 
 @dataclass
 class WalkConfig:
-    """Configuration for the walking phase."""
+    """Defines the configuration for the filesystem walking process.
+
+    Attributes:
+        extensions: An optional list of file extensions to include in the walk.
+                    If None, all extensions are included.
+        ignore: An optional list of glob patterns to ignore during the walk.
+        hash_algo: The hashing algorithm to use for file content.
+    """
 
     extensions: Optional[List[str]] = None
     ignore: Optional[List[str]] = None
@@ -15,7 +22,15 @@ class WalkConfig:
 
 @dataclass
 class CopyConfig:
-    """Configuration for the copy phase."""
+    """Specifies the parameters for a file copy operation.
+
+    Attributes:
+        target_path: The destination directory for the copy operation.
+        read_paths: A list of source directories to read files from.
+        extensions: An optional list of file extensions to include.
+        path_rules: Optional rules for transforming file paths during the copy.
+        preserve_stat: If True, file metadata (like timestamps) is preserved.
+    """
 
     target_path: str
     read_paths: List[str]
@@ -26,7 +41,15 @@ class CopyConfig:
 
 @dataclass
 class CopyJob:
-    """Configuration for a copy job."""
+    """Defines a complete copy job, combining configuration and operational settings.
+
+    Attributes:
+        copy_config: The core configuration for the copy operation.
+        ignore: A list of glob patterns to exclude from the copy.
+        no_copy: A set-like object of hashes to prevent from being copied.
+        ignore_empty_files: If True, files with zero size are not copied.
+        copy_threads: The number of concurrent threads to use for copying.
+    """
 
     copy_config: CopyConfig
     ignore: Optional[List[str]] = None
@@ -37,7 +60,13 @@ class CopyJob:
 
 @dataclass
 class DeleteJob:
-    """Configuration for a delete job."""
+    """Configures the behavior of a duplicate file deletion job.
+
+    Attributes:
+        delete_threads: The number of concurrent threads for deletion.
+        dry_run: If True, simulates deletion without removing files.
+        min_delete_size_bytes: The minimum size for a file to be deleted.
+    """
 
     delete_threads: int = 8
     dry_run: bool = False

@@ -27,7 +27,13 @@ READ_CHUNK = 1048576  # 1 MB
 
 
 def ensure_logging_configured() -> None:
-    """Ensure logging is configured with sensible defaults if not already set"""
+    """Ensures that the logging system is configured.
+
+    If the logger for the `dedupe_copy` package has no handlers, this function
+    sets up a basic configuration that logs to the console. This is intended
+    for cases where the application is used as a library and the calling code
+    has not configured logging.
+    """
     root_logger = logging.getLogger("dedupe_copy")
     if not root_logger.handlers:
         # No handlers configured yet, set up basic configuration
@@ -80,7 +86,14 @@ def _throttle_puts(current_size: int) -> None:
 
 
 def lower_extension(src: str) -> str:
-    """Extract and return the lowercase file extension."""
+    """Extracts and returns the lowercase file extension from a path.
+
+    Args:
+        src: The file path.
+
+    Returns:
+        The file extension in lowercase, without the leading dot.
+    """
     _, extension = os.path.splitext(src)
     return extension[1:].lower()
 
@@ -112,7 +125,16 @@ def hash_file(src: str, hash_algo: str = "md5") -> str:
 
 
 def read_file(src: str, hash_algo: str = "md5") -> Tuple[str, int, float, str]:
-    """Read file and return its metadata including checksum and size."""
+    """Reads a file and returns its metadata, including its hash.
+
+    Args:
+        src: The path to the file.
+        hash_algo: The hashing algorithm to use.
+
+    Returns:
+        A tuple containing the file's hash, size, modification time, and
+        the original file path.
+    """
     size = os.path.getsize(src)
     mtime = os.path.getmtime(src)
     file_hash = hash_file(src, hash_algo=hash_algo)
@@ -120,7 +142,19 @@ def read_file(src: str, hash_algo: str = "md5") -> Tuple[str, int, float, str]:
 
 
 def match_extension(extensions: Optional[List[str]], fn: str) -> bool:
-    """Returns true if extensions is empty"""
+    """Checks if a filename matches any of the provided extension patterns.
+
+    This function supports both exact extension matches and glob-style
+    wildcard patterns.
+
+    Args:
+        extensions: A list of extension patterns to check against. If None or
+                    empty, the function returns True.
+        fn: The filename to check.
+
+    Returns:
+        True if the filename matches any of the patterns, False otherwise.
+    """
     if not extensions:
         return True
     for included_pattern in extensions:
@@ -134,7 +168,18 @@ def match_extension(extensions: Optional[List[str]], fn: str) -> bool:
 
 
 def clean_extensions(extensions: Optional[List[str]]) -> List[str]:
-    """Cleans and normalizes a list of file extensions."""
+    """Normalizes a list of file extensions into a consistent format.
+
+    This function processes a list of extension strings, converting them to
+    lowercase and ensuring they are in a wildcard format suitable for use
+    with `fnmatch`.
+
+    Args:
+        extensions: A list of file extension strings to be cleaned.
+
+    Returns:
+        A new list of cleaned and normalized extension patterns.
+    """
     clean: List[str] = []
     if extensions is not None:
         for ext in extensions:

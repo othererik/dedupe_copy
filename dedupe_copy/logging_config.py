@@ -17,7 +17,16 @@ except ImportError:
 
 
 class ColoredFormatter(logging.Formatter):
-    """Custom formatter with color support for terminal output"""
+    """A logging formatter that adds color to terminal output.
+
+    This formatter enhances the standard `logging.Formatter` by adding
+    color codes to log level names, making the output more readable in
+    a terminal that supports ANSI escape codes.
+
+    Attributes:
+        COLORS: A dictionary mapping log levels to color codes.
+        RESET: The ANSI code to reset text formatting.
+    """
 
     # Color mappings for different log levels
     COLORS = {
@@ -45,11 +54,17 @@ class ColoredFormatter(logging.Formatter):
 
 
 def setup_logging(verbosity: str = "normal", use_colors: bool = True) -> None:
-    """Setup logging configuration for dedupe_copy
+    """Configures the logging setup for the application.
+
+    This function initializes the logging system with a specified verbosity
+    level and enables colored output if supported. It sets up a handler
+    that writes to the console and applies a formatter for the log messages.
 
     Args:
-        verbosity: One of 'quiet', 'normal', 'verbose', 'debug'
-        use_colors: Whether to use colored output (only if colorama available)
+        verbosity: The desired level of logging verbosity. Can be one of
+                   'quiet', 'normal', 'verbose', or 'debug'.
+        use_colors: If True, enables colored output in the terminal, provided
+                    the `colorama` library is installed.
     """
     # Initialize colorama if available
     if HAS_COLORAMA and use_colors:

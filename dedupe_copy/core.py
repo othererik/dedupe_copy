@@ -41,6 +41,18 @@ def _walk_fs(
     walk_threads: int = 4,
     save_event: Optional[threading.Event] = None,
 ) -> None:
+    """Initializes and manages worker threads for walking the filesystem.
+
+    Args:
+        read_paths: A list of starting paths for the filesystem walk.
+        walk_config: Configuration for the walk, including file extensions and ignored patterns.
+        work_queue: A queue to which discovered file paths are added for processing.
+        walk_queue: A queue for managing the directories to be walked.
+        already_processed: A set-like object of paths to skip.
+        progress_queue: An optional queue for reporting progress.
+        walk_threads: The number of concurrent threads to use for walking.
+        save_event: An optional event to signal for saving progress.
+    """
     if walk_queue is None:
         walk_queue = queue.Queue()
     walk_done = threading.Event()
@@ -71,8 +83,14 @@ def _walk_fs(
 
 
 def _extension_report(md5_data: Any, show_count: int = 10) -> int:
-    """Print details for each extension, sorted by total size, return
-    total size for all extensions
+    """Generates and logs a report of file extensions, sorted by size and count.
+
+    Args:
+        md5_data: A dictionary containing file hash information and metadata.
+        show_count: The number of top extensions to display in the report.
+
+    Returns:
+        The total size in bytes of all files accounted for in the report.
     """
     sizes: Counter[str] = Counter()
     extension_counts: Counter[str] = Counter()
@@ -105,7 +123,14 @@ def generate_report(
     read_paths: Literal[""] | list[str] | None,
     hash_algo: str,
 ) -> None:
-    """Generate a CSV report of duplicate files."""
+    """Creates a CSV file detailing all detected file collisions.
+
+    Args:
+        csv_report_path: The file path where the report will be saved.
+        collisions: A dictionary of hash collisions to be included in the report.
+        read_paths: The source paths that were scanned for duplicates.
+        hash_algo: The hashing algorithm used to detect duplicates.
+    """
     logger.info("Generating CSV report at %s", csv_report_path)
     try:
         with open(csv_report_path, "wb") as result_fh:
@@ -140,7 +165,23 @@ def _start_read_threads_and_process_results(
     read_threads: int,
     walk_config: "WalkConfig",
 ) -> Tuple[ResultProcessor, List[ReadThread], threading.Event, threading.Event]:
-    """Starts the read threads and result processor."""
+    """Configures and starts the file reading and result processing threads.
+
+    Args:
+        work_queue: Queue of file paths to be read and hashed.
+        result_queue: Queue for storing the results of file processing.
+        collisions: A dictionary-like object to store detected collisions.
+        manifest: The main manifest object for tracking all file data.
+        keep_empty: If True, empty files are kept and processed.
+        progress_queue: Optional queue for reporting progress updates.
+        save_event: Optional event to signal when to save the manifest.
+        read_threads: The number of concurrent threads for reading files.
+        walk_config: Configuration for the filesystem walk.
+
+    Returns:
+        A tuple containing the result processor, a list of read threads,
+        and events to signal work and result processing completion.
+    """
     work_stop_event = threading.Event()
     result_stop_event = threading.Event()
     result_processor = ResultProcessor(
@@ -189,7 +230,28 @@ def find_duplicates(
     save_event: Optional[threading.Event] = None,
     walk_queue: Optional["queue.Queue[str]"] = None,
 ) -> Tuple[Any, Any]:
-    """Find duplicate files by comparing checksums across directories."""
+    """Coordinates the process of finding duplicate files.
+
+    This function orchestrates the filesystem walk, file reading, and result
+    processing to identify duplicate files based on their content hashes.
+
+    Args:
+        read_paths: A list of directory paths to scan for files.
+        work_queue: The queue for file paths awaiting processing.
+        result_queue: The queue for storing results from file hashing.
+        manifest: The central manifest of all processed files.
+        collisions: A dictionary to store detected hash collisions.
+        walk_config: Configuration for the filesystem walk.
+        progress_queue: Optional queue for progress updates.
+        walk_threads: Number of threads for walking the filesystem.
+        read_threads: Number of threads for reading and hashing files.
+        keep_empty: If True, empty files are included in the processing.
+        save_event: Event to signal when to save the manifest.
+        walk_queue: Optional queue for managing directories to be walked.
+
+    Returns:
+        A tuple containing the dictionary of collisions and the final manifest.
+    """
     (
         result_processor,
         work_threads,
@@ -235,8 +297,20 @@ def find_duplicates(
 
 
 def info_parser(data: Any) -> Iterator[Tuple[str, str, str, int]]:
-    """Yields (MD5, path, mtime_string, size) tuples from a md5_data
-    dictionary"""
+    """Parses manifest data and yields structured file information.
+
+    This generator function iterates through a dictionary of file hashes and
+    associated metadata, yielding a tuple with the hash, path, formatted
+    modification time, and size for each file.
+
+    Args:
+        data: A dictionary where keys are file hashes and values are lists of
+              file metadata tuples (path, size, mtime).
+
+    Yields:
+        A tuple containing the MD5 hash, file path, a string representation
+        of the modification year and month, and the file size.
+    """
     if data:
         for md5, info in data.items():
             for item in info:
@@ -257,7 +331,22 @@ def queue_copy_work(
     *,
     copy_job: "CopyJob",
 ) -> Any:
-    """Queue copy operations for file duplication."""
+    """Populates the copy queue with files to be processed.
+
+    This function iterates through the provided data, filters out files that
+    have already been copied or are explicitly ignored, and adds the remaining
+    files to the copy queue.
+
+    Args:
+        copy_queue: The queue to which copy tasks will be added.
+        data: A dictionary of file data to be considered for copying.
+        progress_queue: An optional queue for reporting progress.
+        copied: A set-like object of hashes that have already been copied.
+        copy_job: The configuration for the copy operation.
+
+    Returns:
+        The updated `copied` object.
+    """
     for md5, path, mtime, size in info_parser(data):
         if md5 not in copied:
             action_required = True
@@ -287,7 +376,18 @@ def copy_data(
     *,
     copy_job: "CopyJob",
 ) -> None:
-    """Queues up the copy work, waits for threads to finish"""
+    """Manages the process of copying files.
+
+    This function sets up and manages a pool of worker threads to perform
+    file copy operations. It queues the copy tasks for both duplicate and
+    unique files and ensures all copy operations are completed.
+
+    Args:
+        dupes: A dictionary of duplicate files to be copied.
+        all_data: A dictionary of all files to be considered for copying.
+        progress_queue: An optional queue for reporting progress.
+        copy_job: The configuration for the copy operation.
+    """
     stop_event = threading.Event()
     copy_queue: "queue.Queue[Tuple[str, str, int]]" = queue.Queue()
     workers = []
@@ -352,7 +452,21 @@ def delete_files(
     *,
     delete_job: "DeleteJob",
 ) -> List[str]:
-    """Queues up and deletes duplicate files."""
+    """Coordinates the deletion of duplicate files.
+
+    This function identifies which files to delete from a list of duplicates,
+    queues them for deletion, and manages a pool of worker threads to carry
+    out the deletion tasks.
+
+    Args:
+        duplicates: A dictionary where keys are hashes and values are lists of
+                    file metadata for duplicate files.
+        progress_queue: An optional queue for reporting progress.
+        delete_job: The configuration for the delete operation.
+
+    Returns:
+        A list of paths of the files that were queued for deletion.
+    """
     stop_event = threading.Event()
     delete_queue: "queue.Queue[str]" = queue.Queue()
     workers = []
@@ -501,7 +615,38 @@ def run_dupe_copy(
     min_delete_size: int = 0,
     verify_manifest: bool = False,
 ) -> None:
-    """For external callers this is the entry point for dedupe + copy"""
+    """Main entry point for the deduplication and copy functionality.
+
+    This function serves as the primary interface for external callers,
+    orchestrating the entire workflow of finding, reporting, and handling
+    duplicate files based on the provided configuration.
+
+    Args:
+        read_from_path: The source path(s) to scan for files.
+        extensions: A list of file extensions to include in the scan.
+        manifests_in_paths: Path(s) to input manifest files.
+        manifest_out_path: Path to save the output manifest file.
+        path_rules: Rules for path conversion during the copy process.
+        copy_to_path: The destination path for copied files.
+        ignore_old_collisions: If True, ignores collisions from old manifests.
+        ignored_patterns: Patterns for files/directories to ignore.
+        csv_report_path: Path to generate a CSV report of duplicates.
+        walk_threads: Number of threads for walking the filesystem.
+        read_threads: Number of threads for reading and hashing files.
+        copy_threads: Number of threads for copying files.
+        hash_algo: The hashing algorithm to use.
+        convert_manifest_paths_to: Target path for manifest path conversion.
+        convert_manifest_paths_from: Source path for manifest path conversion.
+        no_walk: If True, skips the filesystem walk and uses manifests only.
+        no_copy: A list of hashes to exclude from copying.
+        keep_empty: If True, empty files are processed.
+        compare_manifests: Manifests to compare against for filtering copies.
+        preserve_stat: If True, preserves file stats during copy.
+        delete_duplicates: If True, deletes duplicate files.
+        dry_run: If True, simulates deletion without actual file removal.
+        min_delete_size: Minimum size for a file to be considered for deletion.
+        verify_manifest: If True, verifies the integrity of the manifest.
+    """
     # Ensure logging is configured for programmatic calls
     ensure_logging_configured()
 

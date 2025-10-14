@@ -1,4 +1,5 @@
 """Performance tests for the Manifest class."""
+
 import os
 import time
 import unittest
@@ -22,7 +23,9 @@ class TestManifestPerformance(unittest.TestCase):
     def test_remove_files_performance(self):
         """Test the performance of the remove_files method with a large manifest."""
         manifest_path = os.path.join(self.temp_dir, "large_manifest.db")
-        manifest = Manifest(manifest_paths=None, save_path=manifest_path, temp_directory=self.temp_dir)
+        manifest = Manifest(
+            manifest_paths=None, save_path=manifest_path, temp_directory=self.temp_dir
+        )
 
         # Populate the manifest with a large number of files
         num_files = 50000
@@ -61,7 +64,10 @@ class TestManifestPerformance(unittest.TestCase):
         end_time = time.time()
 
         duration = end_time - start_time
-        print(f"remove_files duration for {len(files_to_remove)} files from {num_files}: {duration:.4f} seconds")
+        print(
+            f"remove_files duration for {len(files_to_remove)} files "
+            f"from {num_files}: {duration:.4f} seconds"
+        )
 
         # Verify that the correct number of files were removed
         expected_remaining = num_files - len(files_to_remove)
@@ -82,5 +88,6 @@ class TestManifestPerformance(unittest.TestCase):
 
         manifest.close()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

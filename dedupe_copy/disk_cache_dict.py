@@ -1,11 +1,9 @@
-"""A LRUish cache / disk backed  (via a database) dictionary
-implementation
+"""Provides a disk-backed dictionary with an in-memory cache.
 
-Currently uses sqlite3 as the backend.
-
-Note: Future enhancements could include:
-    - Document backend requirements and interface
-    - Implement full LRU eviction policy (currently uses random eviction)
+This module offers `CacheDict` and `DefaultCacheDict`, dictionary-like
+classes that use an in-memory cache for performance and a database backend
+for persistence. The current implementation uses SQLite as the storage
+backend, managed by the `SqliteBackend` class.
 """
 
 import collections.abc
@@ -23,8 +21,14 @@ DEBUG = False
 
 
 class SqliteBackend:
-    """A thread-safe SQLite backend using a single connection with a lock.
-    Query/update scheme adapted from Erez Shinan's filedict project.
+    """Manages a thread-safe SQLite database for key-value storage.
+
+    This class provides a dictionary-like interface to a SQLite database,
+    ensuring thread safety through a single connection and a lock. It is
+    designed to be used as a backend for caching and persistent storage.
+
+    Attributes:
+        table: The name of the database table used for storage.
     """
 
     def __init__(
@@ -33,7 +37,15 @@ class SqliteBackend:
         db_table: str = "sql_dict_table",
         unlink_old_db: bool = False,
     ) -> None:
-        """Create the db and tables"""
+        """Initializes the backend, creating the database and table if they don't exist.
+
+        Args:
+            db_file: The path to the SQLite database file. If None, a default
+                     name is generated.
+            db_table: The name of the table to use for storage.
+            unlink_old_db: If True, any existing database file at the specified
+                           path will be deleted.
+        """
         if db_file is None:
             db_file = f"db_file_{int(time.time())}.dict"
         if unlink_old_db and os.path.exists(db_file):
@@ -229,7 +241,15 @@ class SqliteBackend:
             ]
 
     def commit(self, force: bool = False) -> None:
-        """Commit any pending transactions to the database."""
+        """Commits any pending transactions to the database.
+
+        A commit is automatically triggered after a certain number of writes,
+        but this method can be used to force an immediate commit.
+
+        Args:
+            force: If True, a commit is performed even if no writes have been
+                   recorded since the last commit.
+        """
         with self._lock:
             if self._commit_needed or force:
                 self.conn.commit()
@@ -237,11 +257,15 @@ class SqliteBackend:
             self._write_count = 0
 
     def db_file_path(self) -> str:
-        """Return the db file path if there is one"""
+        """Returns the path to the SQLite database file.
+
+        Returns:
+            The file path of the database.
+        """
         return self._db_file
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Closes the database connection, committing any pending changes first."""
         with self._lock:
             if self._conn:
                 try:
@@ -259,7 +283,14 @@ class SqliteBackend:
             pass
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
-        """Save to a new database file, optionally removing the old one."""
+        """Saves the database to a new file and optionally cleans up the old one.
+
+        Args:
+            db_file: The path to the new database file. If None, the current
+                     file is overwritten.
+            remove_old_db: If True, the old database file is deleted after the
+                           save operation.
+        """
         with self._lock:
             self.commit(force=True)
             current_db_file = self._db_file
@@ -275,7 +306,14 @@ class SqliteBackend:
                     self._init_conn()
 
     def load(self, db_file: Optional[str] = None) -> None:
-        """Load from a different database file."""
+        """Loads the database from a specified file.
+
+        Any pending changes in the current database are committed before loading.
+
+        Args:
+            db_file: The path to the database file to load. If None, the
+                     current database is reloaded.
+        """
         with self._lock:
             self.commit(force=True)
             self.close()
@@ -288,16 +326,13 @@ class SqliteBackend:
 
 # Container stuff
 class CacheDict(collections.abc.MutableMapping):
-    """Acts like a normal dictionary until we hit a maximum size, and then
-    items are stored in a backing database in LRU or random fashion.
+    """A dictionary-like class with an in-memory cache and a disk backend.
 
-    There are no guarantees around thread safety, so be careful.
+    This class maintains an in-memory cache of a specified maximum size.
+    When the cache is full, items are evicted to a disk-based backend.
+    It can be configured to use a Least Recently Used (LRU) eviction policy.
 
-    Items are removed from DB when pulled into cache, and written back when
-    they fall out of the cache.
-
-    Note: Current design uses cache-exclusive model (items either in cache OR db).
-    An alternative design could keep items in both cache and db simultaneously.
+    Note: This class is not thread-safe.
     """
 
     def __init__(
@@ -309,6 +344,17 @@ class CacheDict(collections.abc.MutableMapping):
         lru: bool = False,
         current_dictionary: Optional[Dict[Any, Any]] = None,
     ) -> None:
+        """Initializes the CacheDict.
+
+        Args:
+            max_size: The maximum number of items to keep in the in-memory cache.
+            db_file: The path to the database file for the backend.
+            backend: An optional backend instance. If not provided, a
+                     SqliteBackend is created.
+            lru: If True, a Least Recently Used (LRU) eviction policy is used.
+            current_dictionary: An optional dictionary to pre-populate the
+                                CacheDict.
+        """
         self._evict_lock_held = False
         self._cache: Dict[Any, Any] = {}
         self._db_file = db_file
@@ -481,11 +527,20 @@ class CacheDict(collections.abc.MutableMapping):
         return newcd
 
     def db_file_path(self) -> str:
-        """Return the db file path if there is one"""
+        """Returns the path to the backend database file.
+
+        Returns:
+            The file path of the database.
+        """
         return self._db.db_file_path()
 
     def load(self, db_file: Optional[str] = None) -> None:
-        """Load from a db instance"""
+        """Loads data from a database file, clearing the current cache.
+
+        Args:
+            db_file: The path to the database file to load. If None, the
+                     current database is reloaded.
+        """
         # clear out local cache so we're correctly in sync
         self._cache.clear()
         if self.lru:
@@ -493,7 +548,15 @@ class CacheDict(collections.abc.MutableMapping):
         self._db.load(db_file=db_file)
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
-        """Dump all to database"""
+        """Saves the contents of the cache and backend to a database file.
+
+        This method writes all in-memory items to the backend, commits the
+        changes, and then saves the entire database to a new file.
+
+        Args:
+            db_file: The path for the new database file.
+            remove_old_db: If True, the old database file is removed.
+        """
         for key, value in self._cache.items():
             self._db[key] = value
         # Force commit any pending writes
@@ -505,17 +568,34 @@ class CacheDict(collections.abc.MutableMapping):
         self._cache.clear()
 
     def close(self) -> None:
-        """Close the underlying database connection."""
+        """Closes the underlying database connection."""
         if hasattr(self._db, "close"):
             self._db.close()
 
 
 class DefaultCacheDict(CacheDict):
-    """A CacheDict that provides default values for missing keys."""
+    """A subclass of CacheDict that provides a default value for missing keys.
+
+    This class behaves like `collections.defaultdict`. When a key is accessed
+    and not found, a default value is generated by the `default_factory`.
+
+    Attributes:
+        default_factory: A callable that returns the default value for a
+                         missing key.
+    """
 
     def __init__(
         self, default_factory: Optional[Callable[[], Any]] = None, **kwargs: Any
     ) -> None:
+        """Initializes the DefaultCacheDict.
+
+        Args:
+            default_factory: A callable that returns the default value for a
+                             missing key. If None, accessing a missing key
+                             will raise a KeyError.
+            **kwargs: Additional keyword arguments to be passed to the
+                      CacheDict constructor.
+        """
         self._kwargs = kwargs
         if default_factory is not None and not hasattr(default_factory, "__call__"):
             raise TypeError("the factory must be callable")
