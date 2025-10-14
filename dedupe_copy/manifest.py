@@ -182,27 +182,33 @@ class Manifest:
             files_to_remove: A list of file paths to be removed.
         """
         # Create a reverse lookup from path to hash
-        path_to_hash = {}
-        for hash_val, file_list in self.md5_data.items():
-            for file_info in file_list:
-                path_to_hash[file_info[0]] = hash_val
+        files_to_remove_set = set(files_to_remove)
+        hashes_to_modify = {}
 
-        for path in files_to_remove:
+        # First, find which hashes are affected without creating a full reverse map
+        for hash_val, file_list in self.md5_data.items():
+            # Check if any file associated with this hash needs to be removed
+            if any(file_info[0] in files_to_remove_set for file_info in file_list):
+                hashes_to_modify[hash_val] = file_list
+
+        # Now, process only the affected hashes
+        for hash_val, file_list in hashes_to_modify.items():
+            new_file_list = [
+                file_info
+                for file_info in file_list
+                if file_info[0] not in files_to_remove_set
+            ]
+
+            if new_file_list:
+                self.md5_data[hash_val] = new_file_list
+            else:
+                # If no files are left for this hash, remove the hash key entirely
+                del self.md5_data[hash_val]
+
+        # Update read_sources separately for efficiency
+        for path in files_to_remove_set:
             if path in self.read_sources:
                 del self.read_sources[path]
-
-            if path in path_to_hash:
-                hash_val = path_to_hash[path]
-                if hash_val in self.md5_data:
-                    new_file_list = [
-                        file_info
-                        for file_info in self.md5_data[hash_val]
-                        if file_info[0] != path
-                    ]
-                    if new_file_list:
-                        self.md5_data[hash_val] = new_file_list
-                    else:
-                        del self.md5_data[hash_val]
 
     def _populate_read_sources(self) -> None:
         """Populate the read_sources list from the md5_data."""
