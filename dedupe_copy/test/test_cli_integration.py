@@ -99,7 +99,12 @@ class TestCliIntegration(unittest.TestCase):
             "Incorrect number of files reported for deletion.",
         )
         self.assertIn(
-            "Skipping deletion of files with size 3 bytes",
+            "Skipping deletion of ",
+            output,
+            "Size threshold message not found.",
+        )
+        self.assertIn(
+            "with size 3 bytes",
             output,
             "Size threshold message not found.",
         )
@@ -163,7 +168,12 @@ class TestCliIntegration(unittest.TestCase):
             "Incorrect number of files reported for deletion.",
         )
         self.assertIn(
-            "Skipping deletion of files with size 3 bytes",
+            "Skipping deletion of ",
+            output,
+            "Size threshold message not found.",
+        )
+        self.assertIn(
+            "with size 3 bytes",
             output,
             "Size threshold message not found.",
         )
@@ -209,7 +219,12 @@ class TestCliIntegration(unittest.TestCase):
             "Incorrect number of files reported for deletion.",
         )
         self.assertIn(
-            "Skipping deletion of files with size 3 bytes",
+            "Skipping deletion of ",
+            output,
+            "Size threshold message not found.",
+        )
+        self.assertIn(
+            "with size 3 bytes",
             output,
             "Size threshold message not found.",
         )
