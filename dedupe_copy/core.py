@@ -375,7 +375,7 @@ def copy_data(
     progress_queue: Optional["queue.PriorityQueue[Any]"],
     *,
     copy_job: "CopyJob",
-) -> None:
+) -> List[str]:
     """Manages the process of copying files.
 
     This function sets up and manages a pool of worker threads to perform
@@ -387,9 +387,13 @@ def copy_data(
         all_data: A dictionary of all files to be considered for copying.
         progress_queue: An optional queue for reporting progress.
         copy_job: The configuration for the copy operation.
+
+    Returns:
+        A list of source file paths that were deleted after being copied.
     """
     stop_event = threading.Event()
     copy_queue: "queue.Queue[Tuple[str, str, int]]" = queue.Queue()
+    deleted_queue: "queue.Queue[str]" = queue.Queue()
     workers = []
     copied = copy_job.no_copy
     if progress_queue:
@@ -406,6 +410,7 @@ def copy_data(
             stop_event,
             copy_config=copy_job.copy_config,
             progress_queue=progress_queue,
+            deleted_queue=deleted_queue,
         )
         workers.append(c)
         c.start()
@@ -440,10 +445,28 @@ def copy_data(
     stop_event.set()
     for c in workers:
         c.join()
-    if progress_queue and copied is not None:
-        progress_queue.put(
-            (HIGH_PRIORITY, "message", f"Processed {len(copied)} unique items")
-        )
+
+    deleted_files = []
+    while not deleted_queue.empty():
+        try:
+            deleted_files.append(deleted_queue.get_nowait())
+        except queue.Empty:
+            break
+
+    if progress_queue:
+        if copied is not None:
+            progress_queue.put(
+                (HIGH_PRIORITY, "message", f"Processed {len(copied)} unique items")
+            )
+        if deleted_files:
+            progress_queue.put(
+                (
+                    HIGH_PRIORITY,
+                    "message",
+                    f"Deleted {len(deleted_files)} files after copy.",
+                )
+            )
+    return deleted_files
 
 
 def delete_files(
@@ -611,6 +634,7 @@ def run_dupe_copy(
     compare_manifests: Optional[Union[str, List[str]]] = None,
     preserve_stat: bool = False,
     delete_duplicates: bool = False,
+    delete_on_copy: bool = False,
     dry_run: bool = False,
     min_delete_size: int = 0,
     verify_manifest: bool = False,
@@ -862,6 +886,8 @@ def run_dupe_copy(
             extensions=extensions,
             path_rules=path_rules_func,
             preserve_stat=preserve_stat,
+            delete_on_copy=delete_on_copy,
+            dry_run=dry_run,
         )
         copy_job = CopyJob(
             copy_config=copy_config,
@@ -869,13 +895,20 @@ def run_dupe_copy(
             no_copy=compare,
             ignore_empty_files=keep_empty,
             copy_threads=copy_threads,
+            delete_on_copy=delete_on_copy,
+            dry_run=dry_run,
         )
-        copy_data(
+        deleted_files = copy_data(
             dupes,
             all_data,
             progress_queue,
             copy_job=copy_job,
         )
+
+        # Update the manifest with the deleted files
+        if deleted_files:
+            all_data.remove_files(deleted_files)
+
         if manifest_out_path:
             progress_queue.put(
                 (HIGH_PRIORITY, "message", "Saving complete manifest after copy")

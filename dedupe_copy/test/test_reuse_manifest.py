@@ -77,7 +77,7 @@ class TestIssue32(unittest.TestCase):
                 "-i",
                 self.manifest_path,
                 "-m",
-                self.manifest_path,  # Explicitly save to same manifest
+                self.manifest_path + ".new",
             ],
         ):
             dedupecopy_cli.run_cli()

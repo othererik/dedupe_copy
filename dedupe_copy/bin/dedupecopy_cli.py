@@ -2,6 +2,7 @@
 """Command-line interface for the dedupe_copy tool."""
 import argparse
 import logging
+import os
 
 from dedupe_copy.utils import clean_extensions
 from dedupe_copy.core import run_dupe_copy
@@ -102,6 +103,13 @@ def _create_parser():
     action_group.add_argument(
         "--verify",
         help="Verify manifest files exist and sizes match",
+        required=False,
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--delete-on-copy",
+        help="Delete source files after successful copy. Requires --copy-path.",
         required=False,
         default=False,
         action="store_true",
@@ -313,6 +321,7 @@ def _handle_arguments(args):
         "compare_manifests": args.compare,
         "preserve_stat": args.copy_metadata,
         "delete_duplicates": args.delete,
+        "delete_on_copy": args.delete_on_copy,
         "dry_run": args.dry_run,
         "min_delete_size": args.min_delete_size,
         "verify_manifest": args.verify,
@@ -323,6 +332,26 @@ def run_cli():
     """Main entry point for the command-line interface."""
     parser = _create_parser()
     args = parser.parse_args()
+
+    # Argument validation
+    if args.delete_on_copy and not args.copy_path:
+        parser.error("--delete-on-copy requires --copy-path.")
+
+    if (args.delete or args.delete_on_copy) and not args.manifest_out:
+        parser.error(
+            "Operations that modify the manifest (--delete, --delete-on-copy) "
+            "require -m/--manifest-dump-path."
+        )
+
+    if args.manifest_in and args.manifest_out:
+        # Check if any of the input manifests are the same as the output manifest
+        if any(
+            os.path.abspath(p) == os.path.abspath(args.manifest_out)
+            for p in args.manifest_in
+        ):
+            parser.error(
+                "-i/--manifest-read-path and -m/--manifest-dump-path cannot be the same file."
+            )
 
     # Setup logging based on verbosity flags
     verbosity = "normal"
