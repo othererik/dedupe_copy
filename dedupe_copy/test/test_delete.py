@@ -224,7 +224,11 @@ class TestDelete(unittest.TestCase):
         # Manually create a manifest that represents the bug scenario
         # One hash, two files, but with different sizes recorded. This can
         # happen if a file is modified after a manifest is created.
-        manifest = Manifest(manifest_paths=None, save_path=manifest_path, temp_directory=self.temp_dir)
+        manifest = Manifest(
+            manifest_paths=None,
+            save_path=manifest_path,
+            temp_directory=self.temp_dir,
+        )
         file_a_info = [file_a_path, 50, os.path.getmtime(file_a_path)]
         file_b_info = [file_b_path, 200, os.path.getmtime(file_b_path)]
         manifest["fake_hash"] = [file_a_info, file_b_info]
@@ -234,6 +238,7 @@ class TestDelete(unittest.TestCase):
         # Run with --delete and a min-delete-size that is between the two file sizes
         # The bug would cause the large file to be kept, because the small file is checked
         # against the threshold and the whole group is skipped.
+        # pylint: disable=redundant-keyword-arg
         do_copy(
             manifests_in_paths=manifest_path,
             no_walk=True,
