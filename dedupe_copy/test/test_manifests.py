@@ -2,11 +2,12 @@
 
 import os
 import unittest
+from unittest.mock import patch
 
 from dedupe_copy.test import utils
 
 from dedupe_copy.manifest import Manifest
-from dedupe_copy.disk_cache_dict import DefaultCacheDict
+from dedupe_copy.disk_cache_dict import DefaultCacheDict, CacheDict
 
 
 class TestManifests(unittest.TestCase):
@@ -127,6 +128,36 @@ class TestManifests(unittest.TestCase):
         self.check_manifest(combined, master_md5, master_sources)
         del md5data
         del sources
+
+    def test_avoids_double_close_on_combine(self):
+        """Test that combining manifests does not double-close file handles."""
+        paths = []
+        for i in range(2):
+            md5data, sources = utils.gen_fake_manifest()
+            path = os.path.join(self.temp_dir, f"manifest_{i}.dict")
+            paths.append(path)
+            md5_dcd = _dcd_from_manifest(md5data, path)
+            sources_dcd = _dcd_from_manifest(sources, f"{path}.read")
+            md5_dcd.save()
+            sources_dcd.save()
+            md5_dcd.close()
+            sources_dcd.close()
+
+        with (
+            patch.object(DefaultCacheDict, "close") as mock_dcd_close,
+            patch.object(CacheDict, "close") as mock_cd_close,
+        ):
+
+            manifest = Manifest(paths, temp_directory=self.temp_dir)
+            manifest.close()
+
+            # Without the bug, the close method for each CacheDict type should
+            # be called N times for the loaded manifests (in the finally block)
+            # and once for the new combined manifest, totaling N+1 calls.
+            # With 2 manifests, this means 3 calls each.
+            # The bug causes an extra N calls, making it 2N+1, so 5 calls.
+            self.assertEqual(mock_dcd_close.call_count, 3)
+            self.assertEqual(mock_cd_close.call_count, 3)
 
 
 def _dcd_from_manifest(data, path):
