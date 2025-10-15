@@ -334,8 +334,8 @@ def visualize_results(log_file="perflog.csv"):
     """Generate plots from the performance log file."""
     # pylint: disable=import-outside-toplevel
     try:
-        import pandas as pd
-        import matplotlib.pyplot as plt
+        import pandas as pd  # type: ignore
+        import matplotlib.pyplot as plt  # type: ignore
     except ImportError:
         print(
             "\n---"
