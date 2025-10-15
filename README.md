@@ -281,25 +281,6 @@ Files are considered duplicates when:
 
 **Special case:** Empty (zero-byte) files are treated as duplicates by default. Use `--keep-empty` to treat each empty file as unique.
 
-### Path Rules
-
-Path rules control how files are organized in the destination:
-
-| Rule | Description | Example Output |
-|------|-------------|----------------|
-| `no_change` | Preserve original directory structure | `/dest/original/path/file.jpg` |
-| `mtime` | Organize by modification date (YYYY_MM) | `/dest/2024_03/file.jpg` |
-| `extension` | Organize by file extension | `/dest/jpg/file.jpg` |
-
-Rules can be combined and applied per extension pattern (see [Path Rules](#path-rules-1) section).
-
-### Extension Patterns
-
-Extension filters support wildcards:
-- `jpg` - Match .jpg files
-- `*.jp*g` - Match .jpg, .jpeg, .jpng, etc.
-- `*` - Match all extensions
-
 ## Usage Examples
 
 ### Basic Operations
@@ -330,14 +311,6 @@ dedupecopy -p /source -c /backup -e jpg -e png -e gif
 
 Copy only image files (jpg, png, gif) to the backup directory.
 
-#### 3. Copy with preserved directory structure
-
-```bash
-dedupecopy -p /source -c /backup -R "*:no_change"
-```
-
-The `*` pattern applies the `no_change` rule to all file types.
-
 ### Photo Organization
 
 #### Organize photos by date
@@ -346,15 +319,7 @@ The `*` pattern applies the `no_change` rule to all file types.
 dedupecopy -p C:\pics -p D:\pics -e jpg -R "jpg:mtime" -c X:\organized_photos
 ```
 
-Copies all JPG files from C: and D: drives, organizing them into folders by year/month (e.g., `2024_03/`).
-
-#### Organize by extension AND date
-
-```bash
-dedupecopy -p /media -c /organized -R "*:extension" -R "*:mtime"
-```
-
-Creates structure like: `/organized/jpg/2024_03/photo.jpg`
+Copies all JPG files from C: and D: drives, organizing them into folders by year/month (e.g., `2024_03/`). See the "Path and Extension Rules" section for more on combining rules.
 
 ### Multi-Source Consolidation
 
@@ -461,75 +426,71 @@ Different organization rules for different file types.
 | `--convert-manifest-paths-from PREFIX` | Original path prefix in manifest to replace. |
 | `--convert-manifest-paths-to PREFIX` | New path prefix (useful when drive letters or mount points change). |
 
-## Path Rules
+## Path and Extension Rules
 
-Path rules determine how files are organized in the destination directory. Multiple rules can be applied to create nested structures.
+This section explains how to control file selection and organization using extension filters (`-e`), ignore patterns (`--ignore`), and path restructuring rules (`-R`).
 
-### Available Rules
+### Filtering Files by Extension
 
-#### `no_change`
-Preserves the original directory structure from the source path.
+Use the `-e` or `--extensions` option to specify which file types to process.
+
+- **`jpg`**: Matches `.jpg` files.
+- **`*.jp*g`**: Matches `.jpg`, `.jpeg`, `.jpng`, etc.
+- **`*`**: Matches all extensions.
+
+If no `-e` option is provided, all files are processed by default.
+
+### Ignoring Files and Directories
+
+Use `--ignore` to exclude files or directories that match a specific pattern.
+
+- **`"*.tmp"`**: Ignores all files with a `.tmp` extension.
+- **`"**/Thumbs.db"`**: Ignores `Thumbs.db` files in any directory.
+- **`"*.cache"`**: Ignores all files ending in `.cache`.
+
+### Restructuring Destination Paths
+
+Path rules (`-R` or `--path-rules`) determine how files are organized in the destination directory. The format is `pattern:rule`.
+
+#### Available Rules
+
+| Rule        | Description                                     | Example Output                          |
+|-------------|-------------------------------------------------|-----------------------------------------|
+| `no_change` | Preserves the original directory structure      | `/dest/original/path/file.jpg`          |
+| `mtime`     | Organizes by modification date (`YYYY_MM`)      | `/dest/2024_03/file.jpg`                |
+| `extension` | Organizes into folders by file extension        | `/dest/jpg/file.jpg`                    |
+
+#### Combining Rules
+
+Rules are applied in the order they are specified, creating nested directories.
 
 ```bash
-dedupecopy -p /source/photos -c /backup -R "*:no_change"
-```
-
-Result: `/backup/photos/2023/vacation/photo.jpg`
-
-#### `mtime`
-Organizes files by modification date in `YYYY_MM` format.
-
-```bash
-dedupecopy -p /source -c /backup -R "*.jpg:mtime"
-```
-
-Result: `/backup/2024_03/photo.jpg`
-
-#### `extension`
-Organizes files into folders by extension.
-
-```bash
-dedupecopy -p /source -c /backup -R "*:extension"
-```
-
-Result: `/backup/jpg/photo.jpg`
-
-### Combining Rules
-
-Rules are applied in the order specified and create nested directories:
-
-```bash
+# Organize first by extension, then by date
 dedupecopy -p /source -c /backup -R "*:extension" -R "*:mtime"
 ```
+**Result:** `/backup/jpg/2024_03/photo.jpg`
 
-Result: `/backup/jpg/2024_03/photo.jpg`
+#### Pattern Matching for Rules
 
-### Extension-Specific Rules
+The `pattern` part of the rule determines which files the rule applies to. It supports wildcards, just like the `-e` filter.
 
-Apply different rules to different file types:
+- **`"*.jpg:mtime"`**: Applies the `mtime` rule only to JPG files.
+- **`"*.jp*g:mtime"`**: Applies to `.jpg`, `.jpeg`, etc.
+- **`"*:no_change"`**: Applies the `no_change` rule to all files.
+
+The most specific pattern wins if multiple patterns could match a file.
+
+#### Example: Different Rules for Different Files
 
 ```bash
-dedupecopy -p /source -c /backup \
+dedupecopy -p /media -c /organized \
   -R "*.jpg:mtime" \
   -R "*.mp4:extension" \
   -R "*.pdf:no_change"
 ```
-
-- JPG files organized by date
-- MP4 files organized by extension
-- PDF files keep original structure
-
-### Wildcard Matching
-
-Extension patterns support wildcards:
-
-```bash
--R "*.jp*:mtime"        # Matches .jpg, .jpeg, .jpe, etc.
--R "image*.png:extension"  # Matches image1.png, image_photo.png, etc.
--R "*:no_change"        # Applies to all files
-```
-
-The most specific pattern wins when multiple patterns could match.
+- **JPG files** are organized by date.
+- **MP4 files** are organized into an `mp4` folder.
+- **PDF files** keep their original directory structure.
 
 ## Advanced Workflows
 
