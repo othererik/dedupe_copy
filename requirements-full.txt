@@ -13,4 +13,3 @@ types-colorama
 pandas-stubs
 matplotlib
 tqdm
-types-tqdm
