@@ -132,7 +132,8 @@ class TestNoWalk(unittest.TestCase):
 
         self.assertIn("[DRY RUN] Would delete", output)
         self.assertIn("Starting deletion of 1 files.", output)
-        self.assertIn("Skipping deletion of files with size 3 bytes", output)
+        self.assertIn("Skipping deletion of ", output)
+        self.assertIn("with size 3 bytes", output)
 
         remaining_files = os.listdir(self.files_dir)
         self.assertEqual(len(remaining_files), 5)

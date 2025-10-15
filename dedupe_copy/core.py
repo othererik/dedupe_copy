@@ -501,22 +501,22 @@ def delete_files(
             continue
         # Sort by path to ensure we always keep the same file
         sorted_file_list = sorted(file_list, key=lambda x: x[0])
-        # Check size against the threshold
-        size = sorted_file_list[0][1]
-        if size >= delete_job.min_delete_size_bytes:
-            # Keep the first file, queue the rest for deletion
-            for file_info in sorted_file_list[1:]:
-                files_to_delete.append(file_info[0])
+        # Keep the first file, queue the rest for deletion if they meet the size criteria
+        for file_info in sorted_file_list[1:]:
+            path_to_delete = file_info[0]
+            size = file_info[1]
+            if size >= delete_job.min_delete_size_bytes:
+                files_to_delete.append(path_to_delete)
                 files_to_delete_count += 1
-        elif progress_queue:
-            progress_queue.put(
-                (
-                    LOW_PRIORITY,
-                    "message",
-                    f"Skipping deletion of files with size {size} bytes (smaller "
-                    f"than threshold {delete_job.min_delete_size_bytes}).",
+            elif progress_queue:
+                progress_queue.put(
+                    (
+                        LOW_PRIORITY,
+                        "message",
+                        f"Skipping deletion of {path_to_delete} with size {size} bytes "
+                        f"(smaller than threshold {delete_job.min_delete_size_bytes}).",
+                    )
                 )
-            )
 
     if progress_queue:
         progress_queue.put(

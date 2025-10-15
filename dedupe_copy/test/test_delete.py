@@ -204,6 +204,48 @@ class TestDelete(unittest.TestCase):
             manifest_file_count, 2, "Manifest should contain 2 files after deletion"
         )
 
+    def test_delete_min_size_bug(self):
+        """
+        Test that --min-delete-size correctly deletes large files even if the
+        file kept is smaller than the threshold.
+        """
+        content = b"duplicate content"
+        file_a_path = os.path.join(self.temp_dir, "a_file.txt")
+        file_b_path = os.path.join(self.temp_dir, "b_file.txt")
+
+        with open(file_a_path, "wb") as f:
+            f.write(content)
+
+        with open(file_b_path, "wb") as f:
+            f.write(content)
+
+        manifest_path = os.path.join(self.manifest_dir, "manifest.db")
+
+        # Manually create a manifest that represents the bug scenario
+        # One hash, two files, but with different sizes recorded. This can
+        # happen if a file is modified after a manifest is created.
+        manifest = Manifest(manifest_paths=None, save_path=manifest_path, temp_directory=self.temp_dir)
+        file_a_info = [file_a_path, 50, os.path.getmtime(file_a_path)]
+        file_b_info = [file_b_path, 200, os.path.getmtime(file_b_path)]
+        manifest["fake_hash"] = [file_a_info, file_b_info]
+        manifest.save()
+        manifest.close()
+
+        # Run with --delete and a min-delete-size that is between the two file sizes
+        # The bug would cause the large file to be kept, because the small file is checked
+        # against the threshold and the whole group is skipped.
+        do_copy(
+            manifests_in_paths=manifest_path,
+            no_walk=True,
+            delete_duplicates=True,
+            min_delete_size=100,
+        )
+
+        # a_file.txt should be kept (alphabetically first)
+        # b_file.txt should be deleted (it's a duplicate and > 100 bytes)
+        self.assertTrue(os.path.exists(file_a_path))
+        self.assertFalse(os.path.exists(file_b_path))
+
 
 if __name__ == "__main__":
     unittest.main()
