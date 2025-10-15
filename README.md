@@ -427,6 +427,7 @@ Different organization rules for different file types.
 | `--ignore-old-collisions` | Only detect new duplicates (ignore duplicates already in loaded manifest). |
 | `--dry-run` | Simulate operations without making any changes to the filesystem. |
 | `--min-delete-size BYTES` | Minimum size of a file to be considered for deletion (e.g., `1048576` for 1MB). Default: `0`. |
+| `--delete-on-copy` | Deletes source files after a successful copy. Requires `--copy-path` and `-m`. |
 
 ### Output Control Options
 
@@ -882,6 +883,20 @@ Debug output includes:
 3. **Use manifests**: They provide a record of what was processed
 4. **Verify results**: Check file counts and spot-check files after copy operations
 5. **Watch disk space**: Ensure sufficient space on destination
+
+### Manifest Safety Rules
+
+To prevent accidental data loss, DedupeCopy enforces the following rules for manifest usage:
+
+1.  **Destructive Operations Require an Output Manifest**: Any operation that modifies the set of files being tracked (e.g., `--delete`, `--delete-on-copy`) **requires** the `-m`/`--manifest-dump-path` option. This ensures that the results of the operation are saved to a new manifest, preserving the original.
+
+2.  **Input and Output Manifests Must Be Different**: To protect your original manifest, you cannot use the same file path for both `-i`/`--manifest-read-path` and `-m`/`--manifest-dump-path`. This prevents the input manifest from being overwritten.
+
+**Example of a safe delete operation:**
+```bash
+# Load an existing manifest and save the changes to a new one
+dedupecopy --no-walk --delete -i manifest_original.db -m manifest_after_delete.db
+```
 
 ### Recommended Workflow
 

@@ -30,6 +30,8 @@ class CopyConfig:
         extensions: An optional list of file extensions to include.
         path_rules: Optional rules for transforming file paths during the copy.
         preserve_stat: If True, file metadata (like timestamps) is preserved.
+        delete_on_copy: If True, delete source files after a successful copy.
+        dry_run: If True, simulate operations without making changes.
     """
 
     target_path: str
@@ -37,6 +39,8 @@ class CopyConfig:
     extensions: Optional[List[str]] = None
     path_rules: Optional[Callable[..., Tuple[str, str]]] = None
     preserve_stat: bool = False
+    delete_on_copy: bool = False
+    dry_run: bool = False
 
 
 @dataclass
@@ -49,6 +53,8 @@ class CopyJob:
         no_copy: A set-like object of hashes to prevent from being copied.
         ignore_empty_files: If True, files with zero size are not copied.
         copy_threads: The number of concurrent threads to use for copying.
+        delete_on_copy: If True, delete source files after a successful copy.
+        dry_run: If True, simulate operations without making changes.
     """
 
     copy_config: CopyConfig
@@ -56,6 +62,8 @@ class CopyJob:
     no_copy: Optional[Any] = None
     ignore_empty_files: bool = False
     copy_threads: int = 8
+    delete_on_copy: bool = False
+    dry_run: bool = False
 
 
 @dataclass

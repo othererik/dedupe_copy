@@ -72,8 +72,10 @@ class TestCliIntegration(unittest.TestCase):
                     "--no-walk",
                     "--delete",
                     "--dry-run",
-                    "--manifest-read-path",
+                    "-i",
                     self.manifest_path,
+                    "-m",
+                    self.manifest_path + ".new",
                     "--min-delete-size",
                     "4",  # c.txt and d.txt are smaller than this
                 ],
@@ -140,8 +142,10 @@ class TestCliIntegration(unittest.TestCase):
                     "dedupe_copy",
                     "--no-walk",
                     "--delete",
-                    "--manifest-read-path",
+                    "-i",
                     self.manifest_path,
+                    "-m",
+                    self.manifest_path + ".new",
                     "--min-delete-size",
                     "4",  # c.txt and d.txt are smaller than this
                 ],
@@ -185,6 +189,8 @@ class TestCliIntegration(unittest.TestCase):
                 "--delete",
                 "-p",
                 self.files_dir,
+                "-m",
+                self.manifest_path,
                 "--min-delete-size",
                 "4",  # c.txt and d.txt are smaller than this
             ],

@@ -177,6 +177,7 @@ class CopyThread(threading.Thread):
         *,
         copy_config: "CopyConfig",
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
+        deleted_queue: Optional["queue.Queue[str]"] = None,
     ) -> None:
         """Initializes the CopyThread.
 
@@ -185,12 +186,14 @@ class CopyThread(threading.Thread):
             stop_event: An event to signal the thread to stop.
             copy_config: The configuration for the copy operation.
             progress_queue: An optional queue for reporting progress.
+            deleted_queue: An optional queue to record deleted source files.
         """
         super().__init__()
         self.work = work_queue
         self.config = copy_config
         self.stop_event = stop_event
         self.progress_queue = progress_queue
+        self.deleted_queue = deleted_queue
         self.daemon = True
 
     def _get_destination_path(self, src: str, mtime: str, size: int) -> str:
@@ -225,9 +228,37 @@ class CopyThread(threading.Thread):
                     if not match_extension(self.config.extensions, src):
                         continue
                     dest = self._get_destination_path(src, mtime, size)
-                    _copy_file(
-                        src, dest, self.config.preserve_stat, self.progress_queue
-                    )
+                    if not self.config.dry_run:
+                        _copy_file(
+                            src, dest, self.config.preserve_stat, self.progress_queue
+                        )
+                    elif self.progress_queue:
+                        self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
+
+                    if self.config.delete_on_copy:
+                        if self.config.dry_run:
+                            if self.progress_queue:
+                                self.progress_queue.put(
+                                    (
+                                        HIGH_PRIORITY,
+                                        "message",
+                                        f"[DRY RUN] Would delete source file {src}",
+                                    )
+                                )
+                        else:
+                            try:
+                                os.remove(src)
+                                if self.progress_queue:
+                                    self.progress_queue.put(
+                                        (LOW_PRIORITY, "deleted", src)
+                                    )
+                                if self.deleted_queue:
+                                    self.deleted_queue.put(src)
+                            except OSError as e:
+                                if self.progress_queue:
+                                    self.progress_queue.put(
+                                        (MEDIUM_PRIORITY, "error", src, e)
+                                    )
                 finally:
                     self.work.task_done()
             except queue.Empty:

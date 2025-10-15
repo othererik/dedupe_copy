@@ -65,6 +65,8 @@ class TestNoWalk(unittest.TestCase):
                 "--delete",
                 "-i",
                 self.manifest_path,
+                "-m",
+                self.manifest_path + ".new",
                 "--min-delete-size",
                 "1",  # delete all duplicates
             ],
@@ -118,6 +120,8 @@ class TestNoWalk(unittest.TestCase):
                     "--dry-run",
                     "-i",
                     self.manifest_path,
+                    "-m",
+                    self.manifest_path + ".new",
                     "--min-delete-size",
                     "4",  # c.txt and d.txt are smaller than this
                 ],
@@ -166,7 +170,7 @@ class TestNoWalk(unittest.TestCase):
                 "-i",
                 self.manifest_path,
                 "-m",
-                self.manifest_path,
+                self.manifest_path + ".new",
             ],
         ):
             f = io.StringIO()

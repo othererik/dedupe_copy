@@ -38,10 +38,61 @@ class TestCopySystem(
     def setUp(self):
         """Create temporary directory and test data"""
         self.temp_dir = utils.make_temp_dir("copy_sys")
+        self.manifest_dir = utils.make_temp_dir("manifest")
 
     def tearDown(self):
         """Remove temporary directory and all test files"""
         utils.remove_dir(self.temp_dir)
+        utils.remove_dir(self.manifest_dir)
+
+    def test_delete_on_copy(self):
+        """Test that source files are deleted after a successful copy."""
+        # Create 10 files in the source directory
+        file_data = utils.make_file_tree(self.temp_dir, file_count=10, file_size=100)
+        source_file_count = len(file_data)
+        copy_to_path = os.path.join(self.temp_dir, "copy_target")
+        manifest_path = os.path.join(self.manifest_dir, "manifest.db")
+
+        # Perform the copy with deletion
+        do_copy(
+            read_from_path=self.temp_dir,
+            copy_to_path=copy_to_path,
+            delete_on_copy=True,
+            manifest_out_path=manifest_path,
+        )
+
+        # Verify that all files were copied
+        copied_files = list(utils.walk_tree(copy_to_path))
+        self.assertEqual(len(copied_files), source_file_count)
+
+        # Verify that all source files were deleted
+        source_files = list(utils.walk_tree(self.temp_dir))
+        # The copy_target directory is inside the temp_dir, so walk_tree will find the copied files
+        self.assertEqual(len(source_files), source_file_count)
+
+    def test_delete_on_copy_dry_run(self):
+        """Test that source files are NOT deleted on copy with --dry-run."""
+        # Create 10 files in the source directory
+        file_data = utils.make_file_tree(self.temp_dir, file_count=10, file_size=100)
+        source_file_count = len(file_data)
+        copy_to_path = os.path.join(self.temp_dir, "copy_target")
+        manifest_path = os.path.join(self.manifest_dir, "manifest.db")
+
+        # Perform the copy with deletion and dry-run
+        do_copy(
+            read_from_path=self.temp_dir,
+            copy_to_path=copy_to_path,
+            delete_on_copy=True,
+            dry_run=True,
+            manifest_out_path=manifest_path,
+        )
+
+        # Verify that NO files were copied because of dry_run
+        self.assertFalse(os.path.exists(copy_to_path))
+
+        # Verify that NO source files were deleted
+        source_files = list(utils.walk_tree(self.temp_dir))
+        self.assertEqual(len(source_files), source_file_count)
 
     def test_copy_no_change_no_dupes(self):
         """Test copying of small tree to same structure - no dupe no change"""
