@@ -221,6 +221,8 @@ class CopyThread(threading.Thread):
         performs the copy operation until the stop event is set and the
         queue is empty.
         """
+        # there is a lot going on in this loop, refactor
+        # pylint: disable=R1702, R0912
         while not self.stop_event.is_set() or not self.work.empty():
             try:
                 src, mtime, size = self.work.get(True, 0.1)

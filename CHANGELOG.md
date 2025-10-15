@@ -1,5 +1,12 @@
 # Changelog
 
+
+## [1.1.5] - TBD
+- Add option to `--delete-on-copy`
+- Require output manifest when deleting objects, input remains unchanged
+- Minor performance improvements
+
+
 ## [1.1.4] - 2025-10-13
 - Improve manifest save performance
 - Add manifest viewer tool

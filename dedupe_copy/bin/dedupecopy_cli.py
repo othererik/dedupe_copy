@@ -339,7 +339,8 @@ def run_cli():
 
     if (args.delete or args.delete_on_copy) and not args.manifest_out:
         parser.error(
-            "Operations that modify the manifest (--delete, --delete-on-copy) require -m/--manifest-dump-path."
+            "Operations that modify the manifest (--delete, --delete-on-copy) "
+            "require -m/--manifest-dump-path."
         )
 
     if args.manifest_in and args.manifest_out:
