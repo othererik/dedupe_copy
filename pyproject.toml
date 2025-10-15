@@ -48,6 +48,7 @@ classifiers = [
 color = ["colorama>=0.4.0"]
 fast_hash = ["xxhash>=3.4.1"]
 plot = ["pandas", "matplotlib"]
+web = ["flask", "bokeh"]
 
 [project.urls]
 Homepage = "https://pypi.python.org/pypi/DedupeCopy/"

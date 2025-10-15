@@ -24,6 +24,7 @@ from .threads import (
     ReadThread,
     ResultProcessor,
     WalkThread,
+    WebProgressThread,
 )
 from .utils import _throttle_puts, ensure_logging_configured, lower_extension
 
@@ -638,6 +639,7 @@ def run_dupe_copy(
     dry_run: bool = False,
     min_delete_size: int = 0,
     verify_manifest: bool = False,
+    progress_manager: Optional[dict] = None,
 ) -> None:
     """Main entry point for the deduplication and copy functionality.
 
@@ -761,14 +763,26 @@ def run_dupe_copy(
     result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
     progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
     walk_queue: "queue.Queue[str]" = queue.Queue()
-    progress_thread = ProgressThread(
-        work_queue,
-        result_queue,
-        progress_queue,
-        walk_queue=walk_queue,
-        stop_event=all_stop,
-        save_event=save_event,
-    )
+
+    if progress_manager is not None:
+        progress_thread = WebProgressThread(
+            work_queue,
+            result_queue,
+            progress_queue,
+            walk_queue=walk_queue,
+            stop_event=all_stop,
+            save_event=save_event,
+            progress_manager=progress_manager,
+        )
+    else:
+        progress_thread = ProgressThread(
+            work_queue,
+            result_queue,
+            progress_queue,
+            walk_queue=walk_queue,
+            stop_event=all_stop,
+            save_event=save_event,
+        )
     progress_thread.start()
     collisions = None
     if manifest and (convert_manifest_paths_to or convert_manifest_paths_from):

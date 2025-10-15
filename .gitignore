@@ -157,3 +157,4 @@ cython_debug/
 
 # Test files
 test_file.txt
+large_test_dir/

@@ -899,3 +899,131 @@ class WalkThread(threading.Thread):
                     self.distribute_config.progress_queue.put(
                         (MEDIUM_PRIORITY, "error", src, e)
                     )
+
+
+class WebProgressThread(ProgressThread):
+    """A ProgressThread that also updates a multiprocessing Manager dictionary."""
+
+    def __init__(
+        self,
+        work_queue: "queue.Queue[str]",
+        result_queue: "queue.Queue[Tuple[str, int, float, str]]",
+        progress_queue: "queue.PriorityQueue[Any]",
+        *,
+        walk_queue: "queue.Queue[str]",
+        stop_event: threading.Event,
+        save_event: threading.Event,
+        progress_manager: dict,
+    ) -> None:
+        super().__init__(
+            work_queue,
+            result_queue,
+            progress_queue,
+            walk_queue=walk_queue,
+            stop_event=stop_event,
+            save_event=save_event,
+        )
+        self.progress_manager = progress_manager
+        self.progress_manager.update(
+            {
+                "file_count": 0,
+                "directory_count": 0,
+                "accepted_count": 0,
+                "ignored_count": 0,
+                "error_count": 0,
+                "copied_count": 0,
+                "not_copied_count": 0,
+                "deleted_count": 0,
+                "not_deleted_count": 0,
+                "last_accepted": None,
+                "last_copied": None,
+                "start_time": self.start_time,
+                "elapsed_time": 0,
+                "status_message": "Starting...",
+                "work_queue_size": 0,
+                "result_queue_size": 0,
+                "progress_queue_size": 0,
+                "walk_queue_size": 0,
+            }
+        )
+
+    def do_log_dir(self, path: str) -> None:
+        super().do_log_dir(path)
+        self.progress_manager["directory_count"] = self.directory_count
+
+    def do_log_file(self, path: str) -> None:
+        super().do_log_file(path)
+        self.progress_manager["file_count"] = self.file_count
+
+    def do_log_copied(self, src: str, dest: str) -> None:
+        super().do_log_copied(src, dest)
+        self.progress_manager["copied_count"] = self.copied_count
+        self.progress_manager["last_copied"] = src
+
+    def do_log_not_copied(self, path: str) -> None:
+        super().do_log_not_copied(path)
+        self.progress_manager["not_copied_count"] = self.not_copied_count
+
+    def do_log_deleted(self, path: str) -> None:
+        super().do_log_deleted(path)
+        self.progress_manager["deleted_count"] = self.deleted_count
+
+    def do_log_not_deleted(self, path: str) -> None:
+        super().do_log_not_deleted(path)
+        self.progress_manager["not_deleted_count"] = self.not_deleted_count
+
+    def do_log_accepted(self, path: str) -> None:
+        super().do_log_accepted(path)
+        self.progress_manager["accepted_count"] = self.accepted_count
+        self.progress_manager["last_accepted"] = path
+
+    def do_log_ignored(self, path: str, reason: str) -> None:
+        super().do_log_ignored(path, reason)
+        self.progress_manager["ignored_count"] = self.ignored_count
+
+    def do_log_error(self, path: str, reason: Exception) -> None:
+        super().do_log_error(path, reason)
+        self.progress_manager["error_count"] = self.error_count
+
+    def do_log_message(self, message: str) -> None:
+        super().do_log_message(message)
+        self.progress_manager["status_message"] = message
+
+    def run(self) -> None:
+        """The main execution loop for the thread."""
+        last_update = time.time()
+        while not self.stop_event.is_set() or not self.progress_queue.empty():
+            try:
+                item = self.progress_queue.get(True, 0.1)[1:]
+                method_name = f"do_log_{item[0]}"
+                method = getattr(self, method_name)
+                method(*item[1:])
+                last_update = time.time()
+            except queue.Empty:
+                if self.save_event and self.save_event.is_set():
+                    logger.info("Saving...")
+                    time.sleep(1)
+                if time.time() - last_update > 1:
+                    last_update = time.time()
+                    self.progress_manager["elapsed_time"] = (
+                        time.time() - self.start_time
+                    )
+                    self.progress_manager["work_queue_size"] = self.work.qsize()
+                    self.progress_manager[
+                        "result_queue_size"
+                    ] = self.result_queue.qsize()
+                    self.progress_manager[
+                        "progress_queue_size"
+                    ] = self.progress_queue.qsize()
+                    self.progress_manager["walk_queue_size"] = self.walk_queue.qsize()
+                    logger.debug(
+                        "Status: WorkQ: %d, ResultQ: %d, ProgressQ: %d, WalkQ: %d",
+                        self.work.qsize(),
+                        self.result_queue.qsize(),
+                        self.progress_queue.qsize(),
+                        self.walk_queue.qsize(),
+                    )
+            except (AttributeError, ValueError) as e:
+                logger.error("Failed in progress thread: %s", e)
+        self.log_final_summary()
+        self.progress_manager["status_message"] = "Complete"

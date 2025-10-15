@@ -3,6 +3,7 @@
 import argparse
 import logging
 import os
+import multiprocessing
 
 from dedupe_copy.utils import clean_extensions
 from dedupe_copy.core import run_dupe_copy
@@ -233,6 +234,15 @@ def _create_parser():
         type=str,
     )
 
+    web_group = parser.add_argument_group("Web UI")
+    web_group.add_argument(
+        "--web-ui",
+        help="Enable the web-based UI for live progress monitoring.",
+        action="store_true",
+        required=False,
+        default=False,
+    )
+
     output_group = parser.add_argument_group("Output Control")
     verbosity_group = output_group.add_mutually_exclusive_group()
     verbosity_group.add_argument(
@@ -283,7 +293,7 @@ def _create_parser():
     return parser
 
 
-def _handle_arguments(args):
+def _handle_arguments(args, progress_manager=None):
     """Take the cli args and process them in prep for calling run_dedupe_copy"""
     logger = logging.getLogger(__name__)
 
@@ -325,6 +335,7 @@ def _handle_arguments(args):
         "dry_run": args.dry_run,
         "min_delete_size": args.min_delete_size,
         "verify_manifest": args.verify,
+        "progress_manager": progress_manager,
     }
 
 
@@ -366,8 +377,32 @@ def run_cli():
     logger = logging.getLogger(__name__)
     logger.debug("Running with arguments: %s", args)
 
-    processed_args = _handle_arguments(args)
-    return run_dupe_copy(**processed_args)
+    progress_manager = None
+    web_process = None
+    if args.web_ui:
+        try:
+            from dedupe_copy.web_service import run_web_service
+        except ImportError:
+            logger.error(
+                "Web UI dependencies are not installed. "
+                "Please install them with: pip install dedupe_copy[web]"
+            )
+            return 1
+        manager = multiprocessing.Manager()
+        progress_manager = manager.dict()
+        web_process = multiprocessing.Process(
+            target=run_web_service, args=(progress_manager,)
+        )
+        web_process.start()
+
+    processed_args = _handle_arguments(args, progress_manager)
+    result = run_dupe_copy(**processed_args)
+
+    if web_process:
+        web_process.terminate()
+        web_process.join()
+
+    return result
 
 
 if __name__ == "__main__":
