@@ -905,7 +905,7 @@ def run_dupe_copy(
             progress_queue.put(
                 (HIGH_PRIORITY, "message", "Saving complete manifest after copy")
             )
-            all_data.save(path=manifest_out_path, no_walk=no_walk)
+            all_data.save(path=manifest_out_path, no_walk=True)
     else:
         # If not deleting or copying, save the manifest if a path is provided
         if manifest_out_path:

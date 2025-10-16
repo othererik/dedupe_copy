@@ -84,3 +84,50 @@ class TestRunDupeCopy(unittest.TestCase):
             "Manifest file list for hash should be unchanged.",
         )
         manifest_after.close()
+
+    def test_delete_with_manifest_out_saves_updated_manifest(self):
+        """Verify --delete with --manifest-dump-path saves a correct, updated manifest."""
+        # 1. Setup: Create a directory with duplicate files
+        src_dir = os.path.join(self.test_dir, "src")
+        os.makedirs(src_dir)
+        file1_path = os.path.join(src_dir, "file1.txt")
+        file2_path = os.path.join(src_dir, "file2.txt")
+        with open(file1_path, "w", encoding="utf-8") as f:
+            f.write("duplicate content")
+        shutil.copy(file1_path, file2_path)
+
+        # 2. Run dedupe to generate an initial manifest
+        manifest_in_path = os.path.join(self.test_dir, "manifest.db")
+        run_dupe_copy(read_from_path=[src_dir], manifest_out_path=manifest_in_path)
+
+        # 3. Run the delete operation with an output manifest
+        manifest_out_path = os.path.join(self.test_dir, "manifest_after_delete.db")
+        run_dupe_copy(
+            manifests_in_paths=[manifest_in_path],
+            manifest_out_path=manifest_out_path,
+            delete_duplicates=True,
+            no_walk=True,
+        )
+
+        # 4. Assert that the output manifest correctly reflects the deletion
+        self.assertTrue(os.path.exists(file1_path))
+        self.assertFalse(
+            os.path.exists(file2_path), "Duplicate file should have been deleted"
+        )
+
+        manifest_after = Manifest(manifest_out_path, temp_directory=self.test_dir)
+        the_hash = "e7faa48ad4fcab277902b749a7a91353"  # md5 of "duplicate content"
+
+        # This is the core assertion for the bug
+        self.assertIn(the_hash, manifest_after.md5_data)
+        self.assertEqual(
+            len(manifest_after.md5_data[the_hash]),
+            1,
+            "Manifest should only contain one file for the hash after deletion.",
+        )
+        self.assertEqual(
+            manifest_after.md5_data[the_hash][0][0],
+            file1_path,
+            "The remaining file in the manifest should be file1.txt",
+        )
+        manifest_after.close()
