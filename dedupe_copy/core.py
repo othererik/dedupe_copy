@@ -479,7 +479,8 @@ def delete_files(
 
     This function identifies which files to delete from a list of duplicates,
     queues them for deletion, and manages a pool of worker threads to carry
-    out the deletion tasks.
+    out the deletion tasks. It now returns only the paths of files that were
+    successfully deleted.
 
     Args:
         duplicates: A dictionary where keys are hashes and values are lists of
@@ -488,10 +489,11 @@ def delete_files(
         delete_job: The configuration for the delete operation.
 
     Returns:
-        A list of paths of the files that were queued for deletion.
+        A list of paths of the files that were actually deleted.
     """
     stop_event = threading.Event()
     delete_queue: "queue.Queue[str]" = queue.Queue()
+    deleted_queue: "queue.Queue[str]" = queue.Queue()
     workers = []
     files_to_delete_count = 0
     files_to_delete = []
@@ -539,6 +541,7 @@ def delete_files(
             delete_queue,
             stop_event,
             progress_queue=progress_queue,
+            deleted_queue=deleted_queue,
             dry_run=delete_job.dry_run,
         )
         workers.append(d)
@@ -554,7 +557,13 @@ def delete_files(
     for d in workers:
         d.join()
 
-    return files_to_delete
+    successfully_deleted_files = []
+    while not deleted_queue.empty():
+        try:
+            successfully_deleted_files.append(deleted_queue.get_nowait())
+        except queue.Empty:
+            break
+    return successfully_deleted_files
 
 
 def verify_manifest_fs(manifest: Manifest) -> bool:

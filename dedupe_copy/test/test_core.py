@@ -131,3 +131,45 @@ class TestRunDupeCopy(unittest.TestCase):
             "The remaining file in the manifest should be file1.txt",
         )
         manifest_after.close()
+
+    def test_delete_handles_os_error_and_preserves_manifest(self):
+        """Verify that if a file fails to delete, it remains in the manifest."""
+        # 1. Setup: Create a directory with duplicate files
+        src_dir = os.path.join(self.test_dir, "src")
+        os.makedirs(src_dir)
+        file1_path = os.path.join(src_dir, "file1.txt")
+        file2_path = os.path.join(src_dir, "file2.txt")
+        with open(file1_path, "w", encoding="utf-8") as f:
+            f.write("duplicate content")
+        shutil.copy(file1_path, file2_path)
+
+        # 2. Run dedupe to generate an initial manifest
+        manifest_in_path = os.path.join(self.test_dir, "manifest.db")
+        run_dupe_copy(read_from_path=[src_dir], manifest_out_path=manifest_in_path)
+
+        # 3. Mock os.remove in the context of the DeleteThread
+        manifest_out_path = os.path.join(self.test_dir, "manifest_after_delete.db")
+        with patch("dedupe_copy.threads.os.remove", side_effect=OSError("Permission denied")):
+            run_dupe_copy(
+                manifests_in_paths=[manifest_in_path],
+                manifest_out_path=manifest_out_path,
+                delete_duplicates=True,
+                no_walk=True,
+            )
+
+        # 4. Assertions
+        # The file that should have been deleted still exists on disk
+        self.assertTrue(os.path.exists(file2_path), "File should not have been deleted due to mock error")
+
+        # Load the output manifest and check its contents
+        manifest_after = Manifest(manifest_out_path, temp_directory=self.test_dir)
+        the_hash = "e7faa48ad4fcab277902b749a7a91353"  # md5 of "duplicate content"
+
+        # This is the core assertion that should fail with the current code
+        self.assertIn(the_hash, manifest_after.md5_data, "Hash should be in the new manifest.")
+        self.assertEqual(
+            len(manifest_after.md5_data[the_hash]),
+            2,
+            "Manifest should still contain TWO files for the hash because deletion failed.",
+        )
+        manifest_after.close()
