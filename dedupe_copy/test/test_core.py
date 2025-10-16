@@ -1,8 +1,13 @@
-"""Tests for dedupe_copy.core.info_parser."""
+"""Tests for dedupe_copy.core."""
 
+import os
+import shutil
+import tempfile
 import unittest
 from unittest.mock import patch
-from dedupe_copy.core import info_parser
+
+from dedupe_copy.core import info_parser, run_dupe_copy
+from dedupe_copy.manifest import Manifest
 
 
 class TestInfoParser(unittest.TestCase):
@@ -18,3 +23,64 @@ class TestInfoParser(unittest.TestCase):
         results = list(info_parser(data))
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0][2], "Unknown")
+
+
+class TestRunDupeCopy(unittest.TestCase):
+    """Tests for the main run_dupe_copy function."""
+
+    def setUp(self):
+        """Set up a temporary directory for tests."""
+        self.test_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up the temporary directory."""
+        shutil.rmtree(self.test_dir)
+
+    def test_delete_without_manifest_out_does_not_overwrite_input(self):
+        """Verify that --delete does not overwrite the input manifest."""
+        # 1. Setup: Create a directory with duplicate files
+        src_dir = os.path.join(self.test_dir, "src")
+        os.makedirs(src_dir)
+        file1_path = os.path.join(src_dir, "file1.txt")
+        file2_path = os.path.join(src_dir, "file2.txt")
+        with open(file1_path, "w", encoding="utf-8") as f:
+            f.write("duplicate content")
+        with open(file2_path, "w", encoding="utf-8") as f:
+            f.write("duplicate content")
+
+        # 2. Create an initial manifest programmatically
+        manifest_in_path = os.path.join(self.test_dir, "manifest.db")
+        manifest = Manifest(
+            None, save_path=manifest_in_path, temp_directory=self.test_dir
+        )
+        the_hash = "d34861214a1419720453305a16027201"  # md5 of "duplicate content"
+        manifest[the_hash] = [
+            [file1_path, 17, os.path.getmtime(file1_path)],
+            [file2_path, 17, os.path.getmtime(file2_path)],
+        ]
+        manifest.read_sources[file1_path] = None
+        manifest.read_sources[file2_path] = None
+        manifest.save()
+        manifest.close()
+
+        # 3. Run the delete operation without specifying an output manifest
+        # This will delete file2.txt because of sort order
+        run_dupe_copy(
+            manifests_in_paths=[manifest_in_path],
+            delete_duplicates=True,
+            no_walk=True,
+        )
+
+        # 4. Assert that the input manifest was NOT modified
+        self.assertTrue(os.path.exists(file1_path))
+        self.assertFalse(os.path.exists(file2_path), "File should have been deleted")
+        manifest_after = Manifest(manifest_in_path, temp_directory=self.test_dir)
+        self.assertEqual(
+            len(manifest_after.md5_data), 1, "Manifest should still contain the hash."
+        )
+        self.assertEqual(
+            len(manifest_after.md5_data[the_hash]),
+            2,
+            "Manifest file list for hash should be unchanged.",
+        )
+        manifest_after.close()

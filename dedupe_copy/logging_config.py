@@ -8,12 +8,12 @@ import sys
 
 # Try to import colorama for colored output
 try:
-    from colorama import Fore, Style, init as colorama_init
+    from colorama import Fore, Style, init as colorama_init  # type: ignore
 
     HAS_COLORAMA = True
 except ImportError:
     HAS_COLORAMA = False
-    colorama_init = None  # type: ignore
+    colorama_init = None # type: ignore
 
 
 class ColoredFormatter(logging.Formatter):

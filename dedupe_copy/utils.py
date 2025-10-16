@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # Optional import of xxhash for faster hashing if available
 xxhash: Optional[Any] = None
 try:
-    import xxhash
+    import xxhash  # type: ignore
 except ImportError:
     logger.warning(
         "xxhash module not found. Please install with 'pip install xxhash',"

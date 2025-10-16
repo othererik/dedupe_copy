@@ -853,18 +853,10 @@ def run_dupe_copy(
                 delete_job=delete_job,
             )
             # Update the manifest with the deleted files
-            if deleted_files:
-                all_data.remove_files(deleted_files)
-
-            # If we are deleting, we should save the manifest so we don't
-            # have to re-scan next time.
-            if not manifest_out_path and manifests_in_paths:
-                if isinstance(manifests_in_paths, list):
-                    manifest_out_path = manifests_in_paths[0]
-                else:
-                    manifest_out_path = manifests_in_paths
-
             if manifest_out_path:
+                # Update the manifest with the deleted files
+                if deleted_files:
+                    all_data.remove_files(deleted_files)
                 progress_queue.put(
                     (HIGH_PRIORITY, "message", "Saving updated manifest after deletion")
                 )
