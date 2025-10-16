@@ -288,24 +288,41 @@ class Manifest:
             self.load(manifests[0])
             return
 
-        loaded = []
-        try:
-            for src in manifests:
-                loaded.append(self._load_manifest(src))
+        # Close existing manifests before replacing them
+        self.close()
 
-            # Close existing manifests before replacing them
-            self.close()
+        # This will become the new manifest data. Start with empty.
+        self.md5_data, self.read_sources = self._combine_manifests(
+            [], self.temp_directory
+        )
 
-            self.md5_data, self.read_sources = self._combine_manifests(
-                loaded, self.temp_directory
-            )
-        finally:
-            # Ensure temporary manifest dicts used for loading are closed
-            for md5_data, read_sources in loaded:
-                if hasattr(md5_data, "close"):
-                    md5_data.close()
-                if hasattr(read_sources, "close"):
-                    read_sources.close()
+        # Iteratively load and combine manifests, closing each one after use.
+        for src in manifests:
+            m, r = self._load_manifest(src)
+            try:
+                for key, files in m.items():
+                    current_files = self.md5_data[key]
+                    # Use a set for faster lookups
+                    existing_files = {tuple(f) for f in current_files}
+                    new_files_added = False
+                    for info in files:
+                        info_tuple = tuple(info)
+                        if info_tuple not in existing_files:
+                            current_files.append(info)
+                            existing_files.add(info_tuple)
+                            new_files_added = True
+
+                    if new_files_added:
+                        self.md5_data[key] = current_files
+
+                for key in r:
+                    self.read_sources[key] = None
+            finally:
+                # Ensure the temporary manifest is closed to release file handles
+                if hasattr(m, "close"):
+                    m.close()
+                if hasattr(r, "close"):
+                    r.close()
 
     def convert_manifest_paths(
         self, paths_from: str, paths_to: str, temp_directory: Optional[str] = None
