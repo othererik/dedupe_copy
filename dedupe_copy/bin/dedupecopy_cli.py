@@ -188,8 +188,8 @@ def _create_parser():
         action="store_true",
     )
     parser.add_argument(
-        "--keep-empty",
-        help="Do not count empty files as duplicates",
+        "--dedupe-empty",
+        help="Treat all empty (zero-byte) files as duplicates.",
         required=False,
         default=False,
         action="store_true",
@@ -319,7 +319,7 @@ def _handle_arguments(args):
         "convert_manifest_paths_from": args.convert_manifest_paths_from,
         "no_walk": args.no_walk,
         "no_copy": None,
-        "keep_empty": args.keep_empty,
+        "dedupe_empty": args.dedupe_empty,
         "compare_manifests": args.compare,
         "preserve_stat": args.copy_metadata,
         "delete_duplicates": args.delete,

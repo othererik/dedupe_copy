@@ -362,9 +362,10 @@ def queue_copy_work(
                         action_required = False
                         break
             if action_required:
-                if not copy_job.ignore_empty_files:
-                    copied[md5] = None
-                elif size:
+                if size == 0 and not copy_job.dedupe_empty:
+                    # Don't add empty files to the copied list, so they all get copied
+                    pass
+                else:
                     copied[md5] = None
                 _throttle_puts(copy_queue.qsize())
                 copy_queue.put((path, mtime, size))
@@ -557,10 +558,31 @@ def delete_files(
             continue
         # Sort by path to ensure we always keep the same file
         sorted_file_list = sorted(file_list, key=lambda x: x[0])
-        # Keep the first file, queue the rest for deletion if they meet the size criteria
+        # Keep the first file, queue the rest for deletion
         for file_info in sorted_file_list[1:]:
-            path_to_delete = file_info[0]
-            size = file_info[1]
+            path_to_delete, size, _ = file_info
+            if size == 0 and not delete_job.dedupe_empty:
+                if progress_queue:
+                    progress_queue.put(
+                        (
+                            LOW_PRIORITY,
+                            "message",
+                            f"Skipping deletion of empty file {path_to_delete} because --dedupe-empty is not set.",
+                        )
+                    )
+                continue
+
+            if size == 0 and not delete_job.dedupe_empty:
+                if progress_queue:
+                    progress_queue.put(
+                        (
+                            LOW_PRIORITY,
+                            "message",
+                            f"Skipping deletion of empty file {path_to_delete} because --dedupe-empty is not set.",
+                        )
+                    )
+                continue
+
             if size >= delete_job.min_delete_size_bytes:
                 files_to_delete.append(path_to_delete)
                 files_to_delete_count += 1
@@ -693,7 +715,7 @@ def run_dupe_copy(
     convert_manifest_paths_from: str = "",
     no_walk: bool = False,
     no_copy: Optional[List[str]] = None,
-    keep_empty: bool = False,
+    dedupe_empty: bool = False,
     compare_manifests: Optional[Union[str, List[str]]] = None,
     preserve_stat: bool = False,
     delete_duplicates: bool = False,
@@ -788,8 +810,8 @@ def run_dupe_copy(
         "Threads: walk=%d, read=%d, copy=%d", walk_threads, read_threads, copy_threads
     )
     logger.info(
-        "Options: keep_empty=%s, preserve_stat=%s, no_walk=%s",
-        keep_empty,
+        "Options: dedupe_empty=%s, preserve_stat=%s, no_walk=%s",
+        dedupe_empty,
         preserve_stat,
         no_walk,
     )
@@ -869,7 +891,10 @@ def run_dupe_copy(
             if len(info) > 1:
                 collisions[md5] = info
     walk_config = WalkConfig(
-        extensions=extensions, ignore=ignored_patterns, hash_algo=hash_algo
+        extensions=extensions,
+        ignore=ignored_patterns,
+        hash_algo=hash_algo,
+        dedupe_empty=dedupe_empty,
     )
 
     if no_walk:
@@ -907,7 +932,7 @@ def run_dupe_copy(
             progress_queue=progress_queue,
             walk_threads=walk_threads,
             read_threads=read_threads,
-            keep_empty=keep_empty,
+            keep_empty=not dedupe_empty,
             save_event=save_event,
             walk_queue=walk_queue,
         )
@@ -930,6 +955,7 @@ def run_dupe_copy(
                 delete_threads=copy_threads,
                 dry_run=dry_run,
                 min_delete_size_bytes=min_delete_size,
+                dedupe_empty=dedupe_empty,
             )
             deleted_files = delete_files(
                 dupes,
@@ -969,7 +995,7 @@ def run_dupe_copy(
             copy_config=copy_config,
             ignore=ignored_patterns,
             no_copy=compare,
-            ignore_empty_files=keep_empty,
+            dedupe_empty=dedupe_empty,
             copy_threads=copy_threads,
             delete_on_copy=delete_on_copy,
             dry_run=dry_run,

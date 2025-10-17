@@ -152,7 +152,7 @@ class TestCopySystem(
             read_from_path=self.temp_dir,
             copy_to_path=copy_to_path,
             path_rules=["*:no_change"],
-            keep_empty=False,
+            dedupe_empty=True,
         )
         # verify we didn't alter the existing data
         result, notes = utils.verify_files(self.file_data)
@@ -175,7 +175,7 @@ class TestCopySystem(
             read_from_path=self.temp_dir,
             copy_to_path=copy_to_path,
             path_rules=["*:no_change"],
-            keep_empty=True,
+            dedupe_empty=False,
         )
         # verify we didn't alter the existing data
         result, notes = utils.verify_files(self.file_data)

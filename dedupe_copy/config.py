@@ -18,6 +18,7 @@ class WalkConfig:
     extensions: Optional[List[str]] = None
     ignore: Optional[List[str]] = None
     hash_algo: str = "md5"
+    dedupe_empty: bool = False
 
 
 @dataclass
@@ -51,7 +52,7 @@ class CopyJob:
         copy_config: The core configuration for the copy operation.
         ignore: A list of glob patterns to exclude from the copy.
         no_copy: A set-like object of hashes to prevent from being copied.
-        ignore_empty_files: If True, files with zero size are not copied.
+        dedupe_empty: If True, treat all empty (zero-byte) files as duplicates.
         copy_threads: The number of concurrent threads to use for copying.
         delete_on_copy: If True, delete source files after a successful copy.
         dry_run: If True, simulate operations without making changes.
@@ -60,7 +61,7 @@ class CopyJob:
     copy_config: CopyConfig
     ignore: Optional[List[str]] = None
     no_copy: Optional[Any] = None
-    ignore_empty_files: bool = False
+    dedupe_empty: bool = False
     copy_threads: int = 8
     delete_on_copy: bool = False
     dry_run: bool = False
@@ -79,3 +80,4 @@ class DeleteJob:
     delete_threads: int = 8
     dry_run: bool = False
     min_delete_size_bytes: int = 0
+    dedupe_empty: bool = False
