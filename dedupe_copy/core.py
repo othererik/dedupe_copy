@@ -29,6 +29,9 @@ from .utils import _throttle_puts, ensure_logging_configured, lower_extension
 
 logger = logging.getLogger(__name__)
 
+# This is something to address later
+# pylint: disable=too-many-lines
+
 
 def _walk_fs(
     read_paths: List[str],
@@ -330,12 +333,14 @@ def queue_copy_work(
     copied: Any,
     *,
     copy_job: "CopyJob",
+    delete_only_queue: Optional["queue.Queue[str]"] = None,
 ) -> Any:
     """Populates the copy queue with files to be processed.
 
     This function iterates through the provided data, filters out files that
     have already been copied or are explicitly ignored, and adds the remaining
-    files to the copy queue.
+    files to the copy queue. If delete_on_copy is enabled, it will also queue
+    files that are duplicates of the --compare manifest for deletion.
 
     Args:
         copy_queue: The queue to which copy tasks will be added.
@@ -343,6 +348,7 @@ def queue_copy_work(
         progress_queue: An optional queue for reporting progress.
         copied: A set-like object of hashes that have already been copied.
         copy_job: The configuration for the copy operation.
+        delete_only_queue: An optional queue for files to be deleted but not copied.
 
     Returns:
         The updated `copied` object.
@@ -364,6 +370,12 @@ def queue_copy_work(
                 copy_queue.put((path, mtime, size))
             elif progress_queue:
                 progress_queue.put((LOW_PRIORITY, "not_copied", path))
+        elif copy_job.delete_on_copy and delete_only_queue:
+            # This file is a duplicate of a 'compare' file and we want to delete it.
+            _throttle_puts(delete_only_queue.qsize())
+            delete_only_queue.put(path)
+            if progress_queue:
+                progress_queue.put((LOW_PRIORITY, "queued_for_delete", path))
         elif progress_queue:
             progress_queue.put((LOW_PRIORITY, "not_copied", path))
     return copied
@@ -376,11 +388,11 @@ def copy_data(
     *,
     copy_job: "CopyJob",
 ) -> List[str]:
-    """Manages the process of copying files.
+    """Manages the process of copying files and deleting source files.
 
-    This function sets up and manages a pool of worker threads to perform
-    file copy operations. It queues the copy tasks for both duplicate and
-    unique files and ensures all copy operations are completed.
+    This function sets up and manages worker threads to perform file copy
+    and delete operations. It queues copy tasks and, if configured, also
+    queues duplicate files from the source for deletion.
 
     Args:
         dupes: A dictionary of duplicate files to be copied.
@@ -389,12 +401,15 @@ def copy_data(
         copy_job: The configuration for the copy operation.
 
     Returns:
-        A list of source file paths that were deleted after being copied.
+        A list of all source file paths that were deleted.
     """
-    stop_event = threading.Event()
+    copy_stop_event = threading.Event()
     copy_queue: "queue.Queue[Tuple[str, str, int]]" = queue.Queue()
-    deleted_queue: "queue.Queue[str]" = queue.Queue()
-    workers = []
+    # This queue holds files deleted by CopyThreads
+    deleted_after_copy_queue: "queue.Queue[str]" = queue.Queue()
+    # This queue holds files to be deleted because they are dupes of --compare
+    delete_only_queue: "queue.Queue[str]" = queue.Queue()
+    copy_workers = []
     copied = copy_job.no_copy
     if progress_queue:
         progress_queue.put(
@@ -407,12 +422,12 @@ def copy_data(
     for _ in range(copy_job.copy_threads):
         c = CopyThread(
             copy_queue,
-            stop_event,
+            copy_stop_event,
             copy_config=copy_job.copy_config,
             progress_queue=progress_queue,
-            deleted_queue=deleted_queue,
+            deleted_queue=deleted_after_copy_queue,
         )
-        workers.append(c)
+        copy_workers.append(c)
         c.start()
     if progress_queue:
         progress_queue.put(
@@ -430,6 +445,7 @@ def copy_data(
         progress_queue,
         copied,
         copy_job=copy_job,
+        delete_only_queue=delete_only_queue,
     )
     queue_copy_work(
         copy_queue,
@@ -437,36 +453,74 @@ def copy_data(
         progress_queue,
         copied,
         copy_job=copy_job,
+        delete_only_queue=delete_only_queue,
     )
     # Wait for all tasks to be processed by the workers
     copy_queue.join()
 
-    # Signal threads to stop and wait for them to terminate
-    stop_event.set()
-    for c in workers:
+    # Signal copy threads to stop and wait for them to terminate
+    copy_stop_event.set()
+    for c in copy_workers:
         c.join()
 
-    deleted_files = []
-    while not deleted_queue.empty():
+    # Now, handle the deletion of files that were duplicates of the compare manifest
+    all_deleted_files = []
+    while not deleted_after_copy_queue.empty():
         try:
-            deleted_files.append(deleted_queue.get_nowait())
+            all_deleted_files.append(deleted_after_copy_queue.get_nowait())
         except queue.Empty:
             break
+
+    if not delete_only_queue.empty():
+        delete_stop_event = threading.Event()
+        delete_workers = []
+        # This queue holds files deleted by DeleteThreads
+        deleted_dupes_queue: "queue.Queue[str]" = queue.Queue()
+        if progress_queue:
+            progress_queue.put(
+                (
+                    HIGH_PRIORITY,
+                    "message",
+                    f"Starting deletion of {delete_only_queue.qsize()} source files "
+                    "that are duplicates of the compare manifest.",
+                )
+            )
+        for _ in range(copy_job.copy_threads):  # Re-use copy_threads for deletion
+            d = DeleteThread(
+                delete_only_queue,
+                delete_stop_event,
+                progress_queue=progress_queue,
+                deleted_queue=deleted_dupes_queue,
+                dry_run=copy_job.dry_run,
+            )
+            delete_workers.append(d)
+            d.start()
+
+        delete_only_queue.join()
+        delete_stop_event.set()
+        for d in delete_workers:
+            d.join()
+
+        while not deleted_dupes_queue.empty():
+            try:
+                all_deleted_files.append(deleted_dupes_queue.get_nowait())
+            except queue.Empty:
+                break
 
     if progress_queue:
         if copied is not None:
             progress_queue.put(
                 (HIGH_PRIORITY, "message", f"Processed {len(copied)} unique items")
             )
-        if deleted_files:
+        if all_deleted_files:
             progress_queue.put(
                 (
                     HIGH_PRIORITY,
                     "message",
-                    f"Deleted {len(deleted_files)} files after copy.",
+                    f"Deleted a total of {len(all_deleted_files)} files from source.",
                 )
             )
-    return deleted_files
+    return all_deleted_files
 
 
 def delete_files(

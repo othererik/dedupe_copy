@@ -109,7 +109,9 @@ def _create_parser():
     )
     parser.add_argument(
         "--delete-on-copy",
-        help="Delete source files after successful copy. Requires --copy-path.",
+        help="Delete source files after successful copy. If --compare is also used, "
+        "source files that are duplicates of those in the compare manifest will "
+        "also be deleted. Requires --copy-path.",
         required=False,
         default=False,
         action="store_true",
