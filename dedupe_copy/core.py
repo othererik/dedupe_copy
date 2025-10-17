@@ -683,6 +683,27 @@ def run_dupe_copy(
     # Ensure logging is configured for programmatic calls
     ensure_logging_configured()
 
+    # Argument validation
+    if manifests_in_paths and manifest_out_path:
+        # Check if any of the input manifests are the same as the output manifest
+        if any(
+            os.path.abspath(p) == os.path.abspath(manifest_out_path)
+            for p in manifests_in_paths
+        ):
+            raise ValueError(
+                "Input manifest path cannot be the same as the output manifest path."
+            )
+
+    if compare_manifests and manifest_out_path:
+        # Check if any of the compare manifests are the same as the output manifest
+        if any(
+            os.path.abspath(p) == os.path.abspath(manifest_out_path)
+            for p in compare_manifests
+        ):
+            raise ValueError(
+                "Compare manifest path cannot be the same as the output manifest path."
+            )
+
     # Display pre-flight summary
     logger.info("=" * 70)
     logger.info("DEDUPE COPY - Operation Summary")

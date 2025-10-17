@@ -8,10 +8,9 @@ from dedupe_copy.bin import dedupecopy_cli
 class TestCliValidation(unittest.TestCase):
     """Tests for the CLI argument validation."""
 
-    @patch("dedupe_copy.bin.dedupecopy_cli.run_dupe_copy")
     @patch("dedupe_copy.bin.dedupecopy_cli.argparse.ArgumentParser.error")
     def test_compare_and_output_manifest_cannot_be_same(
-        self, mock_error, mock_run_dupe_copy
+        self, mock_error
     ):  # pylint: disable=unused-argument
         """Verify CLI exits if --compare and -m paths are the same."""
         # This test is expected to fail before the fix
@@ -32,13 +31,12 @@ class TestCliValidation(unittest.TestCase):
                 dedupecopy_cli.run_cli()
 
         mock_error.assert_called_once_with(
-            "--compare and -m/--manifest-dump-path cannot be the same file."
+            "Compare manifest path cannot be the same as the output manifest path."
         )
 
-    @patch("dedupe_copy.bin.dedupecopy_cli.run_dupe_copy")
     @patch("dedupe_copy.bin.dedupecopy_cli.argparse.ArgumentParser.error")
     def test_input_and_output_manifest_cannot_be_same(
-        self, mock_error, mock_run_dupe_copy
+        self, mock_error
     ):  # pylint: disable=unused-argument
         """Verify CLI exits if -i and -m paths are the same."""
         test_args = [
@@ -56,5 +54,5 @@ class TestCliValidation(unittest.TestCase):
                 dedupecopy_cli.run_cli()
 
         mock_error.assert_called_once_with(
-            "-i/--manifest-read-path and -m/--manifest-dump-path cannot be the same file."
+            "Input manifest path cannot be the same as the output manifest path."
         )

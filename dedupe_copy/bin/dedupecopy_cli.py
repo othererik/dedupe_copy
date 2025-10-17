@@ -343,25 +343,6 @@ def run_cli():
             "require -m/--manifest-dump-path."
         )
 
-    if args.manifest_in and args.manifest_out:
-        # Check if any of the input manifests are the same as the output manifest
-        if any(
-            os.path.abspath(p) == os.path.abspath(args.manifest_out)
-            for p in args.manifest_in
-        ):
-            parser.error(
-                "-i/--manifest-read-path and -m/--manifest-dump-path cannot be the same file."
-            )
-
-    if args.compare and args.manifest_out:
-        # Check if any of the compare manifests are the same as the output manifest
-        if any(
-            os.path.abspath(p) == os.path.abspath(args.manifest_out)
-            for p in args.compare
-        ):
-            parser.error(
-                "--compare and -m/--manifest-dump-path cannot be the same file."
-            )
 
     # Setup logging based on verbosity flags
     verbosity = "normal"
@@ -377,7 +358,10 @@ def run_cli():
     logger.debug("Running with arguments: %s", args)
 
     processed_args = _handle_arguments(args)
-    return run_dupe_copy(**processed_args)
+    try:
+        return run_dupe_copy(**processed_args)
+    except ValueError as e:
+        parser.error(str(e))
 
 
 if __name__ == "__main__":
