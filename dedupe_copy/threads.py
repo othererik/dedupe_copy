@@ -764,6 +764,7 @@ class DeleteThread(threading.Thread):
         stop_event: threading.Event,
         *,
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
+        deleted_queue: Optional["queue.Queue[str]"] = None,
         dry_run: bool = False,
     ) -> None:
         """Initializes the DeleteThread.
@@ -772,12 +773,14 @@ class DeleteThread(threading.Thread):
             work_queue: The queue of file paths to be deleted.
             stop_event: An event to signal the thread to stop.
             progress_queue: An optional queue for reporting progress.
+            deleted_queue: An optional queue to record successfully deleted files.
             dry_run: If True, simulates deletions.
         """
         super().__init__()
         self.work = work_queue
         self.stop_event = stop_event
         self.progress_queue = progress_queue
+        self.deleted_queue = deleted_queue
         self.dry_run = dry_run
         self.daemon = True
 
@@ -806,6 +809,8 @@ class DeleteThread(threading.Thread):
                             os.remove(src)
                             if self.progress_queue:
                                 self.progress_queue.put((LOW_PRIORITY, "deleted", src))
+                            if self.deleted_queue:
+                                self.deleted_queue.put(src)
                         except OSError as e:
                             if self.progress_queue:
                                 self.progress_queue.put(
