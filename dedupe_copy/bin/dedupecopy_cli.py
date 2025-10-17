@@ -353,6 +353,16 @@ def run_cli():
                 "-i/--manifest-read-path and -m/--manifest-dump-path cannot be the same file."
             )
 
+    if args.compare and args.manifest_out:
+        # Check if any of the compare manifests are the same as the output manifest
+        if any(
+            os.path.abspath(p) == os.path.abspath(args.manifest_out)
+            for p in args.compare
+        ):
+            parser.error(
+                "--compare and -m/--manifest-dump-path cannot be the same file."
+            )
+
     # Setup logging based on verbosity flags
     verbosity = "normal"
     if args.quiet:
