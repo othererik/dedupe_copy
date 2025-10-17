@@ -776,6 +776,8 @@ def run_dupe_copy(
             else [manifests_in_paths]
         )
         logger.info("Input manifest(s): %d manifest(s)", len(manifests))
+        for p in manifests:
+            logger.info("  - %s", p)
     if manifest_out_path:
         logger.info("Output manifest: %s", manifest_out_path)
     if extensions:
@@ -800,6 +802,8 @@ def run_dupe_copy(
             else [compare_manifests]
         )
         logger.info("Compare manifests: %d manifest(s)", len(comp_list))
+        for p in comp_list:
+            logger.info("  - %s", p)
     logger.info("=" * 70)
     logger.info("")
 
