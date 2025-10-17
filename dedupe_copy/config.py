@@ -51,7 +51,7 @@ class CopyJob:
         copy_config: The core configuration for the copy operation.
         ignore: A list of glob patterns to exclude from the copy.
         no_copy: A set-like object of hashes to prevent from being copied.
-        ignore_empty_files: If True, files with zero size are not copied.
+        keep_empty: If True, empty files will be processed and copied.
         copy_threads: The number of concurrent threads to use for copying.
         delete_on_copy: If True, delete source files after a successful copy.
         dry_run: If True, simulate operations without making changes.
@@ -60,7 +60,7 @@ class CopyJob:
     copy_config: CopyConfig
     ignore: Optional[List[str]] = None
     no_copy: Optional[Any] = None
-    ignore_empty_files: bool = False
+    keep_empty: bool = False
     copy_threads: int = 8
     delete_on_copy: bool = False
     dry_run: bool = False

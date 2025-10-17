@@ -189,7 +189,7 @@ def _create_parser():
     )
     parser.add_argument(
         "--keep-empty",
-        help="Do not count empty files as duplicates",
+        help="Process empty files. By default, they are ignored and not copied.",
         required=False,
         default=False,
         action="store_true",

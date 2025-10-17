@@ -362,12 +362,18 @@ def queue_copy_work(
                         action_required = False
                         break
             if action_required:
-                if not copy_job.ignore_empty_files:
-                    copied[md5] = None
-                elif size:
-                    copied[md5] = None
-                _throttle_puts(copy_queue.qsize())
-                copy_queue.put((path, mtime, size))
+                if not size and not copy_job.keep_empty:
+                    if progress_queue:
+                        progress_queue.put((LOW_PRIORITY, "ignored_empty", path))
+                    continue
+
+                # Use path to track empty files if keep_empty is True
+                # to avoid them being treated as duplicates
+                key = path if (size == 0 and copy_job.keep_empty) else md5
+                if key not in copied:
+                    copied[key] = None
+                    _throttle_puts(copy_queue.qsize())
+                    copy_queue.put((path, mtime, size))
             elif progress_queue:
                 progress_queue.put((LOW_PRIORITY, "not_copied", path))
         elif copy_job.delete_on_copy and delete_only_queue:
@@ -969,7 +975,7 @@ def run_dupe_copy(
             copy_config=copy_config,
             ignore=ignored_patterns,
             no_copy=compare,
-            ignore_empty_files=keep_empty,
+            keep_empty=keep_empty,
             copy_threads=copy_threads,
             delete_on_copy=delete_on_copy,
             dry_run=dry_run,
