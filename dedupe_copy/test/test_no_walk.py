@@ -130,8 +130,8 @@ class TestNoWalk(unittest.TestCase):
 
         output = f.getvalue()
 
+        self.assertIn("DRY RUN: Would have started deletion of 1 files.", output)
         self.assertIn("[DRY RUN] Would delete", output)
-        self.assertIn("Starting deletion of 1 files.", output)
         self.assertIn("Skipping deletion of ", output)
         self.assertIn("with size 3 bytes", output)
 

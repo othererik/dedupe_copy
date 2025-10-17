@@ -575,13 +575,23 @@ def delete_files(
                 )
 
     if progress_queue:
-        progress_queue.put(
-            (
-                HIGH_PRIORITY,
-                "message",
-                f"Starting deletion of {files_to_delete_count} files.",
+        if delete_job.dry_run:
+            logger.info("DRY RUN: Would have deleted %d files.", files_to_delete_count)
+            progress_queue.put(
+                (
+                    HIGH_PRIORITY,
+                    "message",
+                    f"DRY RUN: Would have started deletion of {files_to_delete_count} files.",
+                )
             )
-        )
+        else:
+            progress_queue.put(
+                (
+                    HIGH_PRIORITY,
+                    "message",
+                    f"Starting deletion of {files_to_delete_count} files.",
+                )
+            )
         progress_queue.put(
             (
                 HIGH_PRIORITY,
