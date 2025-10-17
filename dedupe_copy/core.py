@@ -29,6 +29,9 @@ from .utils import _throttle_puts, ensure_logging_configured, lower_extension
 
 logger = logging.getLogger(__name__)
 
+# This is something to address later
+# pylint: disable=too-many-lines
+
 
 def _walk_fs(
     read_paths: List[str],

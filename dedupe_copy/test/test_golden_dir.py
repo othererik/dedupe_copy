@@ -14,6 +14,7 @@ class TestGoldenDirUseCase(unittest.TestCase):
     """Tests for the 'golden directory' backup use case."""
 
     def setUp(self):
+        # pylint: disable=consider-using-with
         self.temp_dir = tempfile.TemporaryDirectory()
         self.golden_dir = Path(self.temp_dir.name) / "golden"
         self.source_dir1 = Path(self.temp_dir.name) / "source1"
