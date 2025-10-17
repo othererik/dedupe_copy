@@ -640,6 +640,10 @@ class ProgressThread(threading.Thread):
         """Log files that were not copied."""
         self.not_copied_count += 1
 
+    def do_log_queued_for_delete(self, item: str) -> None:
+        """Log that an item was queued for deletion."""
+        logger.debug("Queued for deletion: %s", item)
+
     def do_log_deleted(self, _path: str) -> None:
         """Log successful file deletion."""
         self.deleted_count += 1
