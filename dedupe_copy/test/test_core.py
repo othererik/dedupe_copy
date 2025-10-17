@@ -149,7 +149,9 @@ class TestRunDupeCopy(unittest.TestCase):
 
         # 3. Mock os.remove in the context of the DeleteThread
         manifest_out_path = os.path.join(self.test_dir, "manifest_after_delete.db")
-        with patch("dedupe_copy.threads.os.remove", side_effect=OSError("Permission denied")):
+        with patch(
+            "dedupe_copy.threads.os.remove", side_effect=OSError("Permission denied")
+        ):
             run_dupe_copy(
                 manifests_in_paths=[manifest_in_path],
                 manifest_out_path=manifest_out_path,
@@ -159,14 +161,19 @@ class TestRunDupeCopy(unittest.TestCase):
 
         # 4. Assertions
         # The file that should have been deleted still exists on disk
-        self.assertTrue(os.path.exists(file2_path), "File should not have been deleted due to mock error")
+        self.assertTrue(
+            os.path.exists(file2_path),
+            "File should not have been deleted due to mock error",
+        )
 
         # Load the output manifest and check its contents
         manifest_after = Manifest(manifest_out_path, temp_directory=self.test_dir)
         the_hash = "e7faa48ad4fcab277902b749a7a91353"  # md5 of "duplicate content"
 
         # This is the core assertion that should fail with the current code
-        self.assertIn(the_hash, manifest_after.md5_data, "Hash should be in the new manifest.")
+        self.assertIn(
+            the_hash, manifest_after.md5_data, "Hash should be in the new manifest."
+        )
         self.assertEqual(
             len(manifest_after.md5_data[the_hash]),
             2,
