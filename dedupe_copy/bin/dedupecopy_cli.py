@@ -2,7 +2,7 @@
 """Command-line interface for the dedupe_copy tool."""
 import argparse
 import logging
-import os
+import sys
 
 from dedupe_copy.utils import clean_extensions
 from dedupe_copy.core import run_dupe_copy
@@ -343,7 +343,6 @@ def run_cli():
             "require -m/--manifest-dump-path."
         )
 
-
     # Setup logging based on verbosity flags
     verbosity = "normal"
     if args.quiet:
@@ -362,6 +361,7 @@ def run_cli():
         return run_dupe_copy(**processed_args)
     except ValueError as e:
         parser.error(str(e))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

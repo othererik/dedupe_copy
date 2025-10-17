@@ -1,4 +1,5 @@
 """Tests for the CLI argument validation."""
+
 import unittest
 from unittest.mock import patch
 
