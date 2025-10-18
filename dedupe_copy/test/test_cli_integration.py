@@ -89,14 +89,9 @@ class TestCliIntegration(unittest.TestCase):
 
         # Assert that the duplicates are found and processed for deletion
         self.assertIn(
-            "[DRY RUN] Would delete",
+            "DRY RUN: Would have started deletion of 1 files.",
             output,
             "Dry run deletion message not found in output.",
-        )
-        self.assertIn(
-            "Starting deletion of 1 files.",
-            output,
-            "Incorrect number of files reported for deletion.",
         )
         self.assertIn(
             "Skipping deletion of ",
