@@ -247,7 +247,7 @@ def find_duplicates(
         progress_queue: Optional queue for progress updates.
         walk_threads: Number of threads for walking the filesystem.
         read_threads: Number of threads for reading and hashing files.
-        keep_empty: If True, empty files are included in the processing.
+        dedupe_empty: If True, empty files are included in the processing.
         save_event: Event to signal when to save the manifest.
         walk_queue: Optional queue for managing directories to be walked.
 
@@ -753,7 +753,7 @@ def run_dupe_copy(
         convert_manifest_paths_from: Source path for manifest path conversion.
         no_walk: If True, skips the filesystem walk and uses manifests only.
         no_copy: A list of hashes to exclude from copying.
-        keep_empty: If True, empty files are processed.
+        dedupe_empty: If True, empty files are processed.
         compare_manifests: Manifests to compare against for filtering copies.
         preserve_stat: If True, preserves file stats during copy.
         delete_duplicates: If True, deletes duplicate files.
@@ -981,7 +981,7 @@ def run_dupe_copy(
                 all_data.save(path=manifest_out_path, no_walk=True)
     elif copy_to_path is not None:
         # Warning: strip dupes out of all data, this assumes dupes correctly
-        # follows handling of keep_empty (not a dupe even if md5 is same for
+        # follows handling of dedupe_empty (not a dupe even if md5 is same for
         # zero byte files)
         for md5 in dupes:
             if md5 in all_data:
