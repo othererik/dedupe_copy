@@ -184,18 +184,32 @@ def get_random_dir_path(
 
 def make_file_tree(
     root: str,
-    file_count: int = 10,
+    file_spec: Union[int, Dict[str, str]] = 10,
     extensions: Optional[List[str]] = None,
     file_size: int = 1000,
     prefix: Optional[str] = None,
     use_unique_files: bool = True,
 ) -> List[List[Union[str, float]]]:
-    """Create a tree of files with various extensions off of root,
-    returns a list if lists such as [[item, hash, mtime], [item, hash, mtime]]
+    """Create a tree of files with various extensions off of root.
+    If file_spec is an integer, it creates that many random files.
+    If file_spec is a dictionary, it creates files with the given name and content.
+    Returns a list of lists such as [[item, hash, mtime], [item, hash, mtime]]
     """
+    file_list: List[List[Union[str, float]]] = []
+    if isinstance(file_spec, dict):
+        for filename, content in file_spec.items():
+            path = os.path.join(root, filename)
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            # write_file can handle the content
+            check, mtime = write_file(path, 0, size=len(content), initial=content)
+            file_list.append([path, check, mtime])
+        return file_list
+
+    # Original logic for when file_spec is an integer
+    file_count = file_spec
     if not extensions:
         extensions = [".mov", ".mp3", ".png", ".jpg"]
-    file_list: List[List[Union[str, float]]] = []
     # this set is grown by the get_random_dir_path function
     existing_dirs: Set[str] = set()
     for i in range(file_count):

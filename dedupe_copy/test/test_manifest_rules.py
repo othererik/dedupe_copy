@@ -16,7 +16,7 @@ class TestManifestRules(unittest.TestCase):
         self.temp_dir = utils.make_temp_dir("manifest_rules")
         self.manifest_dir = utils.make_temp_dir("manifest_dir")
         # Create a dummy file for operations
-        utils.make_file_tree(self.temp_dir, file_count=1, file_size=10)
+        utils.make_file_tree(self.temp_dir, file_spec=1, file_size=10)
 
     def tearDown(self):
         """Tear down test environment."""

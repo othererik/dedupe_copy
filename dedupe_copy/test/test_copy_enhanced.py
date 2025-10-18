@@ -56,7 +56,7 @@ class TestPathRules(unittest.TestCase):
         """Test organizing files by modification time (YYYY_MM)"""
         # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
-            self.temp_dir, file_count=5, extensions=[".jpg"], file_size=100
+            self.temp_dir, file_spec=5, extensions=[".jpg"], file_size=100
         )
         copy_to_path = os.path.join(self.temp_dir, "mtime_copy")
 
@@ -85,7 +85,7 @@ class TestPathRules(unittest.TestCase):
         # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
             self.temp_dir,
-            file_count=10,
+            file_spec=10,
             extensions=[".jpg", ".png", ".mp3"],
             file_size=100,
         )
@@ -136,7 +136,7 @@ class TestPathRules(unittest.TestCase):
         """Test combining extension and mtime rules"""
         # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
-            self.temp_dir, file_count=5, extensions=[".jpg"], file_size=100
+            self.temp_dir, file_spec=5, extensions=[".jpg"], file_size=100
         )
         copy_to_path = os.path.join(self.temp_dir, "combined_copy")
 
@@ -164,7 +164,7 @@ class TestPathRules(unittest.TestCase):
         """Test different rules for different extensions"""
         # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
-            self.temp_dir, file_count=10, extensions=[".jpg", ".pdf"], file_size=100
+            self.temp_dir, file_spec=10, extensions=[".jpg", ".pdf"], file_size=100
         )
         copy_to_path = os.path.join(self.temp_dir, "specific_copy")
 
@@ -214,7 +214,7 @@ class TestExtensionFiltering(unittest.TestCase):
         # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
             self.temp_dir,
-            file_count=15,
+            file_spec=15,
             extensions=[".jpg", ".png", ".mp3"],
             file_size=100,
         )
@@ -244,7 +244,7 @@ class TestExtensionFiltering(unittest.TestCase):
         # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
             self.temp_dir,
-            file_count=20,
+            file_spec=20,
             extensions=[".jpg", ".png", ".mp3", ".txt"],
             file_size=100,
         )
@@ -553,7 +553,7 @@ class TestManifestIntegration(unittest.TestCase):
         """Test that manifest is saved during copy operation"""
         # pylint: disable=attribute-defined-outside-init
         self.file_data = utils.make_file_tree(
-            self.temp_dir, file_count=10, file_size=100
+            self.temp_dir, file_spec=10, file_size=100
         )
         copy_to_path = os.path.join(self.temp_dir, "copy_with_manifest")
         manifest_path = os.path.join(self.temp_dir, "test_manifest.db")

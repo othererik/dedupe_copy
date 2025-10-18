@@ -48,7 +48,7 @@ class TestCopySystem(
     def test_delete_on_copy(self):
         """Test that source files are deleted after a successful copy."""
         # Create 10 files in the source directory
-        file_data = utils.make_file_tree(self.temp_dir, file_count=10, file_size=100)
+        file_data = utils.make_file_tree(self.temp_dir, file_spec=10, file_size=100)
         source_file_count = len(file_data)
         copy_to_path = os.path.join(self.temp_dir, "copy_target")
         manifest_path = os.path.join(self.manifest_dir, "manifest.db")
@@ -73,7 +73,7 @@ class TestCopySystem(
     def test_delete_on_copy_dry_run(self):
         """Test that source files are NOT deleted on copy with --dry-run."""
         # Create 10 files in the source directory
-        file_data = utils.make_file_tree(self.temp_dir, file_count=10, file_size=100)
+        file_data = utils.make_file_tree(self.temp_dir, file_spec=10, file_size=100)
         source_file_count = len(file_data)
         copy_to_path = os.path.join(self.temp_dir, "copy_target")
         manifest_path = os.path.join(self.manifest_dir, "manifest.db")
@@ -97,7 +97,7 @@ class TestCopySystem(
     def test_copy_no_change_no_dupes(self):
         """Test copying of small tree to same structure - no dupe no change"""
         self.file_data = utils.make_file_tree(
-            self.temp_dir, file_count=10, extensions=None, file_size=1000
+            self.temp_dir, file_spec=10, extensions=None, file_size=1000
         )
         copy_to_path = os.path.join(self.temp_dir, "tree_copy")
         # perform the copy
@@ -118,7 +118,7 @@ class TestCopySystem(
     def test_copy_no_change_no_dupes_no_rules(self):
         """Test copying of small tree to same structure - no dupes no rules"""
         self.file_data = utils.make_file_tree(
-            self.temp_dir, file_count=10, extensions=None, file_size=1000
+            self.temp_dir, file_spec=10, extensions=None, file_size=1000
         )
         copy_to_path = os.path.join(self.temp_dir, "tree_copy")
         # perform the copy
@@ -144,7 +144,7 @@ class TestCopySystem(
         Only one should remain.
         """
         self.file_data = utils.make_file_tree(
-            self.temp_dir, file_count=10, extensions=None, file_size=0
+            self.temp_dir, file_spec=10, extensions=None, file_size=0
         )
         copy_to_path = os.path.join(self.temp_dir, "tree_copy")
         # perform the copy
@@ -167,7 +167,7 @@ class TestCopySystem(
         All should be copied.
         """
         self.file_data = utils.make_file_tree(
-            self.temp_dir, file_count=10, extensions=None, file_size=0
+            self.temp_dir, file_spec=10, extensions=None, file_size=0
         )
         copy_to_path = os.path.join(self.temp_dir, "tree_copy")
         # perform the copy
@@ -220,7 +220,7 @@ class TestCopySystem(
             # Create files with different extensions
             file_data = utils.make_file_tree(
                 temp_dir,
-                file_count=5,
+                file_spec=5,
                 extensions=[".txt", ".jpg", ".png"],
                 file_size=100,
             )

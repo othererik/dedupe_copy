@@ -37,7 +37,7 @@ class TestDelete(unittest.TestCase):
     def test_delete_duplicates(self):
         """Test that duplicate files are deleted correctly."""
         # Create 5 unique files and 5 duplicates of one of them
-        unique_files = utils.make_file_tree(self.temp_dir, file_count=5, file_size=100)
+        unique_files = utils.make_file_tree(self.temp_dir, file_spec=5, file_size=100)
         duplicate_content_file = unique_files[0]
 
         for i in range(5):
@@ -58,7 +58,7 @@ class TestDelete(unittest.TestCase):
     def test_delete_duplicates_dry_run(self):
         """Test that --dry-run prevents deletion of duplicate files."""
         # Create 5 unique files and 5 duplicates of one of them
-        unique_files = utils.make_file_tree(self.temp_dir, file_count=5, file_size=100)
+        unique_files = utils.make_file_tree(self.temp_dir, file_spec=5, file_size=100)
         duplicate_content_file = unique_files[0]
 
         for i in range(5):
@@ -82,10 +82,10 @@ class TestDelete(unittest.TestCase):
         """Test deletion with --no-walk and a size threshold."""
         # Create 5 unique files: 3 large, 2 small
         large_files = utils.make_file_tree(
-            self.temp_dir, file_count=3, file_size=200, prefix="large_"
+            self.temp_dir, file_spec=3, file_size=200, prefix="large_"
         )
         small_files = utils.make_file_tree(
-            self.temp_dir, file_count=2, file_size=50, prefix="small_"
+            self.temp_dir, file_spec=2, file_size=50, prefix="small_"
         )
 
         # Create duplicates: 2 for a large file, 1 for a small file
@@ -168,7 +168,7 @@ class TestDelete(unittest.TestCase):
     def test_manifest_updated_after_delete(self):
         """Ensure the manifest is saved *after* deletions occur."""
         # Create 2 unique files and 2 duplicates of one of them
-        unique_files = utils.make_file_tree(self.temp_dir, file_count=2, file_size=100)
+        unique_files = utils.make_file_tree(self.temp_dir, file_spec=2, file_size=100)
         duplicate_content_file = unique_files[0]
 
         for i in range(2):
@@ -254,13 +254,15 @@ class TestDelete(unittest.TestCase):
     def test_delete_empty_files_not_deduped_by_default(self):
         """Test that empty files are not deleted by default."""
         # Create 10 empty files
-        utils.make_file_tree(self.temp_dir, file_count=10, file_size=0)
+        utils.make_file_tree(self.temp_dir, file_spec=10, file_size=0)
 
         initial_file_count = len(list(utils.walk_tree(self.temp_dir)))
         self.assertEqual(initial_file_count, 10, "Should have 10 empty files initially")
 
         # Run with --delete but without --dedupe-empty
-        do_copy(read_from_path=self.temp_dir, delete_duplicates=True, dedupe_empty=False)
+        do_copy(
+            read_from_path=self.temp_dir, delete_duplicates=True, dedupe_empty=False
+        )
 
         final_file_count = len(list(utils.walk_tree(self.temp_dir)))
         self.assertEqual(
@@ -272,7 +274,7 @@ class TestDelete(unittest.TestCase):
     def test_delete_empty_files_with_dedupe_flag(self):
         """Test that empty files are deleted when --dedupe-empty is used."""
         # Create 10 empty files
-        utils.make_file_tree(self.temp_dir, file_count=10, file_size=0)
+        utils.make_file_tree(self.temp_dir, file_spec=10, file_size=0)
 
         initial_file_count = len(list(utils.walk_tree(self.temp_dir)))
         self.assertEqual(initial_file_count, 10, "Should have 10 empty files initially")

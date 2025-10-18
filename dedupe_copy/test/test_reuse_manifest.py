@@ -26,7 +26,7 @@ class TestIssue32(unittest.TestCase):
         self.manifest_path = os.path.join(self.temp_dir, "manifest.json")
         os.makedirs(self.src_dir)
         # Create 5 unique files
-        utils.make_file_tree(self.src_dir, file_count=5)
+        utils.make_file_tree(self.src_dir, file_spec=5)
         # Create a subdirectory and copy the files to create duplicates
         dup_dir = os.path.join(self.src_dir, "dup")
         os.makedirs(dup_dir)
