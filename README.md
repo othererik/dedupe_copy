@@ -279,7 +279,7 @@ Files are considered duplicates when:
 1. They have identical MD5 checksums
 2. They have the same file size
 
-**Special case:** By default, empty (zero-byte) files are treated as unique and will be copied. Use `--dedupe-empty` to treat all empty files as duplicates of each other, in which case only the first one encountered will be copied.
+**Special case:** Empty (zero-byte) files are treated as duplicates by default. Use `--keep-empty` to treat each empty file as unique.
 
 ## Usage Examples
 
@@ -388,7 +388,7 @@ Different organization rules for different file types.
 |--------|-------------|
 | `--compare PATH` | Load manifest but don't copy its files (for comparison only). This is useful for excluding files that are already present in a destination or another source. Can be specified multiple times. |
 | `--copy-metadata` | Preserve file timestamps and permissions (uses `shutil.copy2` instead of `copyfile`). |
-| `--dedupe-empty` | Treat all empty (zero-byte) files as duplicates. |
+| `--keep-empty` | Treat empty (0-byte) files as unique rather than duplicates. |
 | `--ignore-old-collisions` | Only detect new duplicates (ignore duplicates already in loaded manifest). |
 | `--dry-run` | Simulate operations without making any changes to the filesystem. |
 | `--min-delete-size BYTES` | Minimum size of a file to be considered for deletion (e.g., `1048576` for 1MB). Default: `0`. |
@@ -713,7 +713,7 @@ Destination: /Volumes/Backup
 Extension filter: jpg, png, gif
 Path rules: *.jpg:mtime
 Threads: walk=4, read=8, copy=8
-Options: dedupe_empty=False, preserve_stat=True, no_walk=False
+Options: keep_empty=False, preserve_stat=True, no_walk=False
 ======================================================================
 ```
 
@@ -880,7 +880,7 @@ dedupecopy -p /source -c /destination -i preview_manifest.db -m final_manifest.d
 - **First occurrence** of each unique file (by MD5 hash) is kept.
 - Subsequent identical files are either copied to the destination or deleted from the source.
 - Files are considered unique if their MD5 hash differs.
-- By default, empty files are treated as unique. Use `--dedupe-empty` to treat them as duplicates.
+- Empty files are treated as duplicates unless `--keep-empty` is used.
 - Ignored patterns (`--ignore`) are never copied or deleted.
 
 ### What Doesn't Get Copied / Deleted

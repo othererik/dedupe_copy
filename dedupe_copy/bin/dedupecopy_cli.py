@@ -189,7 +189,7 @@ def _create_parser():
     )
     parser.add_argument(
         "--dedupe-empty",
-        help="Treat all empty (zero-byte) files as duplicates.",
+        help="Count empty files as duplicates",
         required=False,
         default=False,
         action="store_true",

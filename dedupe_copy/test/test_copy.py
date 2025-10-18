@@ -139,7 +139,7 @@ class TestCopySystem(
         result, notes = utils.verify_files(self.file_data)
         self.assertTrue(result, f"Failed to copy files: {notes}")
 
-    def test_copy_dupe_zero_byte_reject_empty_dupes(self):
+    def test_copy_dupe_zero_byte_dedupe_empty_dupes(self):
         """Small tree to same structure with all zero byte files. 0 is dupe.
         Only one should remain.
         """
@@ -162,7 +162,7 @@ class TestCopySystem(
         self.assertEqual(len(files), 1, f"Did not copy just 1 file: {files}")
         self.assertTrue(result, f"Failed to copy files: {notes}")
 
-    def test_copy_dupe_zero_byte_copy_empty_dupes(self):
+    def test_copy_dupe_zero_byte_no_dedupe_empty_dupes(self):
         """Small tree to same structure with all zero byte files. 0 not dupe.
         All should be copied.
         """
@@ -286,7 +286,7 @@ class TestCopySystem(
                 collisions=collisions,
                 manifest=manifest,
                 progress_queue=progress_queue,
-                keep_empty=False,
+                dedupe_empty=False,
                 save_event=save_event,
             )
 

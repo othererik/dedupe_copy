@@ -162,7 +162,7 @@ def _start_read_threads_and_process_results(
     result_queue: "queue.Queue[Tuple[str, int, float, str]]",
     collisions: Any,
     manifest: Any,
-    keep_empty: bool,
+    dedupe_empty: bool,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
     save_event: Optional[threading.Event],
     read_threads: int,
@@ -175,7 +175,7 @@ def _start_read_threads_and_process_results(
         result_queue: Queue for storing the results of file processing.
         collisions: A dictionary-like object to store detected collisions.
         manifest: The main manifest object for tracking all file data.
-        keep_empty: If True, empty files are kept and processed.
+        dedupe_empty: If True, empty files are treated as duplicates.
         progress_queue: Optional queue for reporting progress updates.
         save_event: Optional event to signal when to save the manifest.
         read_threads: The number of concurrent threads for reading files.
@@ -192,7 +192,7 @@ def _start_read_threads_and_process_results(
         result_queue,
         collisions,
         manifest,
-        keep_empty=keep_empty,
+        dedupe_empty=dedupe_empty,
         progress_queue=progress_queue,
         save_event=save_event,
     )
@@ -229,7 +229,6 @@ def find_duplicates(
     progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
     walk_threads: int = 4,
     read_threads: int = 8,
-    keep_empty: bool = False,
     save_event: Optional[threading.Event] = None,
     walk_queue: Optional["queue.Queue[str]"] = None,
 ) -> Tuple[Any, Any]:
@@ -265,7 +264,7 @@ def find_duplicates(
         result_queue,
         collisions,
         manifest,
-        keep_empty,
+        walk_config.dedupe_empty,
         progress_queue,
         save_event,
         read_threads,
@@ -563,22 +562,15 @@ def delete_files(
             path_to_delete, size, _ = file_info
             if size == 0 and not delete_job.dedupe_empty:
                 if progress_queue:
-                    progress_queue.put(
-                        (
-                            LOW_PRIORITY,
-                            "message",
-                            f"Skipping deletion of empty file {path_to_delete} because --dedupe-empty is not set.",
-                        )
+                    message = (
+                        f"Skipping deletion of empty file {path_to_delete} "
+                        "because --dedupe-empty is not set."
                     )
-                continue
-
-            if size == 0 and not delete_job.dedupe_empty:
-                if progress_queue:
                     progress_queue.put(
                         (
                             LOW_PRIORITY,
                             "message",
-                            f"Skipping deletion of empty file {path_to_delete} because --dedupe-empty is not set.",
+                            message,
                         )
                     )
                 continue
@@ -587,12 +579,15 @@ def delete_files(
                 files_to_delete.append(path_to_delete)
                 files_to_delete_count += 1
             elif progress_queue:
+                message = (
+                    f"Skipping deletion of {path_to_delete} with size {size} bytes "
+                    f"(smaller than threshold {delete_job.min_delete_size_bytes})."
+                )
                 progress_queue.put(
                     (
                         LOW_PRIORITY,
                         "message",
-                        f"Skipping deletion of {path_to_delete} with size {size} bytes "
-                        f"(smaller than threshold {delete_job.min_delete_size_bytes}).",
+                        message,
                     )
                 )
 
@@ -932,7 +927,6 @@ def run_dupe_copy(
             progress_queue=progress_queue,
             walk_threads=walk_threads,
             read_threads=read_threads,
-            keep_empty=not dedupe_empty,
             save_event=save_event,
             walk_queue=walk_queue,
         )

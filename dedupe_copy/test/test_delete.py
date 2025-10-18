@@ -251,6 +251,42 @@ class TestDelete(unittest.TestCase):
         self.assertTrue(os.path.exists(file_a_path))
         self.assertFalse(os.path.exists(file_b_path))
 
+    def test_delete_empty_files_not_deduped_by_default(self):
+        """Test that empty files are not deleted by default."""
+        # Create 10 empty files
+        utils.make_file_tree(self.temp_dir, file_count=10, file_size=0)
+
+        initial_file_count = len(list(utils.walk_tree(self.temp_dir)))
+        self.assertEqual(initial_file_count, 10, "Should have 10 empty files initially")
+
+        # Run with --delete but without --dedupe-empty
+        do_copy(read_from_path=self.temp_dir, delete_duplicates=True, dedupe_empty=False)
+
+        final_file_count = len(list(utils.walk_tree(self.temp_dir)))
+        self.assertEqual(
+            final_file_count,
+            10,
+            "Should still have 10 files, as empty files are not considered duplicates by default",
+        )
+
+    def test_delete_empty_files_with_dedupe_flag(self):
+        """Test that empty files are deleted when --dedupe-empty is used."""
+        # Create 10 empty files
+        utils.make_file_tree(self.temp_dir, file_count=10, file_size=0)
+
+        initial_file_count = len(list(utils.walk_tree(self.temp_dir)))
+        self.assertEqual(initial_file_count, 10, "Should have 10 empty files initially")
+
+        # Run with --delete and --dedupe-empty
+        do_copy(read_from_path=self.temp_dir, delete_duplicates=True, dedupe_empty=True)
+
+        final_file_count = len(list(utils.walk_tree(self.temp_dir)))
+        self.assertEqual(
+            final_file_count,
+            1,
+            "Should have only 1 file remaining after deleting empty duplicates",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

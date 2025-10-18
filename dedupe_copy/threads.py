@@ -295,7 +295,7 @@ class ResultProcessor(threading.Thread):
         manifest: Any,
         *,
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-        keep_empty: bool = False,
+        dedupe_empty: bool = False,
         save_event: Optional[threading.Event] = None,
     ) -> None:
         """Initializes the ResultProcessor.
@@ -306,7 +306,7 @@ class ResultProcessor(threading.Thread):
             collisions: A dictionary-like object for storing collisions.
             manifest: The main manifest object.
             progress_queue: An optional queue for reporting progress.
-            keep_empty: If True, empty files are processed.
+            dedupe_empty: If True, empty files are treated as duplicates.
             save_event: An optional event to coordinate save operations.
         """
         super().__init__()
@@ -321,7 +321,7 @@ class ResultProcessor(threading.Thread):
         else:
             self.md5_data = manifest
         self.progress_queue = progress_queue
-        self.empty = keep_empty
+        self.dedupe_empty = dedupe_empty
         self.save_event = save_event
         self.daemon = True
         self._local_cache: dict[str, list[tuple[str, int, float]]] = {}
@@ -348,10 +348,9 @@ class ResultProcessor(threading.Thread):
                 already_existed = md5 in self.md5_data
                 is_collision = already_existed or (len(new_files) > 1)
 
-                if self.empty and new_files and new_files[0][1] == 0:
-                    # For empty files, it's only a collision if it was already in the manifest.
-                    # Collisions between multiple empty files in the same batch are ignored.
-                    is_collision = already_existed
+                # If we are not de-duplicating empty files, they are never a collision.
+                if not self.dedupe_empty and new_files and new_files[0][1] == 0:
+                    is_collision = False
 
                 # Efficiently update the manifest
                 current_files = self.md5_data[md5]
