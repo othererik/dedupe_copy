@@ -23,7 +23,7 @@ class TestVerify(unittest.TestCase):
         # use_unique_files=True will create files with different content and thus different hashes
         self.file_list = utils.make_file_tree(
             root=self.temp_dir,
-            file_count=5,
+            file_spec=5,
             file_size=self.file_size,
             use_unique_files=True,
         )

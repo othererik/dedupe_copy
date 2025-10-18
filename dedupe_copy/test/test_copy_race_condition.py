@@ -72,7 +72,7 @@ class TestCopyRaceCondition(unittest.TestCase):
         file_count = 50
         utils.make_file_tree(
             src_dir,
-            file_count=file_count,
+            file_spec=file_count,
             file_size=1024,
             use_unique_files=True,
         )
