@@ -1,10 +1,12 @@
 # Changelog
 
 
-## [1.1.5] - TBD
+## [1.1.5] - 2025-10-17
 - Add option to `--delete-on-copy`
 - Require output manifest when deleting objects, input remains unchanged
 - Minor performance improvements
+- Default to keeping empty files, can override with `--dedupe-empty`
+- Minor bug fixes
 
 
 ## [1.1.4] - 2025-10-13
