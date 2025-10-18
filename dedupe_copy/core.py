@@ -528,6 +528,7 @@ def delete_files(
     progress_queue: Optional["queue.PriorityQueue[Any]"],
     *,
     delete_job: "DeleteJob",
+    hashes_to_delete_all: Optional[set] = None,
 ) -> List[str]:
     """Coordinates the deletion of duplicate files.
 
@@ -541,6 +542,9 @@ def delete_files(
                     file metadata for duplicate files.
         progress_queue: An optional queue for reporting progress.
         delete_job: The configuration for the delete operation.
+        hashes_to_delete_all: A set of hashes for which all associated files
+                              should be deleted, overriding the default behavior
+                              of keeping one.
 
     Returns:
         A list of paths of the files that were actually deleted.
@@ -551,14 +555,23 @@ def delete_files(
     workers = []
     files_to_delete_count = 0
     files_to_delete = []
+    if hashes_to_delete_all is None:
+        hashes_to_delete_all = set()
 
     for _hash, file_list in duplicates.items():
         if not file_list:
             continue
-        # Sort by path to ensure we always keep the same file
+
         sorted_file_list = sorted(file_list, key=lambda x: x[0])
-        # Keep the first file, queue the rest for deletion
-        for file_info in sorted_file_list[1:]:
+        files_to_process = []
+
+        if _hash in hashes_to_delete_all:
+            files_to_process.extend(sorted_file_list)
+        elif len(sorted_file_list) > 1:
+            # Default behavior: keep the first file, queue the rest for deletion
+            files_to_process.extend(sorted_file_list[1:])
+
+        for file_info in files_to_process:
             path_to_delete, size, _ = file_info
             if size == 0 and not delete_job.dedupe_empty:
                 if progress_queue:
@@ -965,10 +978,19 @@ def run_dupe_copy(
                 min_delete_size_bytes=min_delete_size,
                 dedupe_empty=dedupe_empty,
             )
+
+            # If comparing, we want to delete ALL files that match the compare manifest's hashes.
+            hashes_to_delete_all = set(compare.md5_data) if compare else None
+
+            # When using --compare with --delete, we need to consider all files,
+            # not just those with internal duplicates, for deletion.
+            data_to_scan_for_deletes = all_data if compare else dupes
+
             deleted_files = delete_files(
-                dupes,
+                data_to_scan_for_deletes,
                 progress_queue,
                 delete_job=delete_job,
+                hashes_to_delete_all=hashes_to_delete_all,
             )
             # Update the manifest with the deleted files
             if manifest_out_path:
