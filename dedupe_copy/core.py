@@ -445,7 +445,7 @@ def copy_data(
         progress_queue,
         copied,
         copy_job=copy_job,
-        delete_only_queue=None, # Only delete dupes from the 'dupes' set
+        delete_only_queue=None,  # Only delete dupes from the 'dupes' set
     )
     queue_copy_work(
         copy_queue,

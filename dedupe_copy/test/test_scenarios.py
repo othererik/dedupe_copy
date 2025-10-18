@@ -3,7 +3,6 @@ Test scenarios for the dedupe_copy tool.
 """
 
 import os
-import shutil
 import subprocess
 import unittest
 import csv
@@ -13,11 +12,11 @@ from dedupe_copy.test.utils import (
     make_temp_dir,
     remove_dir,
     walk_tree,
-    get_hash,
     get_random_dir_path,
     get_random_file_name,
     write_file,
 )
+
 
 class TestScenarios(unittest.TestCase):
     """Test various scenarios for the dedupe_copy tool."""
@@ -36,7 +35,9 @@ class TestScenarios(unittest.TestCase):
 
         # Create 10 unique files and 5 duplicates
         make_file_tree(source_dir, file_count=10, use_unique_files=True)
-        make_file_tree(source_dir, file_count=5, use_unique_files=False, prefix="duplicate_")
+        make_file_tree(
+            source_dir, file_count=5, use_unique_files=False, prefix="duplicate_"
+        )
 
         # Run dedupecopy to generate the report
         subprocess.run(
@@ -52,17 +53,19 @@ class TestScenarios(unittest.TestCase):
 
         # Verify the report
         self.assertTrue(os.path.exists(report_path))
-        with open(report_path, "r", newline="") as f:
+        with open(report_path, "r", newline="", encoding="utf-8") as f:
             reader = csv.reader(f)
             # Skip the source path line
             next(reader)
             header = next(reader)
-            self.assertEqual(header, ["Collision #", " MD5", " Path", " Size (bytes)", " mtime"])
+            self.assertEqual(
+                header, ["Collision #", " MD5", " Path", " Size (bytes)", " mtime"]
+            )
 
             # Count the number of collision sets
             collisions = {}
             for row in reader:
-                if row: # handle blank lines
+                if row:  # handle blank lines
                     collision_num = int(row[0])
                     if collision_num not in collisions:
                         collisions[collision_num] = []
@@ -79,8 +82,19 @@ class TestScenarios(unittest.TestCase):
         os.makedirs(source_dir)
 
         # Create 10 unique files and 5 duplicates with different extensions
-        make_file_tree(source_dir, file_count=10, use_unique_files=True, extensions=[".jpg", ".png", ".txt"])
-        make_file_tree(source_dir, file_count=5, use_unique_files=False, prefix="duplicate_", extensions=[".jpg", ".png"])
+        make_file_tree(
+            source_dir,
+            file_count=10,
+            use_unique_files=True,
+            extensions=[".jpg", ".png", ".txt"],
+        )
+        make_file_tree(
+            source_dir,
+            file_count=5,
+            use_unique_files=False,
+            prefix="duplicate_",
+            extensions=[".jpg", ".png"],
+        )
 
         # Run dedupecopy with copy and path restructuring
         subprocess.run(
@@ -116,8 +130,20 @@ class TestScenarios(unittest.TestCase):
         os.makedirs(source_dir)
 
         # Create 2 sets of duplicates, one small and one large
-        make_file_tree(source_dir, file_count=3, use_unique_files=False, prefix="small_dupe_", file_size=500)
-        make_file_tree(source_dir, file_count=3, use_unique_files=False, prefix="large_dupe_", file_size=1500)
+        make_file_tree(
+            source_dir,
+            file_count=3,
+            use_unique_files=False,
+            prefix="small_dupe_",
+            file_size=500,
+        )
+        make_file_tree(
+            source_dir,
+            file_count=3,
+            use_unique_files=False,
+            prefix="large_dupe_",
+            file_size=1500,
+        )
         initial_files = list(walk_tree(source_dir))
         self.assertEqual(len(initial_files), 6)
 
@@ -125,14 +151,31 @@ class TestScenarios(unittest.TestCase):
 
         # Dry run: ensure no files are deleted
         subprocess.run(
-            ["dedupecopy", "-p", source_dir, "--delete", "--dry-run", "-m", manifest_path],
+            [
+                "dedupecopy",
+                "-p",
+                source_dir,
+                "--delete",
+                "--dry-run",
+                "-m",
+                manifest_path,
+            ],
             check=True,
         )
         self.assertEqual(len(list(walk_tree(source_dir))), 6)
 
         # Actual delete with size filter
         subprocess.run(
-            ["dedupecopy", "-p", source_dir, "--delete", "--min-delete-size", "1000", "-m", manifest_path],
+            [
+                "dedupecopy",
+                "-p",
+                source_dir,
+                "--delete",
+                "--min-delete-size",
+                "1000",
+                "-m",
+                manifest_path,
+            ],
             check=True,
         )
 
@@ -169,9 +212,7 @@ class TestScenarios(unittest.TestCase):
         # Add 5 new, unique files to the source
         for i in range(5):
             fname = get_random_file_name(
-                root=get_random_dir_path(source_dir),
-                prefix="new_",
-                extensions=[".txt"]
+                root=get_random_dir_path(source_dir), prefix="new_", extensions=[".txt"]
             )
             write_file(fname, seed=i + 10, initial=f"unique_content_{i}")
 
@@ -196,7 +237,9 @@ class TestScenarios(unittest.TestCase):
         self.assertEqual(len(dest_files_final), 15)
 
         # Check that new files were copied
-        new_files_in_dest = [f for f in dest_files_final if "new_" in os.path.basename(f)]
+        new_files_in_dest = [
+            f for f in dest_files_final if "new_" in os.path.basename(f)
+        ]
         self.assertEqual(len(new_files_in_dest), 5)
 
     def test_scenario_5_multi_source_consolidation(self):
@@ -212,7 +255,9 @@ class TestScenarios(unittest.TestCase):
         write_file(os.path.join(source1_dir, "file1.txt"), seed=0, initial="content1")
 
         # Create a duplicate in source2 and a new file
-        write_file(os.path.join(source2_dir, "file1_dupe.txt"), seed=0, initial="content1")
+        write_file(
+            os.path.join(source2_dir, "file1_dupe.txt"), seed=0, initial="content1"
+        )
         write_file(os.path.join(source2_dir, "file2.txt"), seed=1, initial="content2")
 
         # Copy source1 to dest, creating manifest1
@@ -234,16 +279,18 @@ class TestScenarios(unittest.TestCase):
                 manifest1_path,
                 "-m",
                 os.path.join(self.test_dir, "manifest2.db"),
-                "--verbose"
+                "--verbose",
             ],
             check=True,
             capture_output=True,
-            text=True
+            text=True,
         )
 
         # Verify destination: should contain file1.txt and file2.txt
         dest_files = list(walk_tree(dest_dir))
-        self.assertEqual(len(dest_files), 2, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
+        self.assertEqual(
+            len(dest_files), 2, f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        )
 
         # Verify that the duplicate was skipped
         self.assertIn("Skipped 1", result.stdout)
@@ -256,7 +303,9 @@ class TestScenarios(unittest.TestCase):
 
         # Create 10 unique files and 5 duplicates
         make_file_tree(source_dir, file_count=10, use_unique_files=True)
-        make_file_tree(source_dir, file_count=5, use_unique_files=False, prefix="duplicate_")
+        make_file_tree(
+            source_dir, file_count=5, use_unique_files=False, prefix="duplicate_"
+        )
 
         # Run dedupecopy with delete-on-copy
         subprocess.run(
