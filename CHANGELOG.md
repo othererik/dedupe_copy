@@ -3,6 +3,7 @@
 
 ## [1.1.6] - 2025-10-17
 - Correct documentation for empty file handling. The default is to treat empty files as unique, and `--dedupe-empty` is used to treat them as duplicates.
+- Fix issues with compare manifest
 
 ## [1.1.5] - 2025-10-17
 - Add option to `--delete-on-copy`
