@@ -1,8 +1,10 @@
-import logging
+"""Tests for some basics of the logic in the core module."""
+
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from dedupe_copy.core import delete_files, DeleteJob
+
 
 class TestCoreLogic(unittest.TestCase):
     """Test core logic"""
@@ -28,7 +30,7 @@ class TestCoreLogic(unittest.TestCase):
         )
 
         # Call the function
-        with self.assertLogs('dedupe_copy.core', level='INFO') as cm:
+        with self.assertLogs("dedupe_copy.core", level="INFO") as cm:
             delete_files(duplicates, mock_progress_queue, delete_job=delete_job)
             # Check for the correct log message
             self.assertIn("DRY RUN: Would have deleted 1 files.", cm.output[0])
