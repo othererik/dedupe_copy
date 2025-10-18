@@ -365,12 +365,12 @@ def queue_copy_work(
                     # Don't add empty files to the copied list, so they all get copied
                     pass
                 else:
-                    copied[md5] = None
+                    copied.add(md5)
                 _throttle_puts(copy_queue.qsize())
                 copy_queue.put((path, mtime, size))
             elif progress_queue:
                 progress_queue.put((LOW_PRIORITY, "not_copied", path))
-        elif copy_job.delete_on_copy and delete_only_queue:
+        elif copy_job.delete_on_copy and delete_only_queue is not None:
             # This file is a duplicate of a 'compare' file and we want to delete it.
             _throttle_puts(delete_only_queue.qsize())
             delete_only_queue.put(path)
@@ -445,7 +445,7 @@ def copy_data(
         progress_queue,
         copied,
         copy_job=copy_job,
-        delete_only_queue=delete_only_queue,
+        delete_only_queue=None, # Only delete dupes from the 'dupes' set
     )
     queue_copy_work(
         copy_queue,
@@ -1002,7 +1002,7 @@ def run_dupe_copy(
         copy_job = CopyJob(
             copy_config=copy_config,
             ignore=ignored_patterns,
-            no_copy=compare,
+            no_copy=compare.hash_set(),
             dedupe_empty=dedupe_empty,
             copy_threads=copy_threads,
             delete_on_copy=delete_on_copy,
