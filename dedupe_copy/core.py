@@ -387,7 +387,7 @@ def copy_data(
     progress_queue: Optional["queue.PriorityQueue[Any]"],
     *,
     copy_job: "CopyJob",
-) -> List[str]:
+) -> Tuple[List[str], List[Tuple[str, str]]]:
     """Manages the process of copying files and deleting source files.
 
     This function sets up and manages worker threads to perform file copy
@@ -406,7 +406,7 @@ def copy_data(
     copy_stop_event = threading.Event()
     copy_queue: "queue.Queue[Tuple[str, str, int]]" = queue.Queue()
     # This queue holds files deleted by CopyThreads
-    deleted_after_copy_queue: "queue.Queue[str]" = queue.Queue()
+    deleted_after_copy_queue: "queue.Queue[Tuple[str, str]]" = queue.Queue()
     # This queue holds files to be deleted because they are dupes of --compare
     delete_only_queue: "queue.Queue[str]" = queue.Queue()
     copy_workers = []
@@ -465,9 +465,12 @@ def copy_data(
 
     # Now, handle the deletion of files that were duplicates of the compare manifest
     all_deleted_files = []
+    moved_files = []
     while not deleted_after_copy_queue.empty():
         try:
-            all_deleted_files.append(deleted_after_copy_queue.get_nowait())
+            src, dest = deleted_after_copy_queue.get_nowait()
+            all_deleted_files.append(src)
+            moved_files.append((src, dest))
         except queue.Empty:
             break
 
@@ -520,7 +523,7 @@ def copy_data(
                     f"Deleted a total of {len(all_deleted_files)} files from source.",
                 )
             )
-    return all_deleted_files
+    return all_deleted_files, moved_files
 
 
 def delete_files(
@@ -528,6 +531,7 @@ def delete_files(
     progress_queue: Optional["queue.PriorityQueue[Any]"],
     *,
     delete_job: "DeleteJob",
+    hashes_to_delete_all: Optional[set] = None,
 ) -> List[str]:
     """Coordinates the deletion of duplicate files.
 
@@ -541,6 +545,9 @@ def delete_files(
                     file metadata for duplicate files.
         progress_queue: An optional queue for reporting progress.
         delete_job: The configuration for the delete operation.
+        hashes_to_delete_all: A set of hashes for which all associated files
+                              should be deleted, overriding the default behavior
+                              of keeping one.
 
     Returns:
         A list of paths of the files that were actually deleted.
@@ -551,14 +558,23 @@ def delete_files(
     workers = []
     files_to_delete_count = 0
     files_to_delete = []
+    if hashes_to_delete_all is None:
+        hashes_to_delete_all = set()
 
     for _hash, file_list in duplicates.items():
         if not file_list:
             continue
-        # Sort by path to ensure we always keep the same file
+
         sorted_file_list = sorted(file_list, key=lambda x: x[0])
-        # Keep the first file, queue the rest for deletion
-        for file_info in sorted_file_list[1:]:
+        files_to_process = []
+
+        if _hash in hashes_to_delete_all:
+            files_to_process.extend(sorted_file_list)
+        elif len(sorted_file_list) > 1:
+            # Default behavior: keep the first file, queue the rest for deletion
+            files_to_process.extend(sorted_file_list[1:])
+
+        for file_info in files_to_process:
             path_to_delete, size, _ = file_info
             if size == 0 and not delete_job.dedupe_empty:
                 if progress_queue:
@@ -764,6 +780,10 @@ def run_dupe_copy(
     # Ensure logging is configured for programmatic calls
     ensure_logging_configured()
 
+    # On a dry run, we never want to create or modify a manifest on disk.
+    if dry_run:
+        manifest_out_path = None
+
     # Argument validation
     if manifests_in_paths and manifest_out_path:
         # Check if any of the input manifests are the same as the output manifest
@@ -965,13 +985,22 @@ def run_dupe_copy(
                 min_delete_size_bytes=min_delete_size,
                 dedupe_empty=dedupe_empty,
             )
+
+            # If comparing, we want to delete ALL files that match the compare manifest's hashes.
+            hashes_to_delete_all = set(compare.md5_data) if compare else None
+
+            # When using --compare with --delete, we need to consider all files,
+            # not just those with internal duplicates, for deletion.
+            data_to_scan_for_deletes = all_data if compare else dupes
+
             deleted_files = delete_files(
-                dupes,
+                data_to_scan_for_deletes,
                 progress_queue,
                 delete_job=delete_job,
+                hashes_to_delete_all=hashes_to_delete_all,
             )
             # Update the manifest with the deleted files
-            if manifest_out_path:
+            if manifest_out_path and not dry_run:
                 # Update the manifest with the deleted files
                 if deleted_files:
                     all_data.remove_files(deleted_files)
@@ -1008,25 +1037,29 @@ def run_dupe_copy(
             delete_on_copy=delete_on_copy,
             dry_run=dry_run,
         )
-        deleted_files = copy_data(
+        deleted_files, moved_files = copy_data(
             dupes,
             all_data,
             progress_queue,
             copy_job=copy_job,
         )
 
-        # Update the manifest with the deleted files
-        if deleted_files:
+        # Update the manifest with the moved and deleted files
+        if moved_files:
+            all_data.update_paths(moved_files)
+        elif deleted_files:
+            # Only run remove_files if no move operation happened,
+            # as update_paths handles the removal of old source paths.
             all_data.remove_files(deleted_files)
 
-        if manifest_out_path:
+        if manifest_out_path and not dry_run:
             progress_queue.put(
                 (HIGH_PRIORITY, "message", "Saving complete manifest after copy")
             )
             all_data.save(path=manifest_out_path, no_walk=True)
     else:
         # If not deleting or copying, save the manifest if a path is provided
-        if manifest_out_path:
+        if manifest_out_path and not dry_run:
             progress_queue.put(
                 (HIGH_PRIORITY, "message", "Saving complete manifest from search")
             )

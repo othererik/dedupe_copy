@@ -177,7 +177,7 @@ class CopyThread(threading.Thread):
         *,
         copy_config: "CopyConfig",
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-        deleted_queue: Optional["queue.Queue[str]"] = None,
+        deleted_queue: Optional["queue.Queue[Tuple[str, str]]"] = None,
     ) -> None:
         """Initializes the CopyThread.
 
@@ -255,7 +255,7 @@ class CopyThread(threading.Thread):
                                         (LOW_PRIORITY, "deleted", src)
                                     )
                                 if self.deleted_queue:
-                                    self.deleted_queue.put(src)
+                                    self.deleted_queue.put((src, dest))
                             except OSError as e:
                                 if self.progress_queue:
                                     self.progress_queue.put(
