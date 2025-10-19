@@ -210,6 +210,41 @@ class Manifest:
             if path in self.read_sources:
                 del self.read_sources[path]
 
+    def update_paths(self, moved_files: List[Tuple[str, str]]) -> None:
+        """Updates file paths in the manifest after a move operation.
+
+        Args:
+            moved_files: A list of tuples, where each tuple contains the
+                         (source_path, destination_path) of a moved file.
+        """
+        if not moved_files:
+            return
+
+        # Create a mapping of old paths to new paths for quick lookup
+        path_map = dict(moved_files)
+        hashes_to_modify = {}
+
+        # Find which hashes are affected
+        for hash_val, file_list in self.md5_data.items():
+            if any(file_info[0] in path_map for file_info in file_list):
+                hashes_to_modify[hash_val] = file_list
+
+        # Update the paths for the affected hashes
+        for hash_val, file_list in hashes_to_modify.items():
+            new_file_list = []
+            for file_info in file_list:
+                old_path = file_info[0]
+                if old_path in path_map:
+                    new_path = path_map[old_path]
+                    new_file_list.append([new_path] + list(file_info[1:]))
+                    # Update read_sources as well
+                    if old_path in self.read_sources:
+                        del self.read_sources[old_path]
+                    self.read_sources[new_path] = None
+                else:
+                    new_file_list.append(file_info)
+            self.md5_data[hash_val] = new_file_list
+
     def _populate_read_sources(self) -> None:
         """Populate the read_sources list from the md5_data."""
         # Clear existing sources to prevent duplication when re-populating

@@ -11,16 +11,16 @@ import unittest
 from unittest.mock import patch
 
 from dedupe_copy.bin.dedupecopy_cli import run_cli
-from dedupe_copy.test.utils import make_file_tree, walk_tree
+from dedupe_copy.manifest import Manifest
+from dedupe_copy.test.utils import make_file_tree
 
 
 class TestUserScenarios(unittest.TestCase):
-    """Test suite for complex user scenarios."""
+    """Test suite for advanced, multi-step, and manifest-validation scenarios."""
 
     def setUp(self):
         """Set up a temporary directory for each test."""
-        self.temp_dir = "temp_test_user_scenarios"
-        os.makedirs(self.temp_dir, exist_ok=True)
+        self.temp_dir = tempfile.mkdtemp(prefix="advanced_scenario_")
         self.source_dir = os.path.join(self.temp_dir, "source")
         self.dest_dir = os.path.join(self.temp_dir, "dest")
         self.compare_dir = os.path.join(self.temp_dir, "compare")
@@ -34,12 +34,22 @@ class TestUserScenarios(unittest.TestCase):
 
     def _run_cli(self, args):
         """Helper to run the CLI with a given set of arguments."""
-        with patch("sys.argv", ["dedupecopy"] + args):
-            run_cli()
+        # Chdir into the temp dir to keep generated manifests sandboxed
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            with patch("sys.argv", ["dedupecopy"] + args):
+                run_cli()
+        finally:
+            os.chdir(original_cwd)
 
-    def _get_filenames_in_dir(self, directory):
-        """Returns a sorted list of all filenames in a directory tree."""
-        return sorted(list(walk_tree(directory)))
+    def _get_all_filepaths(self, directory):
+        """Returns a set of all full file paths in a directory tree."""
+        return {
+            os.path.join(root, file)
+            for root, _, files in os.walk(directory)
+            for file in files
+        }
 
     def test_compare_and_delete(self):
         """Verify that --delete removes files present in a --compare manifest."""
@@ -75,7 +85,7 @@ class TestUserScenarios(unittest.TestCase):
         )
 
         # 4. Verify the correct files were deleted from the source directory
-        remaining_files = self._get_filenames_in_dir(self.source_dir)
+        remaining_files = self._get_all_filepaths(self.source_dir)
         self.assertEqual(
             len(remaining_files),
             1,
@@ -114,6 +124,88 @@ class TestUserScenarios(unittest.TestCase):
                 ]
             )
         self.assertEqual(cm.exception.code, 2)
+
+    def test_delete_on_copy_move_operation(self):
+        """Test a simple 'move' operation (`--delete-on-copy`) and verify the manifest."""
+        # 1. Setup: Create source files
+        make_file_tree(
+            self.source_dir,
+            {"file1.txt": "contentA", "sub/file2.txt": "contentB"},
+        )
+        manifest_path = os.path.join(self.temp_dir, "manifest.db")
+
+        # 2. Run the move operation
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.dest_dir,
+                "--delete-on-copy",
+                "-m",
+                manifest_path,
+                "-R",
+                "*:no_change",  # Use a simple rule for predictable paths
+            ]
+        )
+
+        # 3. Verify the filesystem state
+        source_files = self._get_all_filepaths(self.source_dir)
+        self.assertEqual(len(source_files), 0, "Source directory should be empty.")
+        dest_files = self._get_all_filepaths(self.dest_dir)
+        self.assertEqual(len(dest_files), 2, "All files should be in the destination.")
+
+        # 4. Deeply verify the manifest
+        manifest = Manifest(manifest_path, temp_directory=self.temp_dir)
+        manifest_paths = {
+            file_info[0] for _, file_list in manifest.items() for file_info in file_list
+        }
+
+        self.assertEqual(
+            manifest_paths,
+            dest_files,
+            "Manifest paths must match the new destination paths.",
+        )
+
+    def test_delete_on_copy_dry_run(self):
+        """Test that --dry-run prevents any changes during a move operation."""
+        # 1. Setup: Create source files
+        source_paths = make_file_tree(
+            self.source_dir,
+            {"file1.txt": "contentA", "file2.txt": "contentB"},
+        )
+        manifest_path = os.path.join(self.temp_dir, "manifest.db")
+
+        # 2. Run the move operation with --dry-run
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.dest_dir,
+                "--delete-on-copy",
+                "--dry-run",
+                "-m",
+                manifest_path,
+            ]
+        )
+
+        # 3. Verify the filesystem state
+        self.assertTrue(
+            os.path.exists(source_paths[0][0]), "Source file1 should not be deleted."
+        )
+        self.assertTrue(
+            os.path.exists(source_paths[1][0]), "Source file2 should not be deleted."
+        )
+        self.assertEqual(
+            len(os.listdir(self.dest_dir)), 0, "Destination dir should be empty."
+        )
+
+        # 4. Verify that the manifest was NOT created
+        self.assertFalse(
+            os.path.exists(manifest_path),
+            "Manifest file should not be created on dry run.",
+        )
 
 
 class TestCliIntegration(unittest.TestCase):
