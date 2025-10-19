@@ -177,7 +177,7 @@ class CopyThread(threading.Thread):
         *,
         copy_config: "CopyConfig",
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
-        deleted_queue: Optional["queue.Queue[Any]"] = None,
+        deleted_queue: Optional["queue.Queue[Tuple[str, str]]"] = None,
     ) -> None:
         """Initializes the CopyThread.
 

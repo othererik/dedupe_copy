@@ -406,7 +406,7 @@ def copy_data(
     copy_stop_event = threading.Event()
     copy_queue: "queue.Queue[Tuple[str, str, int]]" = queue.Queue()
     # This queue holds files deleted by CopyThreads
-    deleted_after_copy_queue: "queue.Queue[str]" = queue.Queue()
+    deleted_after_copy_queue: "queue.Queue[Tuple[str, str]]" = queue.Queue()
     # This queue holds files to be deleted because they are dupes of --compare
     delete_only_queue: "queue.Queue[str]" = queue.Queue()
     copy_workers = []
