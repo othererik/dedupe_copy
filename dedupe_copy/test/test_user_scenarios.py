@@ -709,9 +709,29 @@ class TestCompareFlag(unittest.TestCase):
 
         # 3. Verify files not in compare manifest were copied
         dest_files = self._get_filenames_in_dir(self.dest_dir)
-        self.assertEqual(
-            dest_files, ["file2.txt", "file3.txt", "file6.txt", "unique_file.txt"]
+
+        # Because the order of processing is not guaranteed, either file2.txt or
+        # file5.txt (which has the same content) could be the one that is copied.
+        # We need to accept either outcome.
+        expected_dest_files_option1 = [
+            "file2.txt",
+            "file3.txt",
+            "file6.txt",
+            "unique_file.txt",
+        ]
+        expected_dest_files_option2 = [
+            "file3.txt",
+            "file5.txt",
+            "file6.txt",
+            "unique_file.txt",
+        ]
+
+        self.assertIn(
+            dest_files,
+            [expected_dest_files_option1, expected_dest_files_option2],
+            "The files in the destination directory did not match either of the expected outcomes.",
         )
+
         self.assertTrue(
             os.path.exists(os.path.join(self.dest_dir, "sub_dir", "file6.txt"))
         )
@@ -730,22 +750,45 @@ class TestCompareFlag(unittest.TestCase):
         )
 
         # 6. Verify the output manifest contains only the copied files
-        self._validate_manifest(
-            os.path.join(self.temp_dir, "manifest.db"),
-            {
-                os.path.join(self.dest_dir, "file2.txt"): hashlib.md5(
-                    "content2".encode("utf-8")
-                ).hexdigest(),
-                os.path.join(self.dest_dir, "file3.txt"): hashlib.md5(
-                    "content3".encode("utf-8")
-                ).hexdigest(),
-                os.path.join(self.dest_dir, "unique_file.txt"): hashlib.md5(
-                    "unique_content".encode("utf-8")
-                ).hexdigest(),
-                os.path.join(self.dest_dir, "sub_dir/file6.txt"): hashlib.md5(
-                    "content6".encode("utf-8")
-                ).hexdigest(),
-            },
+        manifest_path = os.path.join(self.temp_dir, "manifest.db")
+        manifest = Manifest(manifest_path, temp_directory=self.temp_dir)
+        actual_manifest_content = {
+            file_info[0]: md5
+            for md5, file_list in manifest.items()
+            for file_info in file_list
+        }
+
+        # Base content is the same for both possibilities
+        base_expected_content = {
+            os.path.join(self.dest_dir, "file3.txt"): hashlib.md5(
+                "content3".encode("utf-8")
+            ).hexdigest(),
+            os.path.join(self.dest_dir, "unique_file.txt"): hashlib.md5(
+                "unique_content".encode("utf-8")
+            ).hexdigest(),
+            os.path.join(self.dest_dir, "sub_dir", "file6.txt"): hashlib.md5(
+                "content6".encode("utf-8")
+            ).hexdigest(),
+        }
+
+        content2_hash = hashlib.md5("content2".encode("utf-8")).hexdigest()
+
+        # Option 1: file2.txt was copied
+        expected_manifest_option1 = base_expected_content.copy()
+        expected_manifest_option1[
+            os.path.join(self.dest_dir, "file2.txt")
+        ] = content2_hash
+
+        # Option 2: file5.txt was copied (from sub_dir)
+        expected_manifest_option2 = base_expected_content.copy()
+        expected_manifest_option2[
+            os.path.join(self.dest_dir, "sub_dir", "file5.txt")
+        ] = content2_hash
+
+        self.assertIn(
+            actual_manifest_content,
+            [expected_manifest_option1, expected_manifest_option2],
+            "The manifest content did not match either of the expected outcomes.",
         )
 
     def test_compare_path_same_as_output_path_fails(self):
