@@ -234,45 +234,41 @@ class CopyThread(threading.Thread):
         while not self.stop_event.is_set() or not self.work.empty():
             try:
                 src, mtime, size = self.work.get(True, 0.1)
-                try:
-                    if not match_extension(self.config.extensions, src):
-                        continue
-                    dest = self._get_destination_path(src, mtime, size)
-                    if not self.config.dry_run:
-                        _copy_file(
-                            src, dest, self.config.preserve_stat, self.progress_queue
-                        )
-                    elif self.progress_queue:
-                        self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
-
-                    if self.config.delete_on_copy:
-                        if self.config.dry_run:
-                            if self.progress_queue:
-                                self.progress_queue.put(
-                                    (
-                                        HIGH_PRIORITY,
-                                        "message",
-                                        f"[DRY RUN] Would delete source file {src}",
-                                    )
-                                )
-                        else:
-                            try:
-                                os.remove(src)
-                                if self.progress_queue:
-                                    self.progress_queue.put(
-                                        (LOW_PRIORITY, "deleted", src)
-                                    )
-                                if self.deleted_queue:
-                                    self.deleted_queue.put((src, dest))
-                            except OSError as e:
-                                if self.progress_queue:
-                                    self.progress_queue.put(
-                                        (MEDIUM_PRIORITY, "error", src, e)
-                                    )
-                finally:
-                    self.work.task_done()
             except queue.Empty:
-                pass
+                continue
+
+            try:
+                if not match_extension(self.config.extensions, src):
+                    continue
+
+                dest = self._get_destination_path(src, mtime, size)
+                if not self.config.dry_run:
+                    _copy_file(src, dest, self.config.preserve_stat, self.progress_queue)
+                elif self.progress_queue:
+                    self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
+
+                if self.config.delete_on_copy:
+                    if self.config.dry_run:
+                        if self.progress_queue:
+                            self.progress_queue.put(
+                                (
+                                    HIGH_PRIORITY,
+                                    "message",
+                                    f"[DRY RUN] Would delete source file {src}",
+                                )
+                            )
+                    else:
+                        try:
+                            os.remove(src)
+                            if self.progress_queue:
+                                self.progress_queue.put((LOW_PRIORITY, "deleted", src))
+                            if self.deleted_queue:
+                                self.deleted_queue.put((src, dest))
+                        except OSError as e:
+                            if self.progress_queue:
+                                self.progress_queue.put((MEDIUM_PRIORITY, "error", src, e))
+            finally:
+                self.work.task_done()
 
 
 class ResultProcessor(threading.Thread):
