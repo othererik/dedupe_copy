@@ -439,7 +439,7 @@ Different organization rules for different file types.
 | `--ignore-old-collisions` | Only detect new duplicates (ignore duplicates already in loaded manifest). |
 | `--dry-run` | Simulate operations without making any changes to the filesystem. |
 | `--min-delete-size BYTES` | Minimum size of a file to be considered for deletion (e.g., `1048576` for 1MB). Default: `0`. |
-| `--delete-on-copy` | Deletes source files after a successful copy. Requires `--copy-path` and `-m`. |
+| `--delete-on-copy` | Deletes source files after a successful copy. Requires `--copy-path` and `-m`.  WARNING: this will consider duplicated objects as copied and remove them.  |
 
 ### Output Control Options
 

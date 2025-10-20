@@ -2,6 +2,7 @@
 Consolidated file for all user scenario, integration, and command-line flag interaction tests.
 """
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -540,6 +541,43 @@ class TestCompareFlag(unittest.TestCase):
         """Remove the temporary directory."""
         shutil.rmtree(self.temp_dir)
 
+    def _print_debug(self):
+        """Print debug information about the test setup."""
+        for dir_path in [
+            self.source_dir,
+            self.compare_dir1,
+            self.compare_dir2,
+            self.dest_dir,
+        ]:
+            print(f"Directory: {dir_path}")
+            for root, _, files in os.walk(dir_path):
+                for file in files:
+                    print(f"- {os.path.join(root, file)}")
+
+    def _validate_manifest(self, manifest_path, expected_files):
+        """Helper to validate that a manifest contains the expected files."""
+        manifest = Manifest(manifest_path, temp_directory=self.temp_dir)
+        manifest_files = [
+            file_info[0] for _, file_list in manifest.items() for file_info in file_list
+        ]
+        manifest_files.sort()
+        expected_files_list = list(expected_files)
+        expected_files_list.sort()
+
+        print(expected_files_list)
+        print(manifest_files)
+        self.assertEqual(
+            manifest_files,
+            expected_files_list,
+            f"Manifest {manifest_path} does not contain the expected files.",
+        )
+
+        self.assertEqual(
+            manifest.hash_set(),
+            set(expected_files_list),
+            f"Set of manifest hashes does not match expected for {manifest_path}.",
+        )
+
     def _run_cli(self, args):
         """Helper to run the CLI with a given set of arguments."""
         original_cwd = os.getcwd()
@@ -631,8 +669,27 @@ class TestCompareFlag(unittest.TestCase):
 
     def test_compare_and_delete_on_copy(self):
         """Test interaction of --compare and --delete-on-copy."""
+        # this case had some subtle bugs so going to excessively verify it
+
+        # add a few more files for complexity and completeness
+        make_file_tree(
+            os.path.join(self.source_dir, "sub_dir"),
+            {
+                "file4.txt": "content1",
+                "file5.txt": "content2",
+                "file6.txt": "content6",  # unique
+            },
+        )
+        self._print_debug()
+
         # 1. Create a manifest for the compare directory
         self._run_cli(["-p", self.compare_dir1, "-m", "compare1.db"])
+
+        # also add new file to compare that shouldn't matter
+        make_file_tree(
+            self.compare_dir1,
+            {"extra_compare_file.txt": "extra_content"},
+        )
 
         # 2. Run the copy with --compare and --delete-on-copy
         self._run_cli(
@@ -652,11 +709,44 @@ class TestCompareFlag(unittest.TestCase):
 
         # 3. Verify files not in compare manifest were copied
         dest_files = self._get_filenames_in_dir(self.dest_dir)
-        self.assertEqual(dest_files, ["file2.txt", "file3.txt", "unique_file.txt"])
+        self.assertEqual(
+            dest_files, ["file2.txt", "file3.txt", "file6.txt", "unique_file.txt"]
+        )
+        self.assertTrue(
+            os.path.exists(os.path.join(self.dest_dir, "sub_dir", "file6.txt"))
+        )
 
         # 4. Verify all original source files were deleted
+        # this is an operation that may be re-considered or mediated later, but for now
+        # ALL duplicated files are removed from the source even if we didn't explicltly copy
+        # it this time
         source_files = self._get_filenames_in_dir(self.source_dir)
         self.assertEqual(source_files, [])
+        self._print_debug()
+
+        # 5. Verify the extra file in compare dir is untouched
+        self.assertTrue(
+            os.path.exists(os.path.join(self.compare_dir1, "extra_compare_file.txt"))
+        )
+
+        # 6. Verify the output manifest contains only the copied files
+        self._validate_manifest(
+            os.path.join(self.temp_dir, "manifest.db"),
+            {
+                os.path.join(self.dest_dir, "file2.txt"): hashlib.md5(
+                    "content2".encode("utf-8")
+                ).hexdigest(),
+                os.path.join(self.dest_dir, "file3.txt"): hashlib.md5(
+                    "content3".encode("utf-8")
+                ).hexdigest(),
+                os.path.join(self.dest_dir, "unique_file.txt"): hashlib.md5(
+                    "unique_content".encode("utf-8")
+                ).hexdigest(),
+                os.path.join(self.dest_dir, "sub_dir/file6.txt"): hashlib.md5(
+                    "content6".encode("utf-8")
+                ).hexdigest(),
+            },
+        )
 
     def test_compare_path_same_as_output_path_fails(self):
         """Test that using the same path for --compare and -m fails."""
