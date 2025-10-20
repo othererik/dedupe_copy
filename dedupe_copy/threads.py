@@ -212,7 +212,15 @@ class CopyThread(threading.Thread):
             )
             return dest
 
-        return os.path.join(self.config.target_path, ext, mtime, os.path.basename(src))
+        # Default behavior: preserve original directory structure (no_change)
+        # Get relative path from the read_path root
+        for read_path in self.config.read_paths:
+            if src.startswith(read_path):
+                rel_path = os.path.relpath(src, read_path)
+                return os.path.join(self.config.target_path, rel_path)
+
+        # Fallback if source not under any read_path
+        return os.path.join(self.config.target_path, os.path.basename(src))
 
     def run(self) -> None:
         """The main execution loop for the thread.
@@ -226,45 +234,45 @@ class CopyThread(threading.Thread):
         while not self.stop_event.is_set() or not self.work.empty():
             try:
                 src, mtime, size = self.work.get(True, 0.1)
-                try:
-                    if not match_extension(self.config.extensions, src):
-                        continue
-                    dest = self._get_destination_path(src, mtime, size)
-                    if not self.config.dry_run:
-                        _copy_file(
-                            src, dest, self.config.preserve_stat, self.progress_queue
-                        )
-                    elif self.progress_queue:
-                        self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
+            except queue.Empty:
+                continue
 
-                    if self.config.delete_on_copy:
-                        if self.config.dry_run:
+            try:
+                if not match_extension(self.config.extensions, src):
+                    continue
+
+                dest = self._get_destination_path(src, mtime, size)
+                if not self.config.dry_run:
+                    _copy_file(
+                        src, dest, self.config.preserve_stat, self.progress_queue
+                    )
+                elif self.progress_queue:
+                    self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
+
+                if self.config.delete_on_copy:
+                    if self.config.dry_run:
+                        if self.progress_queue:
+                            self.progress_queue.put(
+                                (
+                                    HIGH_PRIORITY,
+                                    "message",
+                                    f"[DRY RUN] Would delete source file {src}",
+                                )
+                            )
+                    else:
+                        try:
+                            os.remove(src)
+                            if self.progress_queue:
+                                self.progress_queue.put((LOW_PRIORITY, "deleted", src))
+                            if self.deleted_queue:
+                                self.deleted_queue.put((src, dest))
+                        except OSError as e:
                             if self.progress_queue:
                                 self.progress_queue.put(
-                                    (
-                                        HIGH_PRIORITY,
-                                        "message",
-                                        f"[DRY RUN] Would delete source file {src}",
-                                    )
+                                    (MEDIUM_PRIORITY, "error", src, e)
                                 )
-                        else:
-                            try:
-                                os.remove(src)
-                                if self.progress_queue:
-                                    self.progress_queue.put(
-                                        (LOW_PRIORITY, "deleted", src)
-                                    )
-                                if self.deleted_queue:
-                                    self.deleted_queue.put((src, dest))
-                            except OSError as e:
-                                if self.progress_queue:
-                                    self.progress_queue.put(
-                                        (MEDIUM_PRIORITY, "error", src, e)
-                                    )
-                finally:
-                    self.work.task_done()
-            except queue.Empty:
-                pass
+            finally:
+                self.work.task_done()
 
 
 class ResultProcessor(threading.Thread):

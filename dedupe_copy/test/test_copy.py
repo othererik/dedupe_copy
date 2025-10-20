@@ -129,14 +129,13 @@ class TestCopySystem(
         result, notes = utils.verify_files(self.file_data)
         self.assertTrue(result, f"Altered original files: {notes}")
         # verify the copied data
+        copied_file_data = []
         for file_info in self.file_data:
-            osrc = file_info[0]
-            file_info[0] = file_info[0].replace(self.temp_dir, copy_to_path, 1)
-            # the default is currently extension/mtime
-            file_info[0] = utils.apply_path_rules(
-                osrc, file_info[0], self.temp_dir, copy_to_path, ["extension", "mtime"]
-            )
-        result, notes = utils.verify_files(self.file_data)
+            # The default behavior is to preserve the directory structure.
+            new_dest = file_info[0].replace(self.temp_dir, copy_to_path, 1)
+            copied_file_data.append([new_dest] + file_info[1:])
+
+        result, notes = utils.verify_files(copied_file_data)
         self.assertTrue(result, f"Failed to copy files: {notes}")
 
     def test_copy_dupe_zero_byte_dedupe_empty_dupes(self):

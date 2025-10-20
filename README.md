@@ -267,9 +267,56 @@ Manifests are database files that store:
 - **Incremental Backups**: By loading a manifest from a previous backup, you can process only new or modified files.
 - **Tracking**: Manifests keep a record of which files have been processed, which is useful for auditing and tracking.
 
-**Usage:**
-- `-m manifest.db` - Save manifest after processing
-- `-i manifest.db` - Load existing manifest before processing
+**Manifest Options:**
+- `-m manifest.db` - Save manifest after processing (output)
+- `-i manifest.db` - Load existing manifest before processing (input)
+- `--compare manifest.db` - Load manifest for duplicate checking only (does not copy those files)
+
+**Important Safety Rule:** You **cannot** use the same file path for both `-i` (input) and `-m` (output). This prevents accidental manifest corruption during operations.
+
+### Understanding `-i` vs `--compare`
+
+These two options handle manifests differently and are suited for different use cases:
+
+#### `-i` / `--manifest-read-path` (Input Manifest)
+- **Purpose**: Resume or continue a previous operation
+- **Behavior**: 
+  - Files in this manifest are considered "already processed"
+  - The scan will skip re-processing these files
+  - These files ARE included in the output manifest
+- **Use when**: Resuming an interrupted operation or continuing from a previous run
+- **Example**: Copying files and resuming after interruption
+
+```bash
+# Initial run (interrupted)
+dedupecopy -p /source -c /dest -m progress.db
+
+# Resume (loads progress.db to skip already-copied files)
+dedupecopy -p /source -c /dest -i progress.db -m progress_new.db
+```
+
+#### `--compare` (Comparison Manifest)
+- **Purpose**: Skip files that exist elsewhere (for deduplication)
+- **Behavior**:
+  - Files in this manifest are considered "duplicates to skip"
+  - These files will NOT be copied
+  - These files are NOT included in the output manifest
+- **Use when**: Consolidating multiple sources or performing incremental backups
+- **Example**: Backing up new files without copying ones already in destination
+
+```bash
+# Incremental backup (skip files already backed up)
+dedupecopy -p /source -c /backup --compare backup_v1.db -m backup_v2.db
+```
+
+#### Quick Comparison Table
+
+| Feature | `-i` (Input) | `--compare` |
+|---------|--------------|-------------|
+| Files are copied? | No (already processed) | No (treated as duplicates) |
+| Included in output manifest? | Yes | No |
+| Use case | Resume operations | Deduplicate across sources |
+| Can use with `-m` same path? | **No** (safety rule) | Yes |
 
 **Note:** Manifest files are SQLite databases. The main manifest file has a `.db` extension, and there is a corresponding `.db.read` file that tracks which files have been read.
 
@@ -392,7 +439,7 @@ Different organization rules for different file types.
 | `--ignore-old-collisions` | Only detect new duplicates (ignore duplicates already in loaded manifest). |
 | `--dry-run` | Simulate operations without making any changes to the filesystem. |
 | `--min-delete-size BYTES` | Minimum size of a file to be considered for deletion (e.g., `1048576` for 1MB). Default: `0`. |
-| `--delete-on-copy` | Deletes source files after a successful copy. Requires `--copy-path` and `-m`. |
+| `--delete-on-copy` | Deletes source files after a successful copy. Requires `--copy-path` and `-m`.  WARNING: this will consider duplicated objects as copied and remove them.  |
 
 ### Output Control Options
 
@@ -452,11 +499,13 @@ Use `--ignore` to exclude files or directories that match a specific pattern.
 
 Path rules (`-R` or `--path-rules`) determine how files are organized in the destination directory. The format is `pattern:rule`.
 
+**Default Behavior:** If no `-R` flag is specified, the original directory structure is preserved (equivalent to `-R "*:no_change"`). This is the most intuitive behavior for backup and copy operations.
+
 #### Available Rules
 
 | Rule        | Description                                     | Example Output                          |
 |-------------|-------------------------------------------------|-----------------------------------------|
-| `no_change` | Preserves the original directory structure      | `/dest/original/path/file.jpg`          |
+| `no_change` | **[DEFAULT]** Preserves the original directory structure | `/dest/original/path/file.jpg`          |
 | `mtime`     | Organizes by modification date (`YYYY_MM`)      | `/dest/2024_03/file.jpg`                |
 | `extension` | Organizes into folders by file extension        | `/dest/jpg/file.jpg`                    |
 
@@ -512,24 +561,31 @@ dedupecopy -p /source2 -m source2_manifest.db
 #### Step 2: Copy each source sequentially
 
 ```bash
-# Copy source1 (comparing against target)
+# Copy source1 (skip files already in target or source2)
 dedupecopy -p /source1 -c /backup/target \
-  -i source1_manifest.db \
   --compare target_manifest.db \
+  --compare source2_manifest.db \
+  -m target_v1.db \
   --no-walk
 
-# Copy source2 (comparing against target AND source1)
+# Copy source2 (skip files already in target or source1)
 dedupecopy -p /source2 -c /backup/target \
-  -i source2_manifest.db \
-  --compare target_manifest.db \
+  --compare target_v1.db \
   --compare source1_manifest.db \
+  -m target_v2.db \
   --no-walk
 ```
 
 **How it works:**
-- `--no-walk` skips re-scanning (uses manifest data)
+- `--no-walk` skips re-scanning the filesystem (uses manifest data from `-i` or scans `--compare` manifests)
 - `--compare` loads manifests for duplicate checking but doesn't copy those files
-- Each source is copied only if files aren't already in target or previous sources
+- Each source is copied only if files aren't already in target or other sources
+- Each step creates a new manifest tracking what's been copied so far
+
+**Note:** We use `--compare` instead of `-i` because:
+- `-i` + `-m` cannot use the same file path (safety rule)
+- `--compare` is designed for exactly this use case (deduplication across sources)
+- The source manifests are used with `--no-walk` to avoid re-scanning
 
 ### Manifest Path Conversion
 
@@ -553,18 +609,38 @@ To back up a directory and then incrementally update the backup with only new or
 Run an initial backup of the source directory, creating a manifest file.
 
 ```bash
-dedupecopy -p /path/to/source -c /path/to/backup -m backup_manifest.db
+dedupecopy -p /path/to/source -c /path/to/backup -m backup_v1.db
 ```
 
 #### Step 2: Incremental Update
 
-To perform an incremental backup, load the manifest from the previous backup. This will ensure that only new or modified files are processed.
+To perform an incremental backup, use the `--compare` flag to skip files already in the previous backup. This ensures only new or modified files are copied.
 
 ```bash
-dedupecopy -p /path/to/source -c /path/to/backup -i backup_manifest.db -m backup_manifest.db
+dedupecopy -p /path/to/source -c /path/to/backup --compare backup_v1.db -m backup_v2.db
 ```
 
-This will scan the source directory and copy only the files that are not already in the backup (according to the manifest). The manifest will be updated with the new files.
+**Important:** The `-i` (input manifest) and `-m` (output manifest) options **cannot use the same file path**. This safety feature prevents accidental manifest corruption. Always use `--compare` for incremental backups, which loads the manifest for duplicate checking without modifying it.
+
+**How it works:**
+- `--compare` loads the previous manifest to identify files already backed up
+- Only new or modified files (different content hash) are copied
+- A new manifest (`backup_v2.db`) is created with all files (old + new)
+- The original manifest (`backup_v1.db`) remains unchanged
+
+**Alternative: Simple incremental without separate manifests**
+
+If you want to keep updating a single location without versioned manifests:
+
+```bash
+# Initial backup
+dedupecopy -p /path/to/source -c /path/to/backup -m backup.db
+
+# Later: Add new/modified files (no manifest for incremental)
+dedupecopy -p /path/to/source -c /path/to/backup
+```
+
+Without loading a manifest, the tool will re-scan the source and copy any files not already in the destination. However, this is slower as it doesn't skip already-processed files during the scan.
 
 ### Comparison Without Copying
 

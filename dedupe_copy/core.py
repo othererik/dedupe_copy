@@ -370,8 +370,9 @@ def queue_copy_work(
                 copy_queue.put((path, mtime, size))
             elif progress_queue:
                 progress_queue.put((LOW_PRIORITY, "not_copied", path))
-        elif copy_job.delete_on_copy and delete_only_queue:
-            # This file is a duplicate of a 'compare' file and we want to delete it.
+        elif copy_job.delete_on_copy and delete_only_queue is not None:
+            # If a file is a duplicate of one already copied OR one in the compare manifest,
+            # and we are in "move" mode, delete it from the source.
             _throttle_puts(delete_only_queue.qsize())
             delete_only_queue.put(path)
             if progress_queue:
@@ -1009,12 +1010,10 @@ def run_dupe_copy(
                 )
                 all_data.save(path=manifest_out_path, no_walk=True)
     elif copy_to_path is not None:
-        # Warning: strip dupes out of all data, this assumes dupes correctly
-        # follows handling of dedupe_empty (not a dupe even if md5 is same for
-        # zero byte files)
-        for md5 in dupes:
-            if md5 in all_data:
-                del all_data[md5]
+        # The logic to strip dupes from all_data was removed as it was
+        # incorrectly modifying the manifest before the copy operation. The
+        # copy_data function already ensures that duplicates are not copied
+        # unnecessarily by tracking copied hashes.
         # copy the duplicate files first and then ignore them for the full pass
         progress_queue.put(
             (HIGH_PRIORITY, "message", f"Running copy to {repr(copy_to_path)}")
@@ -1047,9 +1046,11 @@ def run_dupe_copy(
         # Update the manifest with the moved and deleted files
         if moved_files:
             all_data.update_paths(moved_files)
-        elif deleted_files:
-            # Only run remove_files if no move operation happened,
-            # as update_paths handles the removal of old source paths.
+        if deleted_files:
+            # This handles both files deleted after copy and files deleted
+            # because they were duplicates of the compare manifest.
+            # update_paths handles the removal of old source paths for MOVED files,
+            # but we still need to account for other deleted files.
             all_data.remove_files(deleted_files)
 
         if manifest_out_path and not dry_run:

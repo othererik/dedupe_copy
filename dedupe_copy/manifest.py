@@ -378,7 +378,8 @@ class Manifest:
             new_values = []
             for file_data in val:
                 new_values.append(
-                    [file_data[0].replace(paths_from, paths_to, 1)] + file_data[1:]
+                    [file_data[0].replace(paths_from, paths_to, 1)]
+                    + list(file_data[1:])
                 )
             self.md5_data[key] = new_values
         # build a new set of values and move into place

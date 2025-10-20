@@ -95,10 +95,16 @@ class TestCopyDeadlock(unittest.TestCase):
         else:
             copy_thread.join()
 
-        # Verify that the correct file was copied
-        dest_file_txt = os.path.join(self.target_dir, "txt", "2024_01", "source.txt")
-        self.assertTrue(os.path.exists(dest_file_txt))
+        # Verify that the correct file was copied. Default is no_change.
+        dest_file_txt = os.path.join(self.target_dir, "source.txt")
+        self.assertTrue(
+            os.path.exists(dest_file_txt),
+            f"Expected file was not copied to {dest_file_txt}",
+        )
 
         # Verify that the filtered file was NOT copied
-        dest_file_jpg = os.path.join(self.target_dir, "jpg", "2024_01", "source.jpg")
-        self.assertFalse(os.path.exists(dest_file_jpg))
+        dest_file_jpg = os.path.join(self.target_dir, "source.jpg")
+        self.assertFalse(
+            os.path.exists(dest_file_jpg),
+            f"Filtered file was incorrectly copied to {dest_file_jpg}",
+        )
