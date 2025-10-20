@@ -243,7 +243,9 @@ class CopyThread(threading.Thread):
 
                 dest = self._get_destination_path(src, mtime, size)
                 if not self.config.dry_run:
-                    _copy_file(src, dest, self.config.preserve_stat, self.progress_queue)
+                    _copy_file(
+                        src, dest, self.config.preserve_stat, self.progress_queue
+                    )
                 elif self.progress_queue:
                     self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
 
@@ -266,7 +268,9 @@ class CopyThread(threading.Thread):
                                 self.deleted_queue.put((src, dest))
                         except OSError as e:
                             if self.progress_queue:
-                                self.progress_queue.put((MEDIUM_PRIORITY, "error", src, e))
+                                self.progress_queue.put(
+                                    (MEDIUM_PRIORITY, "error", src, e)
+                                )
             finally:
                 self.work.task_done()
 

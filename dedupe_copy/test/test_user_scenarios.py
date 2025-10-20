@@ -775,9 +775,9 @@ class TestCompareFlag(unittest.TestCase):
 
         # Option 1: file2.txt was copied
         expected_manifest_option1 = base_expected_content.copy()
-        expected_manifest_option1[
-            os.path.join(self.dest_dir, "file2.txt")
-        ] = content2_hash
+        expected_manifest_option1[os.path.join(self.dest_dir, "file2.txt")] = (
+            content2_hash
+        )
 
         # Option 2: file5.txt was copied (from sub_dir)
         expected_manifest_option2 = base_expected_content.copy()
