@@ -29,10 +29,8 @@ from .utils import _throttle_puts, ensure_logging_configured, lower_extension
 
 logger = logging.getLogger(__name__)
 
-# This is something to address later
+
 # pylint: disable=too-many-lines
-
-
 def _walk_fs(
     read_paths: List[str],
     walk_config: WalkConfig,
@@ -216,7 +214,6 @@ def _start_read_threads_and_process_results(
     return result_processor, work_threads, work_stop_event, result_stop_event
 
 
-# will need to clean this up later
 # pylint: disable=too-many-branches
 def find_duplicates(
     read_paths: List[str],
@@ -1010,10 +1007,6 @@ def run_dupe_copy(
                 )
                 all_data.save(path=manifest_out_path, no_walk=True)
     elif copy_to_path is not None:
-        # The logic to strip dupes from all_data was removed as it was
-        # incorrectly modifying the manifest before the copy operation. The
-        # copy_data function already ensures that duplicates are not copied
-        # unnecessarily by tracking copied hashes.
         # copy the duplicate files first and then ignore them for the full pass
         progress_queue.put(
             (HIGH_PRIORITY, "message", f"Running copy to {repr(copy_to_path)}")
