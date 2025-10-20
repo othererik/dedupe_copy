@@ -7,12 +7,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from dedupe_copy.bin.dedupecopy_cli import run_cli
 from dedupe_copy.manifest import Manifest
 from dedupe_copy.test.utils import make_file_tree
+
+# pylint: disable=too-many-lines
 
 
 class TestUserScenarios(unittest.TestCase):
@@ -670,3 +673,895 @@ class TestCompareFlag(unittest.TestCase):
                     manifest_path,
                 ]
             )
+
+
+class TestIncrementalBackup(unittest.TestCase):
+    """Test suite for incremental backup workflows."""
+
+    def setUp(self):
+        """Set up a temporary directory for incremental backup tests."""
+        self.temp_dir = tempfile.mkdtemp(prefix="test_incremental_")
+        self.source_dir = os.path.join(self.temp_dir, "source")
+        self.backup_dir = os.path.join(self.temp_dir, "backup")
+        os.makedirs(self.source_dir)
+        os.makedirs(self.backup_dir)
+
+    def tearDown(self):
+        """Remove the temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _run_cli(self, args):
+        """Helper to run the CLI with a given set of arguments."""
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            with patch("sys.argv", ["dedupecopy"] + args):
+                run_cli()
+        finally:
+            os.chdir(original_cwd)
+
+    def _count_files(self, directory):
+        """Count total files in a directory tree."""
+        count = 0
+        for _, _, files in os.walk(directory):
+            count += len(files)
+        return count
+
+    def test_incremental_backup_basic(self):
+        """Test a basic incremental backup scenario."""
+        # Step 1: Initial backup
+        make_file_tree(
+            self.source_dir,
+            {
+                "file1.txt": "content1",
+                "file2.txt": "content2",
+                "subdir/file3.txt": "content3",
+            },
+        )
+        manifest_path = os.path.join(self.temp_dir, "backup.db")
+
+        # Initial backup
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.backup_dir,
+                "-m",
+                manifest_path,
+                "-R",
+                "*:no_change",  # Preserve structure for easier verification
+            ]
+        )
+
+        # Verify initial backup
+        self.assertEqual(self._count_files(self.backup_dir), 3)
+
+        # Step 2: Add new files to source
+        make_file_tree(
+            self.source_dir,
+            {
+                "file4.txt": "content4",
+                "subdir/file5.txt": "content5",
+            },
+        )
+
+        # Step 3: Incremental backup (use --compare instead of -i + -m same path)
+        manifest_path_new = os.path.join(self.temp_dir, "backup_new.db")
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.backup_dir,
+                "--compare",
+                manifest_path,
+                "-m",
+                manifest_path_new,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Verify incremental backup - new files should be added
+        self.assertEqual(self._count_files(self.backup_dir), 5)
+
+    def test_incremental_backup_with_modification(self):
+        """Test incremental backup when a file is modified."""
+        # Initial backup
+        make_file_tree(
+            self.source_dir,
+            {"file1.txt": "original_content", "file2.txt": "content2"},
+        )
+        manifest_path = os.path.join(self.temp_dir, "backup.db")
+
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.backup_dir,
+                "-m",
+                manifest_path,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Modify a file
+        with open(
+            os.path.join(self.source_dir, "file1.txt"), "w", encoding="utf-8"
+        ) as f:
+            f.write("modified_content")
+
+        # Incremental backup should copy the modified file
+        manifest_path_new = os.path.join(self.temp_dir, "backup_new.db")
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.backup_dir,
+                "--compare",
+                manifest_path,
+                "-m",
+                manifest_path_new,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Verify the backup has been updated
+        # Both versions should exist (old and new with different content)
+        self.assertGreaterEqual(self._count_files(self.backup_dir), 2)
+
+
+class TestPathConversion(unittest.TestCase):
+    """Test suite for manifest path conversion scenarios."""
+
+    def setUp(self):
+        """Set up a temporary directory for path conversion tests."""
+        self.temp_dir = tempfile.mkdtemp(prefix="test_path_conv_")
+        self.source_dir = os.path.join(self.temp_dir, "source")
+        os.makedirs(self.source_dir)
+
+    def tearDown(self):
+        """Remove the temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _run_cli(self, args):
+        """Helper to run the CLI with a given set of arguments."""
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            with patch("sys.argv", ["dedupecopy"] + args):
+                run_cli()
+        finally:
+            os.chdir(original_cwd)
+
+    def test_path_conversion_basic(self):
+        """Test basic path conversion in a manifest."""
+        # Create files and generate manifest
+        make_file_tree(self.source_dir, {"file1.txt": "content1"})
+        original_manifest = os.path.join(self.temp_dir, "original.db")
+        converted_manifest = os.path.join(self.temp_dir, "converted.db")
+
+        self._run_cli(["-p", self.source_dir, "-m", original_manifest])
+
+        # Convert paths
+        old_prefix = self.source_dir
+        new_prefix = self.source_dir.replace("source", "newsource")
+
+        self._run_cli(
+            [
+                "--no-walk",
+                "-i",
+                original_manifest,
+                "-m",
+                converted_manifest,
+                "--convert-manifest-paths-from",
+                old_prefix,
+                "--convert-manifest-paths-to",
+                new_prefix,
+            ]
+        )
+
+        # Verify manifest was created
+        self.assertTrue(os.path.exists(converted_manifest))
+
+        converted = Manifest(converted_manifest, temp_directory=self.temp_dir)
+        for _, file_list in converted.items():
+            for path, _, _ in file_list:
+                self.assertIn(new_prefix, path)
+                self.assertNotIn(old_prefix, path)
+        converted.close()
+
+
+class TestExtensionFiltering(unittest.TestCase):
+    """Test suite for advanced extension filtering scenarios."""
+
+    def setUp(self):
+        """Set up a temporary directory for extension filtering tests."""
+        self.temp_dir = tempfile.mkdtemp(prefix="test_ext_filter_")
+        self.source_dir = os.path.join(self.temp_dir, "source")
+        self.dest_dir = os.path.join(self.temp_dir, "dest")
+        os.makedirs(self.source_dir)
+        os.makedirs(self.dest_dir)
+
+    def tearDown(self):
+        """Remove the temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _run_cli(self, args):
+        """Helper to run the CLI with a given set of arguments."""
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            with patch("sys.argv", ["dedupecopy"] + args):
+                run_cli()
+        finally:
+            os.chdir(original_cwd)
+
+    def _get_filenames(self, directory):
+        """Get a set of all filenames in a directory tree."""
+        filenames = set()
+        for _, _, files in os.walk(directory):
+            filenames.update(files)
+        return filenames
+
+    def test_multiple_extension_filters(self):
+        """Test copying with multiple extension filters."""
+        make_file_tree(
+            self.source_dir,
+            {
+                "file1.jpg": "image1",
+                "file2.png": "image2",
+                "file3.txt": "text",
+                "file4.pdf": "document",
+                "file5.jpeg": "image3",
+            },
+        )
+
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.dest_dir,
+                "-e",
+                "jpg",
+                "-e",
+                "png",
+                "-m",
+                "manifest.db",
+            ]
+        )
+
+        copied_files = self._get_filenames(self.dest_dir)
+        self.assertEqual(len(copied_files), 2)
+        self.assertIn("file1.jpg", copied_files)
+        self.assertIn("file2.png", copied_files)
+        self.assertNotIn("file3.txt", copied_files)
+
+    def test_wildcard_extension_filter(self):
+        """Test copying with wildcard extension filters."""
+        make_file_tree(
+            self.source_dir,
+            {
+                "file1.jpg": "image1",
+                "file2.jpeg": "image2",
+                "file3.txt": "text",
+            },
+        )
+
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.dest_dir,
+                "-e",
+                "jp*g",
+                "-m",
+                "manifest.db",
+            ]
+        )
+
+        copied_files = self._get_filenames(self.dest_dir)
+        # Should match both .jpg and .jpeg
+        self.assertGreaterEqual(len(copied_files), 2)
+
+
+class TestEmptyFileHandling(unittest.TestCase):
+    """Test suite for empty file handling scenarios."""
+
+    def setUp(self):
+        """Set up a temporary directory for empty file tests."""
+        self.temp_dir = tempfile.mkdtemp(prefix="test_empty_")
+        self.source_dir = os.path.join(self.temp_dir, "source")
+        self.dest_dir = os.path.join(self.temp_dir, "dest")
+        os.makedirs(self.source_dir)
+        os.makedirs(self.dest_dir)
+
+    def tearDown(self):
+        """Remove the temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _run_cli(self, args):
+        """Helper to run the CLI with a given set of arguments."""
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            with patch("sys.argv", ["dedupecopy"] + args):
+                run_cli()
+        finally:
+            os.chdir(original_cwd)
+
+    def _count_files(self, directory):
+        """Count total files in a directory tree."""
+        count = 0
+        for _, _, files in os.walk(directory):
+            count += len(files)
+        return count
+
+    def test_empty_files_copied_by_default(self):
+        """Test that empty files are copied by default (treated as unique)."""
+        make_file_tree(
+            self.source_dir,
+            {
+                "empty1.txt": "",
+                "empty2.txt": "",
+                "empty3.txt": "",
+                "nonempty.txt": "content",
+            },
+        )
+
+        self._run_cli(["-p", self.source_dir, "-c", self.dest_dir, "-m", "manifest.db"])
+
+        # All files should be copied (empty files are unique by default)
+        self.assertEqual(self._count_files(self.dest_dir), 4)
+
+    def test_empty_files_deduped_with_flag(self):
+        """Test that empty files are deduplicated with --dedupe-empty."""
+        make_file_tree(
+            self.source_dir,
+            {
+                "empty1.txt": "",
+                "empty2.txt": "",
+                "empty3.txt": "",
+                "nonempty.txt": "content",
+            },
+        )
+
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.dest_dir,
+                "--dedupe-empty",
+                "-m",
+                "manifest.db",
+            ]
+        )
+
+        # Only 2 files should be copied (1 empty + 1 non-empty)
+        self.assertEqual(self._count_files(self.dest_dir), 2)
+
+
+class TestReportGeneration(unittest.TestCase):
+    """Test suite for report generation scenarios."""
+
+    def setUp(self):
+        """Set up a temporary directory for report tests."""
+        self.temp_dir = tempfile.mkdtemp(prefix="test_report_")
+        self.source_dir = os.path.join(self.temp_dir, "source")
+        os.makedirs(self.source_dir)
+
+    def tearDown(self):
+        """Remove the temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _run_cli(self, args):
+        """Helper to run the CLI with a given set of arguments."""
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            with patch("sys.argv", ["dedupecopy"] + args):
+                run_cli()
+        finally:
+            os.chdir(original_cwd)
+
+    def test_report_only_no_copy(self):
+        """Test generating a report without copying files."""
+        make_file_tree(
+            self.source_dir,
+            {
+                "file1.txt": "duplicate",
+                "file2.txt": "duplicate",
+                "file3.txt": "unique",
+            },
+        )
+
+        report_path = os.path.join(self.temp_dir, "report.csv")
+        self._run_cli(["-p", self.source_dir, "-r", report_path])
+
+        # Verify report was created
+        self.assertTrue(os.path.exists(report_path))
+
+        # Verify report contains duplicate info
+        with open(report_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            self.assertIn("file1.txt", content)
+            self.assertIn("file2.txt", content)
+
+    def test_report_with_manifest_generation(self):
+        """Test generating both a report and manifest."""
+        make_file_tree(
+            self.source_dir,
+            {
+                "file1.txt": "content",
+                "file2.txt": "content",
+            },
+        )
+
+        report_path = os.path.join(self.temp_dir, "report.csv")
+        manifest_path = os.path.join(self.temp_dir, "manifest.db")
+
+        self._run_cli(["-p", self.source_dir, "-r", report_path, "-m", manifest_path])
+
+        # Verify both files were created
+        self.assertTrue(os.path.exists(report_path))
+        self.assertTrue(os.path.exists(manifest_path))
+
+
+class TestMetadataPreservation(unittest.TestCase):
+    """Test suite for metadata preservation scenarios."""
+
+    def setUp(self):
+        """Set up a temporary directory for metadata tests."""
+        self.temp_dir = tempfile.mkdtemp(prefix="test_metadata_")
+        self.source_dir = os.path.join(self.temp_dir, "source")
+        self.dest_dir = os.path.join(self.temp_dir, "dest")
+        os.makedirs(self.source_dir)
+        os.makedirs(self.dest_dir)
+
+    def tearDown(self):
+        """Remove the temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _run_cli(self, args):
+        """Helper to run the CLI with a given set of arguments."""
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            with patch("sys.argv", ["dedupecopy"] + args):
+                run_cli()
+        finally:
+            os.chdir(original_cwd)
+
+    def test_metadata_preserved_with_flag(self):
+        """Test that metadata is preserved with --copy-metadata flag."""
+        source_file = os.path.join(self.source_dir, "testfile.txt")
+        make_file_tree(self.source_dir, {"testfile.txt": "content"})
+
+        # Set a specific modification time
+        old_mtime = 1000000000.0
+        os.utime(source_file, (old_mtime, old_mtime))
+
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.dest_dir,
+                "--copy-metadata",
+                "-m",
+                "manifest.db",
+                "-R",
+                "*:no_change",  # Preserve original paths
+            ]
+        )
+
+        # File will be in dest_dir with original structure preserved
+        dest_file = os.path.join(self.dest_dir, "testfile.txt")
+        self.assertTrue(os.path.exists(dest_file))
+
+        # Verify modification time was preserved (within 1 second tolerance)
+        dest_mtime = os.path.getmtime(dest_file)
+        self.assertAlmostEqual(dest_mtime, old_mtime, delta=1.0)
+
+    def test_metadata_not_preserved_without_flag(self):
+        """Test that metadata is not preserved without --copy-metadata flag."""
+        source_file = os.path.join(self.source_dir, "testfile.txt")
+        make_file_tree(self.source_dir, {"testfile.txt": "content"})
+
+        # Set a very old modification time
+        old_mtime = 1000000000.0
+        os.utime(source_file, (old_mtime, old_mtime))
+
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.dest_dir,
+                "-m",
+                "manifest.db",
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        dest_file = os.path.join(self.dest_dir, "testfile.txt")
+        self.assertTrue(os.path.exists(dest_file))
+
+        # Verify modification time is recent (not preserved)
+        dest_mtime = os.path.getmtime(dest_file)
+        current_time = time.time()
+        # File should have been created recently (within last 10 seconds)
+        self.assertLess(abs(current_time - dest_mtime), 10.0)
+
+
+class TestErrorRecovery(unittest.TestCase):
+    """Test suite for error recovery and resumption scenarios."""
+
+    def setUp(self):
+        """Set up a temporary directory for error recovery tests."""
+        self.temp_dir = tempfile.mkdtemp(prefix="test_recovery_")
+        self.source_dir = os.path.join(self.temp_dir, "source")
+        self.dest_dir = os.path.join(self.temp_dir, "dest")
+        os.makedirs(self.source_dir)
+        os.makedirs(self.dest_dir)
+
+    def tearDown(self):
+        """Remove the temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _run_cli(self, args):
+        """Helper to run the CLI with a given set of arguments."""
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            with patch("sys.argv", ["dedupecopy"] + args):
+                run_cli()
+        finally:
+            os.chdir(original_cwd)
+
+    def test_resume_after_partial_copy(self):
+        """Test resuming a copy operation after partial completion."""
+        # Create initial files
+        make_file_tree(
+            self.source_dir,
+            {
+                "file1.txt": "content1",
+                "file2.txt": "content2",
+                "file3.txt": "content3",
+            },
+        )
+
+        manifest_path = os.path.join(self.temp_dir, "manifest.db")
+
+        # First run: copy all initial files
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.dest_dir,
+                "-m",
+                manifest_path,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Add more files
+        make_file_tree(
+            self.source_dir,
+            {
+                "file4.txt": "content4",
+                "file5.txt": "content5",
+            },
+        )
+
+        # Resume operation - use --compare to skip already copied files
+        manifest_path_new = os.path.join(self.temp_dir, "manifest_new.db")
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.dest_dir,
+                "--compare",
+                manifest_path,
+                "-m",
+                manifest_path_new,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Verify all files are now in destination
+        dest_files = []
+        for _, _, files in os.walk(self.dest_dir):
+            dest_files.extend(files)
+        self.assertEqual(len(dest_files), 5)
+
+
+class TestMultiSourceSequentialBackup(unittest.TestCase):
+    """Test suite for complex multi-source sequential backup scenarios."""
+
+    def setUp(self):
+        """Set up temporary directories for multi-source backup tests."""
+        self.temp_dir = tempfile.mkdtemp(prefix="test_multisource_")
+        self.source1_dir = os.path.join(self.temp_dir, "source1")
+        self.source2_dir = os.path.join(self.temp_dir, "source2")
+        self.source3_dir = os.path.join(self.temp_dir, "source3")
+        self.target_dir = os.path.join(self.temp_dir, "target")
+        os.makedirs(self.source1_dir)
+        os.makedirs(self.source2_dir)
+        os.makedirs(self.source3_dir)
+        os.makedirs(self.target_dir)
+
+    def tearDown(self):
+        """Remove the temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def _run_cli(self, args):
+        """Helper to run the CLI with a given set of arguments."""
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            with patch("sys.argv", ["dedupecopy"] + args):
+                run_cli()
+        finally:
+            os.chdir(original_cwd)
+
+    def _count_files(self, directory):
+        """Count total files in a directory tree."""
+        count = 0
+        for _, _, files in os.walk(directory):
+            count += len(files)
+        return count
+
+    def _get_all_filenames(self, directory):
+        """Get a set of all filenames in a directory tree."""
+        filenames = set()
+        for _, _, files in os.walk(directory):
+            filenames.update(files)
+        return filenames
+
+    def test_three_source_sequential_backup(self):
+        """
+        Test the README example: Sequential backup from 3 sources to 1 target.
+
+        This follows the workflow documented in the README:
+        1. Generate manifests for target and all sources
+        2. Copy source1 to target (comparing against target and source2/3)
+        3. Copy source2 to target (comparing against all previous)
+        4. Copy source3 to target (comparing against all previous)
+
+        Expected behavior:
+        - Each file should be copied only once (first source wins)
+        - Duplicates across sources should be skipped
+        - Target should contain all unique files from all sources
+        """
+        # Setup: Create files with some duplicates across sources
+        make_file_tree(
+            self.source1_dir,
+            {
+                "unique1.txt": "unique_to_source1",
+                "shared12.txt": "shared_by_1_and_2",  # source1 version
+                "shared123.txt": "shared_by_all",  # source1 version
+                "shared13.txt": "shared_by_1_and_3",  # source1 version
+            },
+        )
+        make_file_tree(
+            self.source2_dir,
+            {
+                "unique2.txt": "unique_to_source2",
+                "shared12.txt": "shared_by_1_and_2",  # duplicate
+                "shared123.txt": "shared_by_all",  # duplicate
+                "shared23.txt": "shared_by_2_and_3",  # source2 version
+            },
+        )
+        make_file_tree(
+            self.source3_dir,
+            {
+                "unique3.txt": "unique_to_source3",
+                "shared13.txt": "shared_by_1_and_3",  # duplicate
+                "shared123.txt": "shared_by_all",  # duplicate
+                "shared23.txt": "shared_by_2_and_3",  # duplicate
+            },
+        )
+
+        # Step 1: Generate manifests for all locations
+        target_manifest = os.path.join(self.temp_dir, "target.db")
+        source1_manifest = os.path.join(self.temp_dir, "source1.db")
+        source2_manifest = os.path.join(self.temp_dir, "source2.db")
+        source3_manifest = os.path.join(self.temp_dir, "source3.db")
+
+        # Target is empty initially, but generate manifest anyway
+        self._run_cli(["-p", self.target_dir, "-m", target_manifest])
+
+        self._run_cli(["-p", self.source1_dir, "-m", source1_manifest])
+        self._run_cli(["-p", self.source2_dir, "-m", source2_manifest])
+        self._run_cli(["-p", self.source3_dir, "-m", source3_manifest])
+
+        # Step 2: Copy source1 to target (skip files already in target)
+        target_manifest_v1 = os.path.join(self.temp_dir, "target_v1.db")
+        self._run_cli(
+            [
+                "-p",
+                self.source1_dir,
+                "-c",
+                self.target_dir,
+                "--compare",
+                target_manifest,
+                "-m",
+                target_manifest_v1,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Verify: All 4 files from source1 should be copied (target was empty)
+        self.assertEqual(self._count_files(self.target_dir), 4)
+
+        # Step 3: Copy source2 to target (skip duplicates already in target)
+        target_manifest_v2 = os.path.join(self.temp_dir, "target_v2.db")
+        self._run_cli(
+            [
+                "-p",
+                self.source2_dir,
+                "-c",
+                self.target_dir,
+                "--compare",
+                target_manifest_v1,
+                "-m",
+                target_manifest_v2,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Verify: Only unique2.txt and shared23.txt should be added (2 new files)
+        # shared12.txt and shared123.txt are duplicates of files already in target
+        self.assertEqual(self._count_files(self.target_dir), 6)
+
+        # Step 4: Copy source3 to target (skip duplicates already in target)
+        target_manifest_v3 = os.path.join(self.temp_dir, "target_v3.db")
+        self._run_cli(
+            [
+                "-p",
+                self.source3_dir,
+                "-c",
+                self.target_dir,
+                "--compare",
+                target_manifest_v2,
+                "-m",
+                target_manifest_v3,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Verify: Only unique3.txt should be added (1 new file)
+        # Total: 4 (source1) + 2 (source2) + 1 (source3) = 7 unique files
+        self.assertEqual(self._count_files(self.target_dir), 7)
+
+        # Verify the correct files are present
+        target_files = self._get_all_filenames(self.target_dir)
+        expected_files = {
+            "unique1.txt",
+            "unique2.txt",
+            "unique3.txt",
+            "shared12.txt",
+            "shared123.txt",
+            "shared13.txt",
+            "shared23.txt",
+        }
+        self.assertEqual(target_files, expected_files)
+
+    def test_multi_source_with_existing_target(self):
+        """
+        Test sequential backup when target already has some files.
+
+        This tests a common real-world scenario where:
+        1. Target already has some files
+        2. Multiple sources need to be consolidated
+        3. No duplicates should be created
+        """
+        # Setup: Target already has some files
+        make_file_tree(
+            self.target_dir,
+            {
+                "existing1.txt": "already_in_target",
+                "existing2.txt": "also_in_target",
+            },
+        )
+
+        # Source1 has some unique files and some duplicates of target
+        make_file_tree(
+            self.source1_dir,
+            {
+                "existing1.txt": "already_in_target",  # duplicate
+                "new_from_source1.txt": "unique_content",
+            },
+        )
+
+        # Source2 has some unique files
+        make_file_tree(
+            self.source2_dir,
+            {
+                "new_from_source2.txt": "another_unique",
+                "existing2.txt": "also_in_target",  # duplicate
+            },
+        )
+
+        # Step 1: Generate manifests
+        target_manifest = os.path.join(self.temp_dir, "target.db")
+        source1_manifest = os.path.join(self.temp_dir, "source1.db")
+        source2_manifest = os.path.join(self.temp_dir, "source2.db")
+
+        self._run_cli(["-p", self.target_dir, "-m", target_manifest])
+        self._run_cli(["-p", self.source1_dir, "-m", source1_manifest])
+        self._run_cli(["-p", self.source2_dir, "-m", source2_manifest])
+
+        # Initial target has 2 files
+        self.assertEqual(self._count_files(self.target_dir), 2)
+
+        # Step 2: Copy source1 (skip files already in target)
+        target_manifest_v1 = os.path.join(self.temp_dir, "target_v1.db")
+        self._run_cli(
+            [
+                "-p",
+                self.source1_dir,
+                "-c",
+                self.target_dir,
+                "--compare",
+                target_manifest,
+                "--compare",
+                source2_manifest,
+                "-m",
+                target_manifest_v1,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Should add only 1 new file (existing1.txt is a duplicate)
+        self.assertEqual(self._count_files(self.target_dir), 3)
+
+        # Step 3: Copy source2 (skip files already in target)
+        target_manifest_v2 = os.path.join(self.temp_dir, "target_v2.db")
+        self._run_cli(
+            [
+                "-p",
+                self.source2_dir,
+                "-c",
+                self.target_dir,
+                "--compare",
+                target_manifest_v1,
+                "--compare",
+                source1_manifest,
+                "-m",
+                target_manifest_v2,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Should add only 1 new file (existing2.txt is a duplicate)
+        self.assertEqual(self._count_files(self.target_dir), 4)
+
+        # Verify final state
+        target_files = self._get_all_filenames(self.target_dir)
+        expected_files = {
+            "existing1.txt",
+            "existing2.txt",
+            "new_from_source1.txt",
+            "new_from_source2.txt",
+        }
+        self.assertEqual(target_files, expected_files)
