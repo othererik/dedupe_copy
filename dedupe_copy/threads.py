@@ -212,7 +212,15 @@ class CopyThread(threading.Thread):
             )
             return dest
 
-        return os.path.join(self.config.target_path, ext, mtime, os.path.basename(src))
+        # Default behavior: preserve original directory structure (no_change)
+        # Get relative path from the read_path root
+        for read_path in self.config.read_paths:
+            if src.startswith(read_path):
+                rel_path = os.path.relpath(src, read_path)
+                return os.path.join(self.config.target_path, rel_path)
+
+        # Fallback if source not under any read_path
+        return os.path.join(self.config.target_path, os.path.basename(src))
 
     def run(self) -> None:
         """The main execution loop for the thread.

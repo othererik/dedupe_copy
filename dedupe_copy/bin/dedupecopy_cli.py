@@ -20,9 +20,10 @@ Examples:
   Copy all *.jpg files from multiple paths to a /YYYY_MM/*.jpg structure
       dedupecopy -p C:\pics -p D:\pics -e jpg -R jpg:mtime -c X:\pics
 
-  Copy all files from two drives to a single target, preserving the path for
-  all extensions:
-      dedupecopy -p C:\ -p D:\ -c X:\ -m X:\manifest -R *:no_change
+  Copy all files from two drives to a single target (preserving structure):
+      dedupecopy -p C:\ -p D:\ -c X:\ -m X:\manifest
+      
+      Note: Directory structure is preserved by default. Use -R for custom organization.
 
   Resume an interrupted run (assuming "-m manifest" used in prior run):
     dedupecopy -p /Users/ -r dupes_2.csv -i manifest -m manifest
@@ -171,11 +172,11 @@ def _create_parser():
     parser.add_argument(
         "-R",
         "--path-rules",
-        help=f"extension:rule_name pair(s) For example: "
-        f"png:mtime. These rules are cumulative, so "
-        f"-R png:extension -R png:mtime results in a structure "
-        f"like  /copy_path/png/2012_08/file.png Rules available: "
-        f"{PATH_RULES}",
+        help=f"extension:rule_name pair(s) for organizing files. "
+        f"Default: preserves original directory structure (no_change). "
+        f"Example: -R png:mtime organizes PNG files by date. "
+        f"Rules are cumulative: -R png:extension -R png:mtime creates "
+        f"/copy_path/png/2012_08/file.png. Available rules: {PATH_RULES}",
         required=False,
         default=None,
         action="append",

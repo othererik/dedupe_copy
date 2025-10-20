@@ -499,11 +499,13 @@ Use `--ignore` to exclude files or directories that match a specific pattern.
 
 Path rules (`-R` or `--path-rules`) determine how files are organized in the destination directory. The format is `pattern:rule`.
 
+**Default Behavior:** If no `-R` flag is specified, the original directory structure is preserved (equivalent to `-R "*:no_change"`). This is the most intuitive behavior for backup and copy operations.
+
 #### Available Rules
 
 | Rule        | Description                                     | Example Output                          |
 |-------------|-------------------------------------------------|-----------------------------------------|
-| `no_change` | Preserves the original directory structure      | `/dest/original/path/file.jpg`          |
+| `no_change` | **[DEFAULT]** Preserves the original directory structure | `/dest/original/path/file.jpg`          |
 | `mtime`     | Organizes by modification date (`YYYY_MM`)      | `/dest/2024_03/file.jpg`                |
 | `extension` | Organizes into folders by file extension        | `/dest/jpg/file.jpg`                    |
 
