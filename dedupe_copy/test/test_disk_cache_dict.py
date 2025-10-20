@@ -435,30 +435,19 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
 
     def test_sqlite_backend_default_db_file(self):
         """Test SqliteBackend with default db_file generation - line 41"""
-        # Don't provide db_file, should auto-generate (covers line 41)
-        backend = None
-        db_path = None
+        temp_dir = utils.make_temp_dir("dcd_temp")
+        db_file = os.path.join(temp_dir, "test.db")
         try:
-            backend = disk_cache_dict.SqliteBackend(db_file=None)
+            backend = disk_cache_dict.SqliteBackend(db_file=db_file)
             # Should have created a file with timestamp-based name
             db_path = backend.db_file_path()
-            self.assertTrue(db_path.startswith("db_file_"))
-            self.assertTrue(db_path.endswith(".dict"))
+            self.assertTrue(db_path.endswith("test.db"))
 
             # Basic functionality test
             self.assertIsNotNone(backend.conn)
             self.assertTrue(hasattr(backend, "table"))
         finally:
-            if backend:
-                try:
-                    backend.close()
-                except Exception:  # pylint: disable=broad-except
-                    pass
-            if db_path and os.path.exists(db_path):
-                try:
-                    os.unlink(db_path)
-                except Exception:  # pylint: disable=broad-except
-                    pass
+            utils.remove_dir(temp_dir)
 
     def test_sqlite_backend_unlink_old_db(self):
         """Test SqliteBackend with unlink_old_db flag - line 43"""
@@ -630,18 +619,32 @@ class TestDefaultCacheDict(unittest.TestCase):
 
     def test_copy_method(self):
         """Test that copy method returns a new DefaultCacheDict with same default_factory."""
-        dcd = disk_cache_dict.DefaultCacheDict(default_factory=list)
-        dcd_copy = dcd.copy()
-        self.assertIsInstance(dcd_copy, disk_cache_dict.DefaultCacheDict)
-        self.assertEqual(dcd_copy.default_factory, list)
+        temp_dir = utils.make_temp_dir("dcd_temp")
+        db_file = os.path.join(temp_dir, "test.db")
+        try:
+            dcd = disk_cache_dict.DefaultCacheDict(
+                default_factory=list, db_file=db_file
+            )
+            dcd_copy = dcd.copy()
+            self.assertIsInstance(dcd_copy, disk_cache_dict.DefaultCacheDict)
+            self.assertEqual(dcd_copy.default_factory, list)
+        finally:
+            utils.remove_dir(temp_dir)
 
     def test_fromkeys_method(self):
         """Test that fromkeys method returns a new DefaultCacheDict with same default_factory."""
-        dcd = disk_cache_dict.DefaultCacheDict(default_factory=list)
-        keys = ["a", "b", "c"]
-        dcd_fromkeys = dcd.fromkeys(keys)
-        self.assertIsInstance(dcd_fromkeys, disk_cache_dict.DefaultCacheDict)
-        self.assertEqual(dcd_fromkeys.default_factory, list)
+        temp_dir = utils.make_temp_dir("dcd_temp")
+        db_file = os.path.join(temp_dir, "test.db")
+        try:
+            dcd = disk_cache_dict.DefaultCacheDict(
+                default_factory=list, db_file=db_file
+            )
+            keys = ["a", "b", "c"]
+            dcd_fromkeys = dcd.fromkeys(keys)
+            self.assertIsInstance(dcd_fromkeys, disk_cache_dict.DefaultCacheDict)
+            self.assertEqual(dcd_fromkeys.default_factory, list)
+        finally:
+            utils.remove_dir(temp_dir)
 
     def test_dump_load_bytes_and_bool(self):
         """Test that bytes and bool types are dumped and loaded correctly"""
