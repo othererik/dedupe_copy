@@ -325,6 +325,89 @@ class TestUserScenarios(unittest.TestCase):
         # a.txt should be deleted from the source because it's a duplicate
         self.assertFalse(os.path.exists(os.path.join(self.source_dir, "a.txt")))
 
+    def test_delete_on_copy_keyerror_regression(self):
+        """
+        Replicates a user-reported scenario that caused a KeyError.
+        - A file is copied from source to dest (`--delete-on-copy` "move").
+        - This file's hash is also present in the --compare manifest.
+        - The bug was that the system tried to remove the hash from the manifest twice:
+          once during the path update for the move, and a second time because it
+          was a duplicate of the compare manifest.
+        """
+        # 1. Setup
+        # Source has a file 'fresh' that will be copied.
+        # Source also has 'dupet', which is a duplicate of a file in the target.
+        # Target has 'dupes', which has the same content as 'dupet'.
+        make_file_tree(
+            self.source_dir,
+            {
+                "fresh": "fresh_content",
+                "dir1/dupet": "dupe_content",
+                "dir1/his": "his_content",
+                "dir2/news": "news_content",
+            },
+        )
+        make_file_tree(
+            self.dest_dir,
+            {
+                "dir1/dupes": "dupe_content",
+                "hit": "his_content",
+            },
+        )
+
+        # 2. Generate manifests
+        source_manifest_path = os.path.join(self.temp_dir, "source.db")
+        target_manifest_path = os.path.join(self.temp_dir, "target.db")
+        final_manifest_path = os.path.join(self.temp_dir, "final.db")
+
+        self._run_cli(["-p", self.source_dir, "-m", source_manifest_path])
+        self._run_cli(["-p", self.dest_dir, "-m", target_manifest_path])
+
+        # 3. Run the command that was causing the KeyError
+        try:
+            self._run_cli(
+                [
+                    "--no-walk",
+                    "-i",
+                    source_manifest_path,
+                    "-c",
+                    self.dest_dir,
+                    "--compare",
+                    target_manifest_path,
+                    "--delete-on-copy",
+                    "-m",
+                    final_manifest_path,
+                ]
+            )
+        except KeyError as e:
+            self.fail(f"The operation failed with an unexpected KeyError: {e}")
+
+        # 4. Verification (post-fix)
+        # Source should have no files left, only empty directories might remain
+        remaining_source_files = self._get_all_filepaths(self.source_dir)
+        self.assertEqual(
+            len(remaining_source_files),
+            0,
+            f"Source directory should contain no files, but found: {remaining_source_files}",
+        )
+
+        # Destination should have the original files + the newly copied files
+        dest_files = self._get_all_filepaths(self.dest_dir)
+        self.assertIn(os.path.join(self.dest_dir, "fresh"), dest_files)
+        self.assertIn(os.path.join(self.dest_dir, "dir2", "news"), dest_files)
+        self.assertIn(os.path.join(self.dest_dir, "dir1", "dupes"), dest_files)
+        self.assertIn(os.path.join(self.dest_dir, "hit"), dest_files)
+        self.assertEqual(
+            len(dest_files), 4, "Expected 4 files in the destination directory."
+        )
+
+        # The final manifest content is complex in this scenario, so we'll focus
+        # on ensuring the file system is correct and no crash occurred.
+        # We can verify that the manifest was created as a basic check.
+        self.assertTrue(
+            os.path.exists(final_manifest_path), "Final manifest was not created."
+        )
+
 
 class TestCliIntegration(unittest.TestCase):
     """Test the CLI by running it as a separate process."""

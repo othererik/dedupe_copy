@@ -1021,15 +1021,23 @@ def run_dupe_copy(
             copy_job=copy_job,
         )
 
-        # Update the manifest with the moved and deleted files
-        if moved_files:
-            all_data.update_paths(moved_files)
-        if deleted_files:
-            # This handles both files deleted after copy and files deleted
-            # because they were duplicates of the compare manifest.
-            # update_paths handles the removal of old source paths for MOVED files,
-            # but we still need to account for other deleted files.
-            all_data.remove_files(deleted_files)
+        # This logic handles manifest updates for both moved files (delete-on-copy)
+        # and files that were only deleted (due to --compare).
+        if moved_files or deleted_files:
+            # First, handle the path updates for files that were moved.
+            # This operation removes the old source path and adds the new destination path.
+            if moved_files:
+                all_data.update_paths(moved_files)
+
+            # Next, handle the removal of files that were deleted but not moved.
+            # These are files that were duplicates of the --compare manifest.
+            # We must not try to re-process files that were already handled by update_paths.
+            moved_source_paths = {src for src, _ in moved_files}
+            files_to_remove_only = [
+                path for path in deleted_files if path not in moved_source_paths
+            ]
+            if files_to_remove_only:
+                all_data.remove_files(files_to_remove_only)
 
         if manifest_out_path and not dry_run:
             progress_queue.put(
