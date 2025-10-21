@@ -1032,10 +1032,12 @@ def run_dupe_copy(
             # Next, handle the removal of files that were deleted but not moved.
             # These are files that were duplicates of the --compare manifest.
             # We must not try to re-process files that were already handled by update_paths.
+            # Convert to sets for robust duplicate handling and efficient subtraction.
             moved_source_paths = {src for src, _ in moved_files}
-            files_to_remove_only = [
-                path for path in deleted_files if path not in moved_source_paths
-            ]
+            all_deleted_paths = set(deleted_files)
+
+            files_to_remove_only = list(all_deleted_paths - moved_source_paths)
+
             if files_to_remove_only:
                 all_data.remove_files(files_to_remove_only)
 
