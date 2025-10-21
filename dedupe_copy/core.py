@@ -343,6 +343,7 @@ def copy_data(
         A tuple containing a list of all deleted source paths and a list
         of (source, destination) path tuples for moved files.
     """
+    # pylint: disable=too-many-statements
     copy_stop_event = threading.Event()
     copy_queue: "queue.Queue[Tuple[str, str, int]]" = queue.Queue()
     # This queue holds (source, dest) tuples of files deleted by CopyThreads
@@ -354,7 +355,12 @@ def copy_data(
     # Create a set of hashes that should not be copied.
     # This includes hashes from the compare manifest and hashes we've already
     # decided to copy in this run. This set is modified in this function.
-    hashes_to_skip = set(copy_job.no_copy.hash_set())
+    no_copy_hashes = None
+    if copy_job.no_copy:
+        no_copy_hashes = copy_job.no_copy.hash_set()
+    hashes_to_skip = set()
+    if no_copy_hashes:
+        hashes_to_skip.update(no_copy_hashes)
 
     if progress_queue:
         progress_queue.put(
