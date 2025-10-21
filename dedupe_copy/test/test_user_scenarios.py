@@ -327,31 +327,37 @@ class TestUserScenarios(unittest.TestCase):
 
     def test_delete_on_copy_keyerror_regression(self):
         """
-        Replicates a user-reported scenario that caused a KeyError.
-        - A file is copied from source to dest (`--delete-on-copy` "move").
-        - This file's hash is also present in the --compare manifest.
-        - The bug was that the system tried to remove the hash from the manifest twice:
-          once during the path update for the move, and a second time because it
-          was a duplicate of the compare manifest.
+        A robust test for a user-reported KeyError, consolidating previous tests.
+
+        This scenario creates a complex file structure to stress-test the manifest
+        update logic when using `--delete-on-copy` and `--compare`. It includes:
+        - Files unique to the source (should be moved).
+        - Duplicates within the source (one should be moved, the rest deleted).
+        - Duplicates between source and target (source files should be deleted).
+        - Nested directories.
+        The bug was that the system tried to remove a file's hash from the manifest
+        twice, causing a KeyError. This test ensures the logic correctly handles
+        all file operation types (move, delete-dupe-internal, delete-dupe-external)
+        in a single run without crashing.
         """
-        # 1. Setup
-        # Source has a file 'fresh' that will be copied.
-        # Source also has 'dupet', which is a duplicate of a file in the target.
-        # Target has 'dupes', which has the same content as 'dupet'.
+        # 1. Setup a more complex file structure
         make_file_tree(
             self.source_dir,
             {
-                "fresh": "fresh_content",
-                "dir1/dupet": "dupe_content",
-                "dir1/his": "his_content",
-                "dir2/news": "news_content",
+                "unique_to_source.txt": "unique_source_content",
+                "dup_in_source_1.txt": "source_dupe_content",
+                "dup_in_source_2.txt": "source_dupe_content",
+                "dir1/shared_with_target.txt": "shared_content",
+                "dir2/another_unique.txt": "another_unique_content",
+                "dir2/shared_with_target_2.txt": "shared_content_2",
             },
         )
         make_file_tree(
-            self.dest_dir,
+            self.dest_dir,  # This is the 'target' for the copy operation
             {
-                "dir1/dupes": "dupe_content",
-                "hit": "his_content",
+                "already_in_dest.txt": "dest_content",
+                "dir_A/target_version_of_shared.txt": "shared_content",
+                "dir_B/target_version_of_shared_2.txt": "shared_content_2",
             },
         )
 
@@ -382,28 +388,54 @@ class TestUserScenarios(unittest.TestCase):
         except KeyError as e:
             self.fail(f"The operation failed with an unexpected KeyError: {e}")
 
-        # 4. Verification (post-fix)
-        # Source should have no files left, only empty directories might remain
+        # 4. Verification
+        # Source should have no files left, only empty directories might remain.
         remaining_source_files = self._get_all_filepaths(self.source_dir)
         self.assertEqual(
             len(remaining_source_files),
             0,
-            f"Source directory should contain no files, but found: {remaining_source_files}",
+            f"Source directory should be empty of files, but found: {remaining_source_files}",
         )
 
-        # Destination should have the original files + the newly copied files
+        # Destination should contain its original files plus the new/unique ones from source.
         dest_files = self._get_all_filepaths(self.dest_dir)
-        self.assertIn(os.path.join(self.dest_dir, "fresh"), dest_files)
-        self.assertIn(os.path.join(self.dest_dir, "dir2", "news"), dest_files)
-        self.assertIn(os.path.join(self.dest_dir, "dir1", "dupes"), dest_files)
-        self.assertIn(os.path.join(self.dest_dir, "hit"), dest_files)
-        self.assertEqual(
-            len(dest_files), 4, "Expected 4 files in the destination directory."
+
+        # Define the set of files we expect to find in the destination.
+        expected_dest_paths = {
+            # Original files in dest
+            os.path.join(self.dest_dir, "already_in_dest.txt"),
+            os.path.join(self.dest_dir, "dir_A", "target_version_of_shared.txt"),
+            os.path.join(self.dest_dir, "dir_B", "target_version_of_shared_2.txt"),
+            # Files moved from source
+            os.path.join(self.dest_dir, "unique_to_source.txt"),
+            os.path.join(self.dest_dir, "dir2", "another_unique.txt"),
+        }
+        # One of the two source duplicates should have been moved. We need to check for either possibility.
+        moved_dupe_path1 = os.path.join(self.dest_dir, "dup_in_source_1.txt")
+        moved_dupe_path2 = os.path.join(self.dest_dir, "dup_in_source_2.txt")
+
+        found_moved_dupe = (
+            moved_dupe_path1 in dest_files or moved_dupe_path2 in dest_files
+        )
+        self.assertTrue(
+            found_moved_dupe,
+            "One of the internal source duplicates should have been moved to destination.",
         )
 
-        # The final manifest content is complex in this scenario, so we'll focus
-        # on ensuring the file system is correct and no crash occurred.
-        # We can verify that the manifest was created as a basic check.
+        # Add the found duplicate to the expected set for a final, exact comparison.
+        if moved_dupe_path1 in dest_files:
+            expected_dest_paths.add(moved_dupe_path1)
+        else:
+            expected_dest_paths.add(moved_dupe_path2)
+
+        self.assertEqual(
+            dest_files,
+            expected_dest_paths,
+            "The final set of files in the destination directory is incorrect.",
+        )
+
+        # Verify the final manifest was created. A deeper check is complex due to
+        # non-deterministic duplicate selection, so we focus on the filesystem state.
         self.assertTrue(
             os.path.exists(final_manifest_path), "Final manifest was not created."
         )
