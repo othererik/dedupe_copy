@@ -211,6 +211,74 @@ class TestUserScenarios(unittest.TestCase):
             "Manifest file should not be created on dry run.",
         )
 
+    def test_sync_to_target_with_delete_on_copy_and_compare(self):
+        """
+        Replicates a user-reported scenario:
+        - Source and Target directories exist.
+        - Target already contains some files, some of which are duplicates of source files.
+        - Goal: Copy new/unique files from source to target, preserving directory structure,
+          and delete the source files after copy. Duplicates in source should also be deleted.
+        """
+        # 1. Setup: Create source and target file structures
+        make_file_tree(
+            self.source_dir,
+            {
+                "hi": "hi_content",
+                "dir1/adupe": "dupe_content",
+                "dir2/filesd2": "new_file_content",
+            },
+        )
+        # self.dest_dir will be our "target" directory for the copy operation
+        make_file_tree(
+            self.dest_dir,
+            {"hit": "hi_content", "dir1/dupe": "dupe_content"},
+        )
+
+        # 2. Generate manifests for source and the destination (acting as target)
+        source_manifest_path = os.path.join(self.temp_dir, "source.db")
+        target_manifest_path = os.path.join(self.temp_dir, "target.db")
+        self._run_cli(["-p", self.source_dir, "-m", source_manifest_path])
+        self._run_cli(
+            ["-p", self.dest_dir, "-m", target_manifest_path]
+        )  # Manifest for the destination
+
+        # 3. Run the sync/copy operation
+        output_manifest_path = os.path.join(self.temp_dir, "final.db")
+        self._run_cli(
+            [
+                "--no-walk",
+                "-i",
+                source_manifest_path,
+                "-c",
+                self.dest_dir,  # This is the target for the copy
+                "--delete-on-copy",
+                "--compare",
+                target_manifest_path,  # Compare against the destination's manifest
+                "-m",
+                output_manifest_path,
+            ]
+        )
+
+        # 4. Verify the destination directory state
+        # Check that the new file was copied and its path was preserved
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "dir2", "filesd2")))
+
+        # Check that the files that were already in the destination are still there
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "hit")))
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "dir1", "dupe")))
+
+        # Check that duplicates from source were not copied over
+        self.assertFalse(os.path.exists(os.path.join(self.dest_dir, "hi")))
+        self.assertFalse(os.path.exists(os.path.join(self.dest_dir, "adupe")))
+
+        # 5. Verify the source directory is now empty
+        remaining_source_files = self._get_all_filepaths(self.source_dir)
+        self.assertEqual(
+            len(remaining_source_files),
+            0,
+            f"All files should have been deleted from the source directory, but found: {remaining_source_files}",
+        )
+
 
 class TestCliIntegration(unittest.TestCase):
     """Test the CLI by running it as a separate process."""

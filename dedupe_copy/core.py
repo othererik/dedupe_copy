@@ -380,7 +380,6 @@ def queue_copy_work(
 
 
 def copy_data(
-    dupes: Any,
     all_data: Any,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
     *,
@@ -437,14 +436,6 @@ def copy_data(
         )
     # copied is passed to here so we don't try to copy "comparison" manifests
     # copied is a dict-like, so it's update in place
-    queue_copy_work(
-        copy_queue,
-        dupes,
-        progress_queue,
-        copied,
-        copy_job=copy_job,
-        delete_only_queue=delete_only_queue,
-    )
     queue_copy_work(
         copy_queue,
         all_data,
@@ -1011,9 +1002,31 @@ def run_dupe_copy(
         progress_queue.put(
             (HIGH_PRIORITY, "message", f"Running copy to {repr(copy_to_path)}")
         )
+
+        effective_read_paths = read_from_path or []
+        if not isinstance(effective_read_paths, list):
+            effective_read_paths = [effective_read_paths]
+
+        if no_walk and not effective_read_paths and manifest:
+            manifest_paths = list(manifest.read_sources.keys())
+            if manifest_paths:
+                # Use commonpath to determine the most likely source root.
+                common_base = os.path.commonpath(manifest_paths)
+                # If commonpath returns a file (e.g., only one file in manifest), get its dir.
+                if common_base and not os.path.isdir(common_base):
+                    common_base = os.path.dirname(common_base)
+
+                if common_base:
+                    logger.info(
+                        "No source path provided with --no-walk; using common base path "
+                        "from manifest to preserve structure: %s",
+                        common_base,
+                    )
+                    effective_read_paths = [common_base]
+
         copy_config = CopyConfig(
             target_path=copy_to_path,
-            read_paths=read_from_path or [],
+            read_paths=effective_read_paths,
             extensions=extensions,
             path_rules=path_rules_func,
             preserve_stat=preserve_stat,
@@ -1030,7 +1043,6 @@ def run_dupe_copy(
             dry_run=dry_run,
         )
         deleted_files, moved_files = copy_data(
-            dupes,
             all_data,
             progress_queue,
             copy_job=copy_job,
