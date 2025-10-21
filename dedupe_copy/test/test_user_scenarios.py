@@ -410,7 +410,8 @@ class TestUserScenarios(unittest.TestCase):
             os.path.join(self.dest_dir, "unique_to_source.txt"),
             os.path.join(self.dest_dir, "dir2", "another_unique.txt"),
         }
-        # One of the two source duplicates should have been moved. We need to check for either possibility.
+        # One of the two source duplicates should have been moved.
+        # We need to check for either possibility.
         moved_dupe_path1 = os.path.join(self.dest_dir, "dup_in_source_1.txt")
         moved_dupe_path2 = os.path.join(self.dest_dir, "dup_in_source_2.txt")
 
