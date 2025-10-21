@@ -322,63 +322,6 @@ def info_parser(data: Any) -> Iterator[Tuple[str, str, str, int]]:
                 yield md5, item[0], year_month, item[1]
 
 
-def queue_copy_work(
-    copy_queue: "queue.Queue[Tuple[str, str, int]]",
-    data: Any,
-    progress_queue: Optional["queue.PriorityQueue[Any]"],
-    copied: Any,
-    *,
-    copy_job: "CopyJob",
-    delete_only_queue: Optional["queue.Queue[str]"] = None,
-) -> Any:
-    """Populates the copy queue with files to be processed.
-
-    This function iterates through the provided data, filters out files that
-    have already been copied or are explicitly ignored, and adds the remaining
-    files to the copy queue. If delete_on_copy is enabled, it will also queue
-    files that are duplicates of the --compare manifest for deletion.
-
-    Args:
-        copy_queue: The queue to which copy tasks will be added.
-        data: A dictionary of file data to be considered for copying.
-        progress_queue: An optional queue for reporting progress.
-        copied: A set-like object of hashes that have already been copied.
-        copy_job: The configuration for the copy operation.
-        delete_only_queue: An optional queue for files to be deleted but not copied.
-
-    Returns:
-        The updated `copied` object.
-    """
-    for md5, path, mtime, size in info_parser(data):
-        if md5 not in copied:
-            action_required = True
-            if copy_job.ignore:
-                for ignored_pattern in copy_job.ignore:
-                    if fnmatch.fnmatch(path, ignored_pattern):
-                        action_required = False
-                        break
-            if action_required:
-                if size == 0 and not copy_job.dedupe_empty:
-                    # Don't add empty files to the copied list, so they all get copied
-                    pass
-                else:
-                    copied[md5] = None
-                _throttle_puts(copy_queue.qsize())
-                copy_queue.put((path, mtime, size))
-            elif progress_queue:
-                progress_queue.put((LOW_PRIORITY, "not_copied", path))
-        elif copy_job.delete_on_copy and delete_only_queue is not None:
-            # If a file is a duplicate of one already copied OR one in the compare manifest,
-            # and we are in "move" mode, delete it from the source.
-            _throttle_puts(delete_only_queue.qsize())
-            delete_only_queue.put(path)
-            if progress_queue:
-                progress_queue.put((LOW_PRIORITY, "queued_for_delete", path))
-        elif progress_queue:
-            progress_queue.put((LOW_PRIORITY, "not_copied", path))
-    return copied
-
-
 def copy_data(
     all_data: Any,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
@@ -392,22 +335,27 @@ def copy_data(
     queues duplicate files from the source for deletion.
 
     Args:
-        dupes: A dictionary of duplicate files to be copied.
         all_data: A dictionary of all files to be considered for copying.
         progress_queue: An optional queue for reporting progress.
         copy_job: The configuration for the copy operation.
 
     Returns:
-        A list of all source file paths that were deleted.
+        A tuple containing a list of all deleted source paths and a list
+        of (source, destination) path tuples for moved files.
     """
     copy_stop_event = threading.Event()
     copy_queue: "queue.Queue[Tuple[str, str, int]]" = queue.Queue()
-    # This queue holds files deleted by CopyThreads
+    # This queue holds (source, dest) tuples of files deleted by CopyThreads
     deleted_after_copy_queue: "queue.Queue[Tuple[str, str]]" = queue.Queue()
-    # This queue holds files to be deleted because they are dupes of --compare
+    # This queue holds source paths to be deleted because they are dupes of --compare
     delete_only_queue: "queue.Queue[str]" = queue.Queue()
     copy_workers = []
-    copied = copy_job.no_copy
+
+    # Create a set of hashes that should not be copied.
+    # This includes hashes from the compare manifest and hashes we've already
+    # decided to copy in this run. This set is modified in this function.
+    hashes_to_skip = set(copy_job.no_copy.hash_set())
+
     if progress_queue:
         progress_queue.put(
             (
@@ -434,16 +382,36 @@ def copy_data(
                 f"Copying to {copy_job.copy_config.target_path}",
             )
         )
-    # copied is passed to here so we don't try to copy "comparison" manifests
-    # copied is a dict-like, so it's update in place
-    queue_copy_work(
-        copy_queue,
-        all_data,
-        progress_queue,
-        copied,
-        copy_job=copy_job,
-        delete_only_queue=delete_only_queue,
-    )
+
+    # --- Start of inlined queue_copy_work logic ---
+    for md5, path, mtime, size in info_parser(all_data):
+        if md5 not in hashes_to_skip:
+            action_required = True
+            if copy_job.ignore:
+                for ignored_pattern in copy_job.ignore:
+                    if fnmatch.fnmatch(path, ignored_pattern):
+                        action_required = False
+                        break
+            if action_required:
+                if not (size == 0 and not copy_job.dedupe_empty):
+                    # Add hash to skip set so other files with the same hash are not copied
+                    hashes_to_skip.add(md5)
+                _throttle_puts(copy_queue.qsize())
+                copy_queue.put((path, mtime, size))
+            elif progress_queue:
+                progress_queue.put((LOW_PRIORITY, "not_copied", path))
+        elif copy_job.delete_on_copy and delete_only_queue is not None:
+            # If a file's hash is in our skip set (either from compare manifest
+            # or from a file we've already queued for copying), and we are in "move"
+            # mode, delete this duplicate from the source.
+            _throttle_puts(delete_only_queue.qsize())
+            delete_only_queue.put(path)
+            if progress_queue:
+                progress_queue.put((LOW_PRIORITY, "queued_for_delete", path))
+        elif progress_queue:
+            progress_queue.put((LOW_PRIORITY, "not_copied", path))
+    # --- End of inlined queue_copy_work logic ---
+
     # Wait for all tasks to be processed by the workers
     copy_queue.join()
 
@@ -500,10 +468,9 @@ def copy_data(
                 break
 
     if progress_queue:
-        if copied is not None:
-            progress_queue.put(
-                (HIGH_PRIORITY, "message", f"Processed {len(copied)} unique items")
-            )
+        progress_queue.put(
+            (HIGH_PRIORITY, "message", f"Processed {len(hashes_to_skip)} unique items")
+        )
         if all_deleted_files:
             progress_queue.put(
                 (
