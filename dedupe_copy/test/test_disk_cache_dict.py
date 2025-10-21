@@ -625,7 +625,7 @@ class TestDefaultCacheDict(unittest.TestCase):
             dcd = disk_cache_dict.DefaultCacheDict(
                 default_factory=list, db_file=db_file
             )
-            dcd_copy = dcd.copy()
+            dcd_copy = dcd.copy(os.path.join(temp_dir, "test_copy.db"))
             self.assertIsInstance(dcd_copy, disk_cache_dict.DefaultCacheDict)
             self.assertEqual(dcd_copy.default_factory, list)
         finally:
@@ -640,7 +640,9 @@ class TestDefaultCacheDict(unittest.TestCase):
                 default_factory=list, db_file=db_file
             )
             keys = ["a", "b", "c"]
-            dcd_fromkeys = dcd.fromkeys(keys)
+            dcd_fromkeys = dcd.fromkeys(
+                keys, db_file=os.path.join(temp_dir, "test_from_keys.db")
+            )
             self.assertIsInstance(dcd_fromkeys, disk_cache_dict.DefaultCacheDict)
             self.assertEqual(dcd_fromkeys.default_factory, list)
         finally:
