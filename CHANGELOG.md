@@ -1,6 +1,10 @@
 # Changelog
 
 
+## [1.1.7] - 2025-10-21
+- Bugfix where tool failed to correctly synchronize files from a source to a target directory under specific conditions (--no-walk, --delete-on-copy, and --compare).
+
+
 ## [1.1.6] - 2025-10-20
 - Correct documentation for empty file handling. The default is to treat empty files as unique, and `--dedupe-empty` is used to treat them as duplicates.
 

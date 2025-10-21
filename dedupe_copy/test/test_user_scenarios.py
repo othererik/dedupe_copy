@@ -276,7 +276,8 @@ class TestUserScenarios(unittest.TestCase):
         self.assertEqual(
             len(remaining_source_files),
             0,
-            f"All files should have been deleted from the source directory, but found: {remaining_source_files}",
+            "All files should have been deleted from the source directory, "
+            f"but found: {remaining_source_files}",
         )
 
 
