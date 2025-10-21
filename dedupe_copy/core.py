@@ -1036,10 +1036,15 @@ def run_dupe_copy(
             moved_source_paths = {src for src, _ in moved_files}
             all_deleted_paths = set(deleted_files)
 
-            files_to_remove_only = list(all_deleted_paths - moved_source_paths)
+            # Use list comprehension for clarity and to prevent subtle bugs with set differences
+            # if the lists contain unhashable types (not the case here, but good practice).
+            files_to_remove_only = [
+                p for p in all_deleted_paths if p not in moved_source_paths
+            ]
 
             if files_to_remove_only:
-                all_data.remove_files(files_to_remove_only)
+                # Ensure the list is unique before passing to remove_files
+                all_data.remove_files(list(set(files_to_remove_only)))
 
         if manifest_out_path and not dry_run:
             progress_queue.put(

@@ -269,8 +269,14 @@ class CopyThread(threading.Thread):
                         except OSError as e:
                             if self.progress_queue:
                                 self.progress_queue.put(
-                                    (MEDIUM_PRIORITY, "error", src, e)
+                                    (MEDIUM_PRIORITY, "error", src, str(e))
                                 )
+            except Exception as e:
+                # Catch any unexpected errors to prevent thread crashing silently
+                if self.progress_queue:
+                    self.progress_queue.put(
+                        (MEDIUM_PRIORITY, "error", "N/A", f"Unexpected error in CopyThread: {e}")
+                    )
             finally:
                 self.work.task_done()
 
@@ -825,12 +831,17 @@ class DeleteThread(threading.Thread):
                         except OSError as e:
                             if self.progress_queue:
                                 self.progress_queue.put(
-                                    (MEDIUM_PRIORITY, "error", src, e)
+                                    (MEDIUM_PRIORITY, "error", src, str(e))
                                 )
                 finally:
                     self.work.task_done()
             except queue.Empty:
                 pass
+            except Exception as e:
+                if self.progress_queue:
+                    self.progress_queue.put(
+                        (MEDIUM_PRIORITY, "error", "N/A", f"Unexpected error in DeleteThread: {e}")
+                    )
 
 
 class WalkThread(threading.Thread):

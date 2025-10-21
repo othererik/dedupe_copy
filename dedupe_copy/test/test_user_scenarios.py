@@ -12,7 +12,9 @@ import time
 import unittest
 from unittest.mock import patch
 
-from dedupe_copy.bin.dedupecopy_cli import run_cli
+from dedupe_copy.bin.dedupecopy_cli import (_create_parser, _handle_arguments,
+                                            run_cli)
+from dedupe_copy.core import run_dupe_copy
 from dedupe_copy.manifest import Manifest
 from dedupe_copy.test.utils import make_file_tree
 
@@ -440,6 +442,80 @@ class TestUserScenarios(unittest.TestCase):
         self.assertTrue(
             os.path.exists(final_manifest_path), "Final manifest was not created."
         )
+
+    def test_reproduce_user_reported_errors(self):
+        """
+        Reproduces a user-reported scenario leading to a KeyError and then a TypeError.
+        1. Run `dedupecopy` to create source and target manifests.
+        2. Run the failing command: `dedupecopy --no-walk -c target --compare target.db
+           -i source.db --delete-on-copy -m final.db`
+        3. This first run should trigger a KeyError.
+        """
+        # 1. Setup: Replicate the user's file and directory structure.
+        # Note: self.dest_dir is used as the 'target' directory here.
+        make_file_tree(self.dest_dir, {"hit": "hi", "dir1/dupes": "dupe"})
+        make_file_tree(
+            self.source_dir,
+            {
+                "dir2/news": "new",
+                "dir1/his": "hi",
+                "dir1/dupet": "dupe",
+                "fresh": "fresh",
+            },
+        )
+
+        # 2. Generate initial manifests
+        target_manifest_path = os.path.join(self.temp_dir, "target.db")
+        source_manifest_path = os.path.join(self.temp_dir, "source.db")
+        self._run_cli(["-p", self.dest_dir, "-m", target_manifest_path])
+        self._run_cli(["-p", self.source_dir, "-m", source_manifest_path])
+
+        # 3. Run the command that is expected to fail with a KeyError
+        final_manifest_path = os.path.join(self.temp_dir, "final.db")
+        failing_args = [
+            "--no-walk",
+            "-c",
+            self.dest_dir,
+            "--compare",
+            target_manifest_path,
+            "-i",
+            source_manifest_path,
+            "--delete-on-copy",
+            "-m",
+            final_manifest_path,
+        ]
+
+        # Bypassing `_run_cli` which suppresses the exception.
+        # We parse the args and call the core function directly to let the error propagate.
+        original_cwd = os.getcwd()
+        os.chdir(self.temp_dir)
+        try:
+            parser = _create_parser()
+            args = parser.parse_args(failing_args)
+            processed_args = _handle_arguments(args)
+
+            # First run (which previously caused KeyError) should now succeed.
+            run_dupe_copy(**processed_args)
+
+            # Second run: Use a different output manifest to avoid the existing one
+            # being loaded implicitly. This ensures we re-read from the original source.db
+            # and attempt to process the now-deleted files, which triggers the bug.
+            final_manifest_path_2 = os.path.join(self.temp_dir, "final_2.db")
+
+            # Find the index of the old manifest path and replace it
+            try:
+                m_index = failing_args.index("-m")
+                failing_args[m_index + 1] = final_manifest_path_2
+            except ValueError:
+                self.fail("Could not find '-m' in the argument list to replace.")
+
+            args2 = parser.parse_args(failing_args)
+            processed_args2 = _handle_arguments(args2)
+
+            # This run should now complete without raising a TypeError
+            run_dupe_copy(**processed_args2)
+        finally:
+            os.chdir(original_cwd)
 
 
 class TestCliIntegration(unittest.TestCase):

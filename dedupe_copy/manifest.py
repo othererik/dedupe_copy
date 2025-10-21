@@ -201,7 +201,7 @@ class Manifest:
 
             if new_file_list:
                 self.md5_data[hash_val] = new_file_list
-            else:
+            elif hash_val in self.md5_data:
                 # If no files are left for this hash, remove the hash key entirely
                 del self.md5_data[hash_val]
 
