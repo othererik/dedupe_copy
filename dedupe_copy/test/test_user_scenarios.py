@@ -280,6 +280,51 @@ class TestUserScenarios(unittest.TestCase):
             f"but found: {remaining_source_files}",
         )
 
+    def test_compare_delete_on_copy_does_not_copy_dupes(self):
+        """
+        Replicates a user-reported bug where a file that is a duplicate of a file
+        in the target/compare manifest is copied instead of being skipped and deleted
+        from the source. This is a simplified version of the user's scenario.
+        """
+        # 1. Setup:
+        # Source has a.txt, Target has b.txt. Both have the same content.
+        make_file_tree(self.source_dir, {"a.txt": "dupe_content"})
+        make_file_tree(self.dest_dir, {"b.txt": "dupe_content"})
+
+        # 2. Generate manifests for source and target
+        source_manifest_path = os.path.join(self.temp_dir, "source.db")
+        target_manifest_path = os.path.join(self.temp_dir, "target.db")
+        final_manifest_path = os.path.join(self.temp_dir, "final.db")
+
+        self._run_cli(["-p", self.source_dir, "-m", source_manifest_path])
+        self._run_cli(["-p", self.dest_dir, "-m", target_manifest_path])
+
+        # 3. Run the operation that should trigger the bug
+        self._run_cli(
+            [
+                "--no-walk",
+                "-i",
+                source_manifest_path,
+                "-c",
+                self.dest_dir,
+                "--compare",
+                target_manifest_path,
+                "--delete-on-copy",
+                "-m",
+                final_manifest_path,
+            ]
+        )
+
+        # 4. Verification
+        # a.txt from source should NOT be copied to the destination
+        self.assertFalse(os.path.exists(os.path.join(self.dest_dir, "a.txt")))
+
+        # b.txt (the original file) should still be in the destination
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "b.txt")))
+
+        # a.txt should be deleted from the source because it's a duplicate
+        self.assertFalse(os.path.exists(os.path.join(self.source_dir, "a.txt")))
+
 
 class TestCliIntegration(unittest.TestCase):
     """Test the CLI by running it as a separate process."""
