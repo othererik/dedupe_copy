@@ -1317,6 +1317,56 @@ class TestIncrementalBackup(unittest.TestCase):
         # Both versions should exist (old and new with different content)
         self.assertGreaterEqual(self._count_files(self.backup_dir), 2)
 
+    def test_golden_directory_workflow(self):
+        """Test the 'golden directory' backup workflow."""
+        # Step 1: Create a 'golden' backup directory with some initial files
+        make_file_tree(
+            self.backup_dir,
+            {
+                "file1.txt": "content1",
+                "file2.txt": "content2",
+            },
+        )
+        golden_manifest_path = os.path.join(self.temp_dir, "golden.db")
+        self._run_cli(
+            [
+                "-p",
+                self.backup_dir,
+                "-m",
+                golden_manifest_path,
+            ]
+        )
+
+        # Step 2: Create a source directory with new and duplicate files
+        make_file_tree(
+            self.source_dir,
+            {
+                "file1.txt": "content1",  # Duplicate
+                "file3.txt": "content3",  # New
+            },
+        )
+
+        # Step 3: Copy new files from source to the golden directory
+        new_manifest_path = os.path.join(self.temp_dir, "golden_new.db")
+        self._run_cli(
+            [
+                "-p",
+                self.source_dir,
+                "-c",
+                self.backup_dir,
+                "--compare",
+                golden_manifest_path,
+                "-m",
+                new_manifest_path,
+                "-R",
+                "*:no_change",
+            ]
+        )
+
+        # Verify that only the new file was copied
+        self.assertEqual(self._count_files(self.backup_dir), 3)
+        self.assertTrue(os.path.exists(os.path.join(self.backup_dir, "file3.txt")))
+
 
 class TestPathConversion(unittest.TestCase):
     """Test suite for manifest path conversion scenarios."""
