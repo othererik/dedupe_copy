@@ -271,11 +271,16 @@ class CopyThread(threading.Thread):
                                 self.progress_queue.put(
                                     (MEDIUM_PRIORITY, "error", src, str(e))
                                 )
-            except Exception as e:
+            except Exception as e:  # pylint: disable=W0718
                 # Catch any unexpected errors to prevent thread crashing silently
                 if self.progress_queue:
                     self.progress_queue.put(
-                        (MEDIUM_PRIORITY, "error", "N/A", f"Unexpected error in CopyThread: {e}")
+                        (
+                            MEDIUM_PRIORITY,
+                            "error",
+                            "N/A",
+                            f"Unexpected error in CopyThread: {e}",
+                        )
                     )
             finally:
                 self.work.task_done()
@@ -837,10 +842,15 @@ class DeleteThread(threading.Thread):
                     self.work.task_done()
             except queue.Empty:
                 pass
-            except Exception as e:
+            except Exception as e:  # pylint: disable=W0718
                 if self.progress_queue:
                     self.progress_queue.put(
-                        (MEDIUM_PRIORITY, "error", "N/A", f"Unexpected error in DeleteThread: {e}")
+                        (
+                            MEDIUM_PRIORITY,
+                            "error",
+                            "N/A",
+                            f"Unexpected error in DeleteThread: {e}",
+                        )
                     )
 
 

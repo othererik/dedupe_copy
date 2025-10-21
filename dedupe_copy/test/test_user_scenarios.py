@@ -12,8 +12,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from dedupe_copy.bin.dedupecopy_cli import (_create_parser, _handle_arguments,
-                                            run_cli)
+from dedupe_copy.bin.dedupecopy_cli import _create_parser, _handle_arguments, run_cli
 from dedupe_copy.core import run_dupe_copy
 from dedupe_copy.manifest import Manifest
 from dedupe_copy.test.utils import make_file_tree
@@ -215,7 +214,7 @@ class TestUserScenarios(unittest.TestCase):
 
     def test_sync_to_target_with_delete_on_copy_and_compare(self):
         """
-        Replicates a user-reported scenario:
+        Simulates a user scenario:
         - Source and Target directories exist.
         - Target already contains some files, some of which are duplicates of source files.
         - Goal: Copy new/unique files from source to target, preserving directory structure,
@@ -329,18 +328,14 @@ class TestUserScenarios(unittest.TestCase):
 
     def test_delete_on_copy_keyerror_regression(self):
         """
-        A robust test for a user-reported KeyError, consolidating previous tests.
-
         This scenario creates a complex file structure to stress-test the manifest
         update logic when using `--delete-on-copy` and `--compare`. It includes:
         - Files unique to the source (should be moved).
         - Duplicates within the source (one should be moved, the rest deleted).
         - Duplicates between source and target (source files should be deleted).
         - Nested directories.
-        The bug was that the system tried to remove a file's hash from the manifest
-        twice, causing a KeyError. This test ensures the logic correctly handles
-        all file operation types (move, delete-dupe-internal, delete-dupe-external)
-        in a single run without crashing.
+        Verifies that we're not failing by trying to remove a file's hash from the manifest
+        multiple times.
         """
         # 1. Setup a more complex file structure
         make_file_tree(
