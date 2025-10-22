@@ -226,7 +226,10 @@ class TestCopyDataRobustness(unittest.TestCase):
         class MockCompareManifest:
             """A mock manifest for --compare functionality."""
 
+            # pylint: disable=too-few-public-methods
+
             def hash_set(self):
+                """Return a set of hashes representing files to delete."""
                 # Hashes for files that are "duplicates" of the compare manifest
                 return {f"hash_{i}" for i in range(moved_file_count, total_files)}
 
@@ -250,7 +253,7 @@ class TestCopyDataRobustness(unittest.TestCase):
 
         # 2. Mock the slow/destructive parts of the worker threads
         # We introduce a tiny, random sleep to simulate I/O jitter
-        def mock_copy_with_delay(src, dest, preserve_stat, progress_queue):
+        def mock_copy_with_delay(src, dest, _preserve_stat, progress_queue):
             # pylint: disable=import-outside-toplevel
             import time
             import random
@@ -260,7 +263,7 @@ class TestCopyDataRobustness(unittest.TestCase):
             if progress_queue:
                 progress_queue.put((0, "copied", src, dest))
 
-        def mock_remove_with_delay(path):
+        def mock_remove_with_delay(_path):
             # pylint: disable=import-outside-toplevel
             import time
             import random
@@ -269,8 +272,9 @@ class TestCopyDataRobustness(unittest.TestCase):
             # Don't actually delete.
 
         # We patch the functions used by the threads
-        with patch("dedupe_copy.threads._copy_file", side_effect=mock_copy_with_delay), patch(
-            "dedupe_copy.threads.os.remove", side_effect=mock_remove_with_delay
+        with (
+            patch("dedupe_copy.threads._copy_file", side_effect=mock_copy_with_delay),
+            patch("dedupe_copy.threads.os.remove", side_effect=mock_remove_with_delay),
         ):
             # 3. Execute the function under test
             # pylint: disable=import-outside-toplevel
