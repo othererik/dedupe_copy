@@ -56,8 +56,9 @@ class SqliteBackend:
         self._conn: Optional[sqlite3.Connection] = None
         self._init_conn()
         self._commit_needed = False
+        self._write_batch: Dict[Any, Any] = {}
         self._write_count = 0
-        self._batch_size = 100
+        self._batch_size = 5000
 
     def _init_conn(self) -> None:
         """Initializes a single, shared connection."""
@@ -110,11 +111,10 @@ class SqliteBackend:
     def __setitem__(self, key: Any, value: Any) -> None:
         """Set item in the dictionary."""
         with self._lock:
-            self._insert(key, value)
-            self._commit_needed = True
+            self._write_batch[key] = value
             self._write_count += 1
             if self._write_count >= self._batch_size:
-                self.commit()
+                self._commit_batch()
 
     def __delitem__(self, key: Any) -> None:
         """Delete item from the dictionary."""
@@ -235,22 +235,76 @@ class SqliteBackend:
     def items(self) -> List[Tuple[Any, Any]]:
         """Return a list of all key-value pairs in the dictionary."""
         with self._lock:
+            self._commit_batch()  # Ensure batch is written before reading
             return [
                 (self._load(items[0]), self._load(items[1]))
                 for items in self.conn.execute(f"select key,value from {self.table};")
             ]
 
+    def _commit_batch(self) -> None:
+        """Commits the current batch of writes to the database."""
+        if not self._write_batch:
+            return
+
+        with self._lock:
+            try:
+                updates = []
+                inserts = []
+                keys_to_check = set(self._write_batch.keys())
+
+                # In a single transaction, identify which keys already exist.
+                existing_keys = set()
+                # Use a parameterized query to avoid SQL injection vulnerabilities,
+                # even with internal data.
+                placeholders = ",".join("?" for _ in keys_to_check)
+                query_hashes = [hash(key) for key in keys_to_check]
+                cursor = self.conn.execute(
+                    f"SELECT key FROM {self.table} WHERE hash IN ({placeholders})",
+                    query_hashes,
+                )
+                for row in cursor:
+                    key = self._load(row[0])
+                    if key in keys_to_check:
+                        existing_keys.add(key)
+
+                # Prepare batch updates and inserts
+                for key, value in self._write_batch.items():
+                    if key in existing_keys:
+                        updates.append((self._dump(value), self._dump(key)))
+                    else:
+                        inserts.append(
+                            (hash(key), self._dump(key), self._dump(value))
+                        )
+
+                # Execute batch operations
+                if updates:
+                    self.conn.executemany(
+                        f"UPDATE {self.table} SET value=? WHERE key=?", updates
+                    )
+                if inserts:
+                    self.conn.executemany(
+                        f"INSERT INTO {self.table} (hash, key, value) VALUES (?, ?, ?)",
+                        inserts,
+                    )
+
+                self.conn.commit()
+                self._write_batch.clear()
+                self._write_count = 0
+            except sqlite3.Error as e:
+                # In case of an error, rollback the transaction
+                self.conn.rollback()
+                # Re-raise the exception to allow for higher-level error handling
+                raise e
+
     def commit(self, force: bool = False) -> None:
         """Commits any pending transactions to the database.
-
-        A commit is automatically triggered after a certain number of writes,
-        but this method can be used to force an immediate commit.
 
         Args:
             force: If True, a commit is performed even if no writes have been
                    recorded since the last commit.
         """
         with self._lock:
+            self._commit_batch()
             if self._commit_needed or force:
                 self.conn.commit()
             self._commit_needed = False
@@ -557,15 +611,16 @@ class CacheDict(collections.abc.MutableMapping):
             db_file: The path for the new database file.
             remove_old_db: If True, the old database file is removed.
         """
+        # Evict all items from the cache to the backend to ensure everything
+        # is persisted.
         for key, value in self._cache.items():
             self._db[key] = value
-        # Force commit any pending writes
-        self._db.commit(force=True)
+        self._cache.clear()
         if self.lru:
             self._key_order = OrderedDict()
-        # clear out local cache so we're correctly in sync
+
+        # Now, commit any pending writes in the backend and save.
         self._db.save(db_file=db_file or self._db_file, remove_old_db=remove_old_db)
-        self._cache.clear()
 
     def close(self) -> None:
         """Closes the underlying database connection."""
