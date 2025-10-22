@@ -89,6 +89,7 @@ class SqliteBackend:
     def _get_key_id(self, key: Any) -> int:
         """Get the database ID for a given key, or raise KeyError if not found."""
         with self._lock:
+            self._commit_batch()
             cursor = self.conn.execute(
                 f"select key,id from {self.table} where hash=?;", (hash(key),)
             )
@@ -100,6 +101,7 @@ class SqliteBackend:
     def __getitem__(self, key: Any) -> Any:
         """Get item from the dictionary."""
         with self._lock:
+            self._commit_batch()
             cursor = self.conn.execute(
                 f"select key,value from {self.table} where hash=?;", (hash(key),)
             )
@@ -119,6 +121,7 @@ class SqliteBackend:
     def __delitem__(self, key: Any) -> None:
         """Delete item from the dictionary."""
         with self._lock:
+            self._commit_batch()
             db_id = self._get_key_id(key)
             self.conn.execute(f"delete from {self.table} where id=?;", (db_id,))
             self._commit_needed = True
@@ -129,6 +132,7 @@ class SqliteBackend:
     def __iter__(self) -> Iterator[Any]:
         """Return an iterator over the keys of the dictionary."""
         with self._lock:
+            self._commit_batch()
             # Fetch all keys at once to avoid lock contention during iteration
             keys = [
                 self._load(k[0])
@@ -139,17 +143,20 @@ class SqliteBackend:
     def __len__(self) -> int:
         """Return the number of items in the dictionary."""
         with self._lock:
+            self._commit_batch()
             return self.conn.execute(f"select count(*) from {self.table};").fetchone()[
                 0
             ]
 
     def __contains__(self, key: Any) -> bool:
         """Check if key exists in the dictionary."""
-        try:
-            self._get_key_id(key)
-            return True
-        except KeyError:
-            return False
+        with self._lock:
+            self._commit_batch()
+            try:
+                self._get_key_id(key)
+                return True
+            except KeyError:
+                return False
 
     @staticmethod
     def _dump(value: Any, version: int = -1) -> bytes:
@@ -216,6 +223,7 @@ class SqliteBackend:
         Raises KeyError if key is not found.
         """
         with self._lock:
+            self._commit_batch()
             value = self[key]
             del self[key]
             return value
@@ -227,6 +235,7 @@ class SqliteBackend:
     def values(self) -> List[Any]:
         """Return a list of all values in the dictionary."""
         with self._lock:
+            self._commit_batch()
             return [
                 self._load(x[0])
                 for x in self.conn.execute(f"select value from {self.table};")
@@ -272,7 +281,9 @@ class SqliteBackend:
                     if key in existing_keys:
                         updates.append((self._dump(value), self._dump(key)))
                     else:
-                        inserts.append((hash(key), self._dump(key), self._dump(value)))
+                        inserts.append(
+                            (hash(key), self._dump(key), self._dump(value))
+                        )
 
                 # Execute batch operations
                 if updates:
@@ -548,6 +559,9 @@ class CacheDict(collections.abc.MutableMapping):
         # take the key out of cache and put in in db
         value = self._cache.pop(key)
         self._db[key] = value
+        # After evicting, we need to ensure the backend is in a consistent
+        # state for the next operation, so we commit the write.
+        self._db.commit(force=True)
 
     def get(self, key: Any, default: Any = None) -> Any:
         """Get item or default if not found"""

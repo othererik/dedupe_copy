@@ -2142,9 +2142,7 @@ class TestPerformance(unittest.TestCase):
         # to avoid timeouts during the test setup itself.
         num_items = 20000
         manifest_path = os.path.join(self.temp_dir, "large_manifest.db")
-        manifest = Manifest(
-            manifest_paths=None, save_path=manifest_path, temp_directory=self.temp_dir
-        )
+        manifest = Manifest(manifest_paths=None, save_path=manifest_path, temp_directory=self.temp_dir)
 
         # Populate the manifest with a large number of items in memory
         # This part needs to be fast to avoid timeouts. We are not using
