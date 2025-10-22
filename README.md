@@ -276,49 +276,43 @@ Manifests are database files that store:
 
 ### Understanding `-i` vs `--compare`
 
-These two options handle manifests differently and are suited for different use cases:
+Both `-i` and `--compare` use existing manifests to determine which files to skip, but they serve different purposes.
 
 #### `-i` / `--manifest-read-path` (Input Manifest)
-- **Purpose**: Resume or continue a previous operation
-- **Behavior**: 
-  - Files in this manifest are considered "already processed"
-  - The scan will skip re-processing these files
-  - These files ARE included in the output manifest
-- **Use when**: Resuming an interrupted operation or continuing from a previous run
-- **Example**: Copying files and resuming after interruption
+
+- **Purpose**: Resume an interrupted operation or continue from a previous run.
+- **Behavior**: Files in this manifest are considered "already processed" and are skipped. They **are** included in the output manifest.
+- **Use Case**: You started a large copy, it was interrupted, and you want to resume without re-scanning everything.
 
 ```bash
 # Initial run (interrupted)
 dedupecopy -p /source -c /dest -m progress.db
 
-# Resume (loads progress.db to skip already-copied files)
+# Resume (skips files in progress.db)
 dedupecopy -p /source -c /dest -i progress.db -m progress_new.db
 ```
 
 #### `--compare` (Comparison Manifest)
-- **Purpose**: Skip files that exist elsewhere (for deduplication)
-- **Behavior**:
-  - Files in this manifest are considered "duplicates to skip"
-  - These files will NOT be copied
-  - These files are NOT included in the output manifest
-- **Use when**: Consolidating multiple sources or performing incremental backups
-- **Example**: Backing up new files without copying ones already in destination
+
+- **Purpose**: Deduplicate against another location.
+- **Behavior**: Files in this manifest are treated as duplicates and are **not** copied. They are **not** included in the output manifest.
+- **Use Case**: You want to back up new photos from your phone, but you want to skip any photos that are already in your main archive.
 
 ```bash
-# Incremental backup (skip files already backed up)
-dedupecopy -p /source -c /backup --compare backup_v1.db -m backup_v2.db
+# Incremental backup (skip files already in the main backup)
+dedupecopy -p /phone_backup -c /main_archive --compare main_archive.db -m phone_backup_new.db
 ```
 
-#### Quick Comparison Table
+#### Key Differences
 
-| Feature | `-i` (Input) | `--compare` |
-|---------|--------------|-------------|
-| Files are copied? | No (already processed) | No (treated as duplicates) |
-| Included in output manifest? | Yes | No |
-| Use case | Resume operations | Deduplicate across sources |
-| Can use with `-m` same path? | **No** (safety rule) | Yes |
+| Feature                      | `-i` (Input Manifest)        | `--compare` (Comparison Manifest) |
+|------------------------------|------------------------------|-----------------------------------|
+| **Files Copied?**            | No (already processed)       | No (treated as duplicates)        |
+| **Included in Output?**      | Yes                          | No                                |
+| **Primary Use Case**         | Resume Operations            | Deduplicate Across Sources        |
+| **Can use with same output?**| **No** (safety rule)         | Yes                               |
 
-**Note:** Manifest files are SQLite databases. The main manifest file has a `.db` extension, and there is a corresponding `.db.read` file that tracks which files have been read.
+**Note on `--no-walk`**: When using `-i` or `--compare`, you can also use `--no-walk` to prevent the tool from scanning the source file system. This is useful when you want to operate *only* on the files listed in the manifests.
 
 ### Duplicate Detection
 
@@ -602,45 +596,40 @@ Updates all paths in the manifest without re-scanning files.
 
 ### Incremental Backup
 
-To back up a directory and then incrementally update the backup with only new or modified files, you can use the following workflow:
+The most common use case for incremental backups is to copy new files from a source to a destination, skipping files that are already in the destination.
 
-#### Step 1: Initial Backup
+#### Step 1: Create a manifest of the destination
 
-Run an initial backup of the source directory, creating a manifest file.
-
-```bash
-dedupecopy -p /path/to/source -c /path/to/backup -m backup_v1.db
-```
-
-#### Step 2: Incremental Update
-
-To perform an incremental backup, use the `--compare` flag to skip files already in the previous backup. This ensures only new or modified files are copied.
+First, create a manifest of your destination directory. This gives you a record of what's already there.
 
 ```bash
-dedupecopy -p /path/to/source -c /path/to/backup --compare backup_v1.db -m backup_v2.db
+dedupecopy -p /path/to/backup -m backup.db
 ```
 
-**Important:** The `-i` (input manifest) and `-m` (output manifest) options **cannot use the same file path**. This safety feature prevents accidental manifest corruption. Always use `--compare` for incremental backups, which loads the manifest for duplicate checking without modifying it.
+#### Step 2: Run the incremental copy
+
+Now, you can copy new files from your source, using `--compare` to skip duplicates that are already in the backup.
+
+```bash
+dedupecopy -p /path/to/source -c /path/to/backup --compare backup.db -m backup_new.db
+```
 
 **How it works:**
-- `--compare` loads the previous manifest to identify files already backed up
-- Only new or modified files (different content hash) are copied
-- A new manifest (`backup_v2.db`) is created with all files (old + new)
-- The original manifest (`backup_v1.db`) remains unchanged
+- `--compare` efficiently checks for duplicates without re-scanning the entire destination.
+- Only new files from the source are copied.
+- A new manifest (`backup_new.db`) is created, which includes both the old and new files. You can use this for the next incremental backup.
 
-**Alternative: Simple incremental without separate manifests**
+#### Example: Golden Directory Backup
 
-If you want to keep updating a single location without versioned manifests:
+This is useful for maintaining a "golden" directory with unique files from multiple sources.
 
 ```bash
-# Initial backup
-dedupecopy -p /path/to/source -c /path/to/backup -m backup.db
+# 1. Create a manifest of the golden directory
+dedupecopy -p /golden_dir -m golden.db
 
-# Later: Add new/modified files (no manifest for incremental)
-dedupecopy -p /path/to/source -c /path/to/backup
+# 2. Copy new, unique files from multiple sources
+dedupecopy -p /source1 -p /source2 -c /golden_dir --compare golden.db -m golden_new.db
 ```
-
-Without loading a manifest, the tool will re-scan the source and copy any files not already in the destination. However, this is slower as it doesn't skip already-processed files during the scan.
 
 ### Comparison Without Copying
 
