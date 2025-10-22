@@ -180,3 +180,123 @@ class TestRunDupeCopy(unittest.TestCase):
             "Manifest should still contain TWO files for the hash because deletion failed.",
         )
         manifest_after.close()
+
+
+class TestCopyDataRobustness(unittest.TestCase):
+    """Test robustness of the core copy_data function."""
+
+    def setUp(self):
+        """Set up a temporary directory for tests."""
+        self.temp_dir = tempfile.mkdtemp(prefix="robust_copy_")
+
+    def tearDown(self):
+        """Clean up the temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def test_copy_data_drains_all_results_from_queues(self):
+        """
+        Verify copy_data reliably drains all results from worker queues.
+
+        This test creates a scenario with hundreds of files to be "moved" and
+        "deleted" to stress the queue-draining logic. It mocks the actual
+        filesystem operations to make the test fast and to introduce slight,
+        random delays, which makes the race condition more likely to appear.
+        """
+        # 1. Setup: Create real files and mock data structures
+        src_dir = os.path.join(self.temp_dir, "src")
+        dest_dir = os.path.join(self.temp_dir, "dest")
+        os.makedirs(src_dir)
+        os.makedirs(dest_dir)
+
+        moved_file_count = 1000
+        deleted_only_count = 1000
+        total_files = moved_file_count + deleted_only_count
+
+        # Create file data for the 'all_data' structure
+        all_data = {}
+        for i in range(total_files):
+            # We use unique hashes to ensure each file is processed
+            the_hash = f"hash_{i}"
+            path = os.path.join(src_dir, f"file_{i}.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(the_hash)
+            all_data[the_hash] = [[path, len(the_hash), 1.0]]
+
+        # Mock a 'compare' manifest to mark half the files for deletion
+        class MockCompareManifest:
+            """A mock manifest for --compare functionality."""
+
+            def hash_set(self):
+                # Hashes for files that are "duplicates" of the compare manifest
+                return {f"hash_{i}" for i in range(moved_file_count, total_files)}
+
+        # Create the configuration for the copy job
+        # pylint: disable=bad-option-value, import-outside-toplevel
+        from dedupe_copy.config import CopyConfig, CopyJob
+
+        copy_config = CopyConfig(
+            target_path=dest_dir,
+            read_paths=[src_dir],
+            delete_on_copy=True,
+            dry_run=False,
+        )
+        copy_job = CopyJob(
+            copy_config=copy_config,
+            no_copy=MockCompareManifest(),
+            delete_on_copy=True,  # This triggers the "move" behavior
+            copy_threads=24,  # Use multiple threads to encourage race condition
+            dry_run=False,
+        )
+
+        # 2. Mock the slow/destructive parts of the worker threads
+        # We introduce a tiny, random sleep to simulate I/O jitter
+        def mock_copy_with_delay(src, dest, preserve_stat, progress_queue):
+            # pylint: disable=import-outside-toplevel
+            import time
+            import random
+
+            time.sleep(random.uniform(0.001, 0.01))
+            # Don't actually copy, just pretend we did.
+            if progress_queue:
+                progress_queue.put((0, "copied", src, dest))
+
+        def mock_remove_with_delay(path):
+            # pylint: disable=import-outside-toplevel
+            import time
+            import random
+
+            time.sleep(random.uniform(0.001, 0.01))
+            # Don't actually delete.
+
+        # We patch the functions used by the threads
+        with patch("dedupe_copy.threads._copy_file", side_effect=mock_copy_with_delay), patch(
+            "dedupe_copy.threads.os.remove", side_effect=mock_remove_with_delay
+        ):
+            # 3. Execute the function under test
+            # pylint: disable=import-outside-toplevel
+            from dedupe_copy.core import copy_data
+            import queue
+
+            progress_queue = queue.PriorityQueue()
+            all_deleted_files, moved_files = copy_data(
+                all_data, progress_queue, copy_job=copy_job
+            )
+
+        # 4. Assert the results
+        # The buggy code will often fail this assertion because the draining loop
+        # terminates before all worker threads have finished putting their
+        # results onto the queues.
+        self.assertEqual(
+            len(moved_files),
+            moved_file_count,
+            f"Should have drained all {moved_file_count} moved files, "
+            f"but got {len(moved_files)}.",
+        )
+        # all_deleted_files contains both moved files and delete-only files
+        total_deleted_count = moved_file_count + deleted_only_count
+        self.assertEqual(
+            len(all_deleted_files),
+            total_deleted_count,
+            f"Should have drained all {total_deleted_count} deleted files, "
+            f"but got {len(all_deleted_files)}.",
+        )

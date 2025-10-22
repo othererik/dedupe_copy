@@ -322,6 +322,28 @@ def info_parser(data: Any) -> Iterator[Tuple[str, str, str, int]]:
                 yield md5, item[0], year_month, item[1]
 
 
+def _drain_queue(q: queue.Queue) -> list:
+    """Reliably drains all items from a queue into a list.
+
+    This is necessary because `queue.empty()` is not reliable in a multithreaded
+    context. This function repeatedly calls `get_nowait()` until the queue
+    is definitively empty.
+
+    Args:
+        q: The queue to drain.
+
+    Returns:
+        A list of all items that were in the queue.
+    """
+    items = []
+    while True:
+        try:
+            items.append(q.get_nowait())
+        except queue.Empty:
+            break
+    return items
+
+
 def copy_data(
     all_data: Any,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
@@ -429,14 +451,15 @@ def copy_data(
     # Now, handle the deletion of files that were duplicates of the compare manifest
     all_deleted_files = []
     moved_files = []
-    while not deleted_after_copy_queue.empty():
-        try:
-            src, dest = deleted_after_copy_queue.get_nowait()
-            all_deleted_files.append(src)
-            moved_files.append((src, dest))
-        except queue.Empty:
-            break
 
+    # Drain the queue of files that were part of a "move" (copy + delete)
+    moved_results = _drain_queue(deleted_after_copy_queue)
+    for src, dest in moved_results:
+        all_deleted_files.append(src)
+        moved_files.append((src, dest))
+
+    # Check if there are any files that were marked for deletion only
+    # (i.e., they were duplicates of the --compare manifest).
     if not delete_only_queue.empty():
         delete_stop_event = threading.Event()
         delete_workers = []
@@ -467,11 +490,8 @@ def copy_data(
         for d in delete_workers:
             d.join()
 
-        while not deleted_dupes_queue.empty():
-            try:
-                all_deleted_files.append(deleted_dupes_queue.get_nowait())
-            except queue.Empty:
-                break
+        # Drain the queue of files that were deleted-only
+        all_deleted_files.extend(_drain_queue(deleted_dupes_queue))
 
     if progress_queue:
         progress_queue.put(
