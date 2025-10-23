@@ -269,7 +269,7 @@ class CopyThread(threading.Thread):
                         except OSError as e:
                             if self.progress_queue:
                                 self.progress_queue.put(
-                                    (MEDIUM_PRIORITY, "error", src, e)
+                                    (MEDIUM_PRIORITY, "error", src, str(e))
                                 )
             finally:
                 self.work.task_done()

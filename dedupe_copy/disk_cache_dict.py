@@ -281,9 +281,7 @@ class SqliteBackend:
                     if key in existing_keys:
                         updates.append((self._dump(value), self._dump(key)))
                     else:
-                        inserts.append(
-                            (hash(key), self._dump(key), self._dump(value))
-                        )
+                        inserts.append((hash(key), self._dump(key), self._dump(value)))
 
                 # Execute batch operations
                 if updates:
