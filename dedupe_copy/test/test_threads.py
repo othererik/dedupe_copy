@@ -19,6 +19,7 @@ from dedupe_copy.threads import (
     _is_file_processing_required,
 )
 from dedupe_copy.config import WalkConfig
+from dedupe_copy.manifest import Manifest
 
 
 class TestIsFileProcessingRequired(unittest.TestCase):
@@ -191,6 +192,39 @@ class TestResultProcessor(unittest.TestCase):
         self.assertEqual(msg_type, "error")
         self.assertIn("ERROR Saving incremental", error_msg)
         self.assertIn("mocked save error", error_msg)
+
+    def test_commit_batch_with_manifest(self):
+        """Test _commit_batch updates manifest.read_sources correctly."""
+        stop_event = threading.Event()
+        result_queue = queue.Queue()
+        collisions = MagicMock()
+        manifest = MagicMock(spec=Manifest)  # Use spec to pass isinstance check
+        manifest.md5_data = MagicMock()
+        manifest.read_sources = MagicMock()
+        progress_queue = queue.PriorityQueue()
+
+        processor = ResultProcessor(
+            stop_event,
+            result_queue,
+            collisions,
+            manifest,
+            progress_queue=progress_queue,
+        )
+
+        # pylint: disable=protected-access
+        processor._local_cache = {
+            "md5_1": [("file1.txt", 100, 123.45)],
+            "md5_2": [("file2.txt", 200, 123.46)],
+        }
+        manifest.md5_data.__contains__.return_value = False
+        manifest.md5_data.__getitem__.return_value = []
+
+        # pylint: disable=protected-access
+        processor._commit_batch()
+
+        # Verify that manifest.read_sources was updated
+        manifest.read_sources.__setitem__.assert_any_call("file1.txt", None)
+        manifest.read_sources.__setitem__.assert_any_call("file2.txt", None)
 
 
 class TestReadThread(unittest.TestCase):
