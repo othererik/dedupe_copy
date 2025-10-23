@@ -129,6 +129,21 @@ class TestManifests(unittest.TestCase):
         del md5data
         del sources
 
+    def test_populate_read_sources(self):
+        """Test _populate_read_sources method"""
+        md5_data, _ = utils.gen_fake_manifest()
+        self.manifest.md5_data = _dcd_from_manifest(md5_data, self.temp_dict)
+
+        # pylint: disable=protected-access
+        self.manifest._populate_read_sources()
+
+        expected_sources = set()
+        for _, file_list in md5_data.items():
+            for file_info in file_list:
+                expected_sources.add(file_info[0])
+
+        self.assertEqual(set(self.manifest.read_sources.keys()), expected_sources)
+
     def test_avoids_double_close_on_combine(self):
         """Test that combining manifests does not double-close file handles."""
         paths = []

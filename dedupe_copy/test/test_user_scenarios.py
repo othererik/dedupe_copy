@@ -2117,3 +2117,72 @@ class TestMultiSourceSequentialBackup(unittest.TestCase):
             "new_from_source2.txt",
         }
         self.assertEqual(target_files, expected_files)
+
+
+class TestPerformance(unittest.TestCase):
+    """Test suite for performance-related scenarios."""
+
+    def setUp(self):
+        """Set up a temporary directory for performance tests."""
+        self.temp_dir = tempfile.mkdtemp(prefix="test_performance_")
+
+    def tearDown(self):
+        """Remove the temporary directory."""
+        shutil.rmtree(self.temp_dir)
+
+    def test_large_manifest_save_performance(self):
+        """
+        Test the performance of saving a manifest with a large number of entries.
+        This is a regression test for a performance bug where saving manifests
+        with hundreds of thousands of files would take hours.
+        """
+        # I/O limitations in the test environment can cause this test to fail
+        # during setup if the number of items is too high.
+        # This number should be large enough to test batching but small enough
+        # to avoid timeouts during the test setup itself.
+        num_items = 20000
+        manifest_path = os.path.join(self.temp_dir, "large_manifest.db")
+        manifest = Manifest(
+            manifest_paths=None, save_path=manifest_path, temp_directory=self.temp_dir
+        )
+
+        # Populate the manifest with a large number of items in memory
+        # This part needs to be fast to avoid timeouts. We are not using
+        # the manifest's __setitem__ directly to avoid triggering the
+        # slow, unoptimized database writes we are trying to test against.
+        # Instead, we will populate the in-memory cache directly.
+
+        # To avoid the read-modify-write cycle of a defaultdict,
+        # we can batch the additions to the manifest's md5_data cache.
+        batch_size = 5000
+        items_to_add = {}
+        for i in range(num_items):
+            # Use unique hashes to avoid overwriting keys in the dictionary
+            # The content of the file list does not matter for this performance test
+            key = f"hash_{i}"
+            value = [(f"/path/to/file_{i}.txt", 1024, 1678886400.0)]
+            items_to_add[key] = value
+
+            if len(items_to_add) >= batch_size:
+                manifest.md5_data.update(items_to_add)
+                items_to_add = {}
+
+        if items_to_add:
+            manifest.md5_data.update(items_to_add)
+
+        # Time the save operation
+        start_time = time.time()
+        manifest.save()
+        end_time = time.time()
+
+        duration = end_time - start_time
+        print(f"Saving {num_items} items took {duration:.2f} seconds.")
+
+        # The acceptable duration can be adjusted based on the test environment.
+        # For a typical CI environment, this should be well under 10 seconds.
+        self.assertLess(
+            duration,
+            20,
+            "Saving a large manifest took too long, "
+            "indicating a performance regression.",
+        )

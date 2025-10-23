@@ -607,6 +607,21 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
         finally:
             custom_backend.close()
 
+    def test_sqlite_backend_close_with_exception(self):
+        """Test SqliteBackend.close with an exception"""
+        db_file = os.path.join(self.temp_dir, "test_close_exception.db")
+        backend = disk_cache_dict.SqliteBackend(db_file=db_file)
+        try:
+            with unittest.mock.patch.object(
+                backend, "commit", side_effect=ValueError("Test exception")
+            ):
+                with self.assertRaises(ValueError):
+                    backend.close()
+        finally:
+            # Manually close the connection to avoid resource warnings
+            if backend.conn:
+                backend.conn.close()
+
 
 class TestDefaultCacheDict(unittest.TestCase):
     """Unit tests for DefaultCacheDict."""
