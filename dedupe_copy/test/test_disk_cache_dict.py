@@ -4,7 +4,6 @@ import collections
 import os
 import random
 import unittest
-from contextlib import contextmanager
 
 from dedupe_copy.test import utils
 
@@ -622,7 +621,6 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
             # Manually close the connection to avoid resource warnings
             if backend.conn:
                 backend.conn.close()
-
 
 
 class TestDefaultCacheDict(unittest.TestCase):
