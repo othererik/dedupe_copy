@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.9] - TBD
+- TBD
+
+
+## [1.1.8] - 2025-10-22
+- Cleanups, coverage, and fixing edge cases.
+
 
 ## [1.1.7] - 2025-10-21
 - Bugfix where tool failed to correctly synchronize files from a source to a target directory under specific conditions (--no-walk, --delete-on-copy, and --compare).
