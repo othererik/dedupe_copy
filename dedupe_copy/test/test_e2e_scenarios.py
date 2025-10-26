@@ -1,5 +1,5 @@
-
 """End-to-end tests for complex user scenarios."""
+
 import os
 import unittest
 import shutil
@@ -7,6 +7,7 @@ import platform
 import hashlib
 from dedupe_copy.core import run_dupe_copy
 from dedupe_copy.test.utils import make_temp_dir, get_hash, walk_tree
+
 
 def create_complex_file_tree(root_path: str, file_defs: dict) -> dict:
     """
@@ -20,7 +21,7 @@ def create_complex_file_tree(root_path: str, file_defs: dict) -> dict:
     # Create files and directories
     for path, content in file_defs.items():
         full_path = os.path.join(root_path, path)
-        if content is None: # Represents a directory
+        if content is None:  # Represents a directory
             os.makedirs(full_path, exist_ok=True)
         else:
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -38,6 +39,7 @@ def create_complex_file_tree(root_path: str, file_defs: dict) -> dict:
             paths[link_target_path] = file_defs["unique_file.txt"]
 
     return paths
+
 
 class TestEndToEndScenario(unittest.TestCase):
     """A single, large, end-to-end test to cover complex user scenarios."""
@@ -66,15 +68,14 @@ class TestEndToEndScenario(unittest.TestCase):
             "duplicate_target.txt": "This content will be duplicated.",
             "empty.txt": "",
             "nested/another_file.txt": "Some content.",
-            "empty_dir": None
+            "empty_dir": None,
         }
         create_complex_file_tree(self.base_source_dir, base_source_files)
         base_manifest_path = os.path.join(self.manifest_dir, "base.db")
         initial_base_files = set(walk_tree(self.base_source_dir))
 
         run_dupe_copy(
-            read_from_path=[self.base_source_dir],
-            manifest_out_path=base_manifest_path
+            read_from_path=[self.base_source_dir], manifest_out_path=base_manifest_path
         )
         self.assertTrue(os.path.exists(base_manifest_path))
 
@@ -86,11 +87,11 @@ class TestEndToEndScenario(unittest.TestCase):
             "subdir/internal_dupe_2.txt": "Internal duplicate content.",
             "another_empty.txt": "",
             "ignored_file.ignore": "This file should be ignored.",
-            "another_empty_dir": None
+            "another_empty_dir": None,
         }
         create_complex_file_tree(self.op_source_dir, op_source_files_content)
         expected_internal_dupe_hash = hashlib.md5(
-            op_source_files_content["internal_dupe_1.txt"].encode('utf-8')
+            op_source_files_content["internal_dupe_1.txt"].encode("utf-8")
         ).hexdigest()
 
         # === Stage 3: Run the main copy/dedupe operation ===
@@ -102,44 +103,64 @@ class TestEndToEndScenario(unittest.TestCase):
             manifest_out_path=op_manifest_path,
             delete_on_copy=True,
             dedupe_empty=True,
-            ignored_patterns=["*.ignore"]
+            ignored_patterns=["*.ignore"],
         )
 
         # === Stage 4: Verify the final state of all directories ===
         op_source_contents_after = set(walk_tree(self.op_source_dir, include_dirs=True))
-        target_files_after = set(walk_tree(self.target_dir, include_dirs=False)) # Only files
+        target_files_after = set(
+            walk_tree(self.target_dir, include_dirs=False)
+        )  # Only files
         base_source_files_after = set(walk_tree(self.base_source_dir))
 
         # Base source should be untouched
         self.assertEqual(len(base_source_files_after), len(initial_base_files))
 
         # --- Verify operational source directory state ---
-        op_source_files_after_run = {f for f in op_source_contents_after if os.path.isfile(f)}
-        op_source_dirs_after_run = {f for f in op_source_contents_after if os.path.isdir(f)}
+        op_source_files_after_run = {
+            f for f in op_source_contents_after if os.path.isfile(f)
+        }
+        op_source_dirs_after_run = {
+            f for f in op_source_contents_after if os.path.isdir(f)
+        }
 
         # Should only contain the one ignored file
-        self.assertEqual(len(op_source_files_after_run), 1, f"Expected 1 ignored file, found: {op_source_files_after_run}")
-        self.assertTrue(os.path.exists(os.path.join(self.op_source_dir, "ignored_file.ignore")))
-        # The two directories should remain (the one that's now empty, and the one that started empty)
-        self.assertEqual(len(op_source_dirs_after_run), 2, f"Expected 2 empty dirs, found: {op_source_dirs_after_run}")
-
+        self.assertEqual(
+            len(op_source_files_after_run),
+            1,
+            f"Expected 1 ignored file, found: {op_source_files_after_run}",
+        )
+        self.assertTrue(
+            os.path.exists(os.path.join(self.op_source_dir, "ignored_file.ignore"))
+        )
+        # The two directories should remain (the one that's now empty,
+        # and the one that started empty)
+        self.assertEqual(
+            len(op_source_dirs_after_run),
+            2,
+            f"Expected 2 empty dirs, found: {op_source_dirs_after_run}",
+        )
 
         # --- Verify target directory state ---
-        self.assertEqual(len(target_files_after), 2,
-                         f"Target should have 2 files, but contains: {target_files_after}")
+        self.assertEqual(
+            len(target_files_after),
+            2,
+            f"Target should have 2 files, but contains: {target_files_after}",
+        )
 
         expected_unique_path = os.path.join(self.target_dir, "op_unique.txt")
         self.assertTrue(os.path.exists(expected_unique_path))
-        with open(expected_unique_path, 'r', encoding='utf-8') as f:
+        with open(expected_unique_path, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), op_source_files_content["op_unique.txt"])
 
         found_internal_dupe = False
         for f in target_files_after:
             if not os.path.isdir(f) and get_hash(f) == expected_internal_dupe_hash:
-                with open(f, 'r', encoding='utf-8') as fh:
+                with open(f, "r", encoding="utf-8") as fh:
                     self.assertEqual(fh.read(), "Internal duplicate content.")
                 found_internal_dupe = True
                 break
         self.assertTrue(
-            found_internal_dupe, "One of the internal duplicates should have been moved to target."
+            found_internal_dupe,
+            "One of the internal duplicates should have been moved to target.",
         )
