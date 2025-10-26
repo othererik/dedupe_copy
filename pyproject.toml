@@ -62,11 +62,22 @@ packages = ["dedupe_copy", "dedupe_copy.bin", "dedupe_copy.test"]
 
 [tool.coverage.run]
 relative_files = true
+omit = [
+    "dedupe_copy/test/record_disk_cache_dict_performance.py",
+    "test/*",        # Omit all files in the 'test' directory
+    "*/test/*",      # Omit 'test' directories anywhere in the project
+    "*/venv/*",       # Example: Omit virtual environment files
+]
+context = "test"
 
 [tool.coverage.report]
 omit = [
     "dedupe_copy/test/record_disk_cache_dict_performance.py",
+    "test/*",        # Omit all files in the 'test' directory
+    "*/test/*",      # Omit 'test' directories anywhere in the project
+    "*/venv/*",       # Example: Omit virtual environment files
 ]
+context = "test"
 
 [tool.pylint."MESSAGES CONTROL"]
 disable = ["R0913", "R0914", "R0902", "R0801", "R0917"]
