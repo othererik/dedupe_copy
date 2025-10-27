@@ -157,3 +157,5 @@ cython_debug/
 
 # Test files
 test_file.txt
+dedupe_copy/test/performance_data/
+*.png
