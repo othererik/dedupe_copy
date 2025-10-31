@@ -12,7 +12,6 @@ import time
 import json
 from pathlib import Path
 import tempfile
-from typing import Any
 
 try:
     import matplotlib.pyplot as plt

@@ -4,7 +4,6 @@ import collections
 import os
 import random
 import unittest
-from unittest import mock
 
 from dedupe_copy.test import utils
 
