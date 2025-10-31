@@ -189,6 +189,7 @@ def make_file_tree(
     file_size: int = 1000,
     prefix: Optional[str] = None,
     use_unique_files: bool = True,
+    seed: int = 0,
 ) -> List[List[Union[str, float]]]:
     """Create a tree of files with various extensions off of root.
     If file_spec is an integer, it creates that many random files.
@@ -222,7 +223,7 @@ def make_file_tree(
         )
         src = os.path.join(root, fn)
         initial_content = str(i) if use_unique_files else "same_content"
-        check, mtime = write_file(src, 0, size=file_size, initial=initial_content)
+        check, mtime = write_file(src, seed, size=file_size, initial=initial_content)
         file_list.append([src, check, mtime])
     return file_list
 
