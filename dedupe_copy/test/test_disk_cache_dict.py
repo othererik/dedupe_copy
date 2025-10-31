@@ -4,6 +4,7 @@ import collections
 import os
 import random
 import unittest
+from unittest import mock
 
 from dedupe_copy.test import utils
 
@@ -621,6 +622,36 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
             # Manually close the connection to avoid resource warnings
             if backend.conn:
                 backend.conn.close()
+
+    def test_backend_update_batch(self):
+        """Test the optimized batch update method in SqliteBackend."""
+        db_file = os.path.join(self.temp_dir, "test_update_batch.db")
+        backend = disk_cache_dict.SqliteBackend(db_file=db_file)
+        try:
+            # 1. Initial batch insert
+            initial_data = {f"key{i}": f"value{i}" for i in range(10)}
+            backend.update_batch(initial_data)
+
+            # Verify initial insert
+            self.assertEqual(len(backend), 10)
+            self.assertEqual(backend["key5"], "value5")
+
+            # 2. Batch update with a mix of new and existing keys
+            update_data = {f"key{i}": f"new_value{i}" for i in range(5)}  # Update 0-4
+            update_data.update(
+                {f"key{i}": f"value{i}" for i in range(10, 15)}
+            )  # Add 10-14
+
+            backend.update_batch(update_data)
+
+            # Verify the state after update
+            self.assertEqual(len(backend), 15)  # 10 initial + 5 new
+            self.assertEqual(backend["key3"], "new_value3")  # Updated value
+            self.assertEqual(backend["key7"], "value7")  # Original value, untouched
+            self.assertEqual(backend["key12"], "value12")  # New value
+
+        finally:
+            backend.close()
 
 
 class TestDefaultCacheDict(unittest.TestCase):
