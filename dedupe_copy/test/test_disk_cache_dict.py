@@ -13,6 +13,10 @@ from dedupe_copy import disk_cache_dict
 disk_cache_dict.DEBUG = True
 
 
+# tests will frequently violate this
+# pylint: disable=protected-access
+
+
 class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instance-attributes
     unittest.TestCase
 ):
@@ -674,9 +678,21 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
 
     def test_sqlite_backend_dump_load_none_and_bool(self):
         """Test SqliteBackend._dump and _load with None and boolean values."""
-        self.assertIsNone(disk_cache_dict.SqliteBackend._load(disk_cache_dict.SqliteBackend._dump(None)))
-        self.assertTrue(disk_cache_dict.SqliteBackend._load(disk_cache_dict.SqliteBackend._dump(True)))
-        self.assertFalse(disk_cache_dict.SqliteBackend._load(disk_cache_dict.SqliteBackend._dump(False)))
+        self.assertIsNone(
+            disk_cache_dict.SqliteBackend._load(
+                disk_cache_dict.SqliteBackend._dump(None)
+            )
+        )
+        self.assertTrue(
+            disk_cache_dict.SqliteBackend._load(
+                disk_cache_dict.SqliteBackend._dump(True)
+            )
+        )
+        self.assertFalse(
+            disk_cache_dict.SqliteBackend._load(
+                disk_cache_dict.SqliteBackend._dump(False)
+            )
+        )
 
     def test_sqlite_backend_close_exception(self):
         """Test SqliteBackend.close exception handling."""
@@ -726,7 +742,9 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
 
     def test_default_cache_dict_copy(self):
         """Test DefaultCacheDict.copy."""
-        dcd = disk_cache_dict.DefaultCacheDict(default_factory=list, db_file=self.db_file)
+        dcd = disk_cache_dict.DefaultCacheDict(
+            default_factory=list, db_file=self.db_file
+        )
         dcd[1] = [1]
         new_dcd = dcd.copy(db_file=f"{self.db_file}_copy")
         self.assertEqual(new_dcd[1], [1])
@@ -736,7 +754,9 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
 
     def test_default_cache_dict_fromkeys(self):
         """Test DefaultCacheDict.fromkeys."""
-        dcd = disk_cache_dict.DefaultCacheDict(default_factory=list, db_file=self.db_file)
+        dcd = disk_cache_dict.DefaultCacheDict(
+            default_factory=list, db_file=self.db_file
+        )
         new_dcd = dcd.fromkeys([1, 2, 3], "a", db_file=f"{self.db_file}_fromkeys")
         self.assertEqual(new_dcd[1], "a")
         self.assertEqual(new_dcd.default_factory, list)
@@ -752,7 +772,12 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
 
     def test_sqlite_backend_dump_load_float(self):
         """Test SqliteBackend._dump and _load with float values."""
-        self.assertEqual(disk_cache_dict.SqliteBackend._load(disk_cache_dict.SqliteBackend._dump(1.23)), 1.23)
+        self.assertEqual(
+            disk_cache_dict.SqliteBackend._load(
+                disk_cache_dict.SqliteBackend._dump(1.23)
+            ),
+            1.23,
+        )
 
     def test_sqlite_backend_update_batch_empty(self):
         """Test SqliteBackend.update_batch with empty data."""
@@ -787,13 +812,20 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
 
     def test_sqlite_backend_dump_load_int(self):
         """Test SqliteBackend._dump and _load with int values."""
-        self.assertEqual(disk_cache_dict.SqliteBackend._load(disk_cache_dict.SqliteBackend._dump(123)), 123)
+        self.assertEqual(
+            disk_cache_dict.SqliteBackend._load(
+                disk_cache_dict.SqliteBackend._dump(123)
+            ),
+            123,
+        )
 
     def test_sqlite_backend_update_batch_error(self):
         """Test SqliteBackend.update_batch with an error."""
         backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
         with self.assertRaises(Exception):
-            with mock.patch.object(backend.conn, "executemany", side_effect=Exception("Test")):
+            with mock.patch.object(
+                backend.conn, "executemany", side_effect=Exception("Test")
+            ):
                 backend.update_batch({1: 1})
         backend.close()
 
@@ -802,7 +834,9 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
         backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
         backend[1] = 1
         with self.assertRaises(Exception):
-            with mock.patch.object(backend.conn, "executemany", side_effect=Exception("Test")):
+            with mock.patch.object(
+                backend.conn, "executemany", side_effect=Exception("Test")
+            ):
                 backend._commit_batch()
         backend.close()
 
