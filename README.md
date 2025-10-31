@@ -954,6 +954,7 @@ dedupecopy -p /source -c /destination -i preview_manifest.db -m final_manifest.d
 - Files matching `--ignore` patterns.
 - Files listed in `--compare` manifests (used for comparison only).
 - Extensions not matching the `-e` filter (if specified).
+- Symbolic links are not followed and are ignored by the tool.
 
 ### Preserving Metadata
 
