@@ -1,7 +1,7 @@
 # Changelog
 
-## [1.1.9] - TBD
-- TBD
+## [1.1.9] - 2025-10-31
+- Manifest save performance tweaks
 
 
 ## [1.1.8] - 2025-10-22

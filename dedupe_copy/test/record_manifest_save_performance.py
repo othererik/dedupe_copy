@@ -13,8 +13,11 @@ import tempfile
 
 try:
     import matplotlib.pyplot as plt
+
+    # Use more readable labels for log scale
+    from matplotlib.ticker import FuncFormatter
 except ImportError:
-    plt = None
+    plt = None  # type: ignore
 
 from dedupe_copy.manifest import Manifest
 
@@ -35,7 +38,9 @@ def generate_fake_data(item_count):
     data = {}
     for i in range(item_count):
         # Generate a fake 32-char hash
-        fake_hash = "".join(random.choices(string.ascii_lowercase + string.digits, k=32))
+        fake_hash = "".join(
+            random.choices(string.ascii_lowercase + string.digits, k=32)
+        )
         # Generate a fake file path
         fake_path = f"/tmp/fake/path/file_{i}.txt"
         data[fake_hash] = [fake_path]
@@ -79,7 +84,7 @@ def main(output_dir):
             print(f"  Save time: {duration:.4f} seconds")
 
     # Generate and save the plot
-    fig, ax = plt.subplots(figsize=(10, 6))
+    _, ax = plt.subplots(figsize=(10, 6))
     ax.plot(TEST_SCALES, save_times, marker="o")
 
     ax.set_title("Manifest Save Performance")
@@ -89,11 +94,8 @@ def main(output_dir):
     ax.set_xscale("log")
     ax.set_yscale("log")
 
-    # Use more readable labels for log scale
-    from matplotlib.ticker import FuncFormatter
     ax.xaxis.set_major_formatter(FuncFormatter(lambda x, pos: f"{int(x):,}"))
     ax.yaxis.set_major_formatter(FuncFormatter(lambda y, pos: f"{y:.2f}"))
-
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)

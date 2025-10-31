@@ -66,6 +66,7 @@ relative_files = true
 [tool.coverage.report]
 omit = [
     "dedupe_copy/test/record_disk_cache_dict_performance.py",
+    "dedupe_copy/test/record_manifest_save_performance.py",
 ]
 
 [tool.pylint."MESSAGES CONTROL"]
