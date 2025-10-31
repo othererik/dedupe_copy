@@ -4,12 +4,17 @@ import collections
 import os
 import random
 import unittest
+from unittest import mock
 
 from dedupe_copy.test import utils
 
 from dedupe_copy import disk_cache_dict
 
 disk_cache_dict.DEBUG = True
+
+
+# tests will frequently violate this
+# pylint: disable=protected-access
 
 
 class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instance-attributes
@@ -651,6 +656,201 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
 
         finally:
             backend.close()
+
+    def test_sqlite_backend_init_with_none_db_file(self):
+        """Test SqliteBackend.__init__ with db_file=None."""
+        backend = disk_cache_dict.SqliteBackend(db_file=None)
+        self.assertTrue(os.path.exists(backend.db_file_path()))
+        backend.close()
+        os.unlink(backend.db_file_path())
+
+    def test_sqlite_backend_delitem_batch_commit(self):
+        """Test SqliteBackend.__delitem__ batch commit logic."""
+        backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
+        backend._batch_size = 5
+        for i in range(5):
+            backend[i] = i
+        backend.commit()
+        for i in range(5):
+            del backend[i]
+        self.assertEqual(len(backend), 0)
+        backend.close()
+
+    def test_sqlite_backend_dump_load_none_and_bool(self):
+        """Test SqliteBackend._dump and _load with None and boolean values."""
+        self.assertIsNone(
+            disk_cache_dict.SqliteBackend._load(
+                disk_cache_dict.SqliteBackend._dump(None)
+            )
+        )
+        self.assertTrue(
+            disk_cache_dict.SqliteBackend._load(
+                disk_cache_dict.SqliteBackend._dump(True)
+            )
+        )
+        self.assertFalse(
+            disk_cache_dict.SqliteBackend._load(
+                disk_cache_dict.SqliteBackend._dump(False)
+            )
+        )
+
+    def test_sqlite_backend_close_exception(self):
+        """Test SqliteBackend.close exception handling."""
+        backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
+        with self.assertRaises(Exception):
+            with mock.patch.object(backend, "commit", side_effect=Exception("Test")):
+                backend.close()
+
+    def test_sqlite_backend_save_same_file(self):
+        """Test SqliteBackend.save with the same db_file."""
+        backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
+        backend[1] = 1
+        backend.save(db_file=self.db_file)
+        self.assertEqual(backend[1], 1)
+        backend.close()
+
+    def test_sqlite_backend_load_none_file(self):
+        """Test SqliteBackend.load with db_file=None."""
+        backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
+        backend[1] = 1
+        backend.commit()
+        backend.load(db_file=None)
+        self.assertEqual(backend[1], 1)
+        backend.close()
+
+    def test_cache_dict_contains_in_db_only(self):
+        """Test CacheDict.__contains__ for a key only in the database."""
+        self.dcd[1] = 1
+        self.dcd.save()
+        new_dcd = disk_cache_dict.DefaultCacheDict(db_file=self.db_file)
+        self.assertIn(1, new_dcd)
+        new_dcd.close()
+
+    def test_cache_dict_setitem_evict_lock_held(self):
+        """Test CacheDict.__setitem__ with _evict_lock_held."""
+        self.dcd._evict_lock_held = True
+        self.dcd[1] = 1
+        self.dcd._evict_lock_held = False
+        self.assertIn(1, self.dcd._db)
+
+    def test_default_cache_dict_missing_no_factory(self):
+        """Test DefaultCacheDict.__missing__ with no default_factory."""
+        dcd = disk_cache_dict.DefaultCacheDict(db_file=self.db_file)
+        with self.assertRaises(KeyError):
+            _ = dcd[1]
+        dcd.close()
+
+    def test_default_cache_dict_copy(self):
+        """Test DefaultCacheDict.copy."""
+        dcd = disk_cache_dict.DefaultCacheDict(
+            default_factory=list, db_file=self.db_file
+        )
+        dcd[1] = [1]
+        new_dcd = dcd.copy(db_file=f"{self.db_file}_copy")
+        self.assertEqual(new_dcd[1], [1])
+        self.assertEqual(new_dcd.default_factory, list)
+        dcd.close()
+        new_dcd.close()
+
+    def test_default_cache_dict_fromkeys(self):
+        """Test DefaultCacheDict.fromkeys."""
+        dcd = disk_cache_dict.DefaultCacheDict(
+            default_factory=list, db_file=self.db_file
+        )
+        new_dcd = dcd.fromkeys([1, 2, 3], "a", db_file=f"{self.db_file}_fromkeys")
+        self.assertEqual(new_dcd[1], "a")
+        self.assertEqual(new_dcd.default_factory, list)
+        dcd.close()
+        new_dcd.close()
+
+    def test_sqlite_backend_get_key_id_not_found(self):
+        """Test SqliteBackend._get_key_id for a key that does not exist."""
+        backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
+        with self.assertRaises(KeyError):
+            backend._get_key_id("non-existent-key")
+        backend.close()
+
+    def test_sqlite_backend_dump_load_float(self):
+        """Test SqliteBackend._dump and _load with float values."""
+        self.assertEqual(
+            disk_cache_dict.SqliteBackend._load(
+                disk_cache_dict.SqliteBackend._dump(1.23)
+            ),
+            1.23,
+        )
+
+    def test_sqlite_backend_update_batch_empty(self):
+        """Test SqliteBackend.update_batch with empty data."""
+        backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
+        backend.update_batch({})
+        self.assertEqual(len(backend), 0)
+        backend.close()
+
+    def test_cache_dict_has_key(self):
+        """Test CacheDict.has_key."""
+        self.dcd[1] = 1
+        self.assertTrue(self.dcd.has_key(1))
+        self.assertFalse(self.dcd.has_key(2))
+
+    def test_cache_dict_copy(self):
+        """Test CacheDict.copy."""
+        self.dcd[1] = 1
+        new_dcd = self.dcd.copy(db_file=f"{self.db_file}_copy")
+        self.assertEqual(new_dcd[1], 1)
+        new_dcd.close()
+
+    def test_sqlite_backend_get_key_id_hash_collision(self):
+        """Test SqliteBackend._get_key_id with a hash collision."""
+        backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
+        with mock.patch("builtins.hash", return_value=1):
+            backend["a"] = 1
+            backend["b"] = 2
+        with self.assertRaises(KeyError):
+            with mock.patch("builtins.hash", return_value=1):
+                backend._get_key_id("c")
+        backend.close()
+
+    def test_sqlite_backend_dump_load_int(self):
+        """Test SqliteBackend._dump and _load with int values."""
+        self.assertEqual(
+            disk_cache_dict.SqliteBackend._load(
+                disk_cache_dict.SqliteBackend._dump(123)
+            ),
+            123,
+        )
+
+    def test_sqlite_backend_update_batch_error(self):
+        """Test SqliteBackend.update_batch with an error."""
+        backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
+        with self.assertRaises(Exception):
+            with mock.patch.object(
+                backend.conn, "executemany", side_effect=Exception("Test")
+            ):
+                backend.update_batch({1: 1})
+        backend.close()
+
+    def test_sqlite_backend_commit_batch_error(self):
+        """Test SqliteBackend._commit_batch with an error."""
+        backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
+        backend[1] = 1
+        with self.assertRaises(Exception):
+            with mock.patch.object(
+                backend.conn, "executemany", side_effect=Exception("Test")
+            ):
+                backend._commit_batch()
+        backend.close()
+
+    def test_sqlite_backend_close_already_closed(self):
+        """Test SqliteBackend.close when the connection is already closed."""
+        backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
+        backend.close()
+        backend.close()
+
+    def test_cache_dict_fromkeys(self):
+        """Test CacheDict.fromkeys."""
+        new_dcd = self.dcd.fromkeys([1, 2, 3], "a", db_file=f"{self.db_file}_fromkeys")
+        self.assertEqual(new_dcd[1], "a")
+        new_dcd.close()
 
 
 class TestDefaultCacheDict(unittest.TestCase):
