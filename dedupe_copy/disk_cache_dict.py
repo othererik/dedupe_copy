@@ -71,11 +71,13 @@ class SqliteBackend:
                 self._conn.execute("PRAGMA synchronous=NORMAL;")
                 self._conn.execute("PRAGMA cache_size = -64000;")
                 self._conn.execute(
-                    f"create table if not exists {self.table} (id integer primary "
-                    f"key, hash integer, key blob, value blob);"
+                    f"CREATE TABLE IF NOT EXISTS {self.table} ("
+                    "key BLOB PRIMARY KEY, "
+                    "hash INTEGER, "
+                    "value BLOB);"
                 )
                 self._conn.execute(
-                    f"create index if not exists {self.table}_index ON {self.table}(hash);"
+                    f"CREATE INDEX IF NOT EXISTS {self.table}_hash_index ON {self.table}(hash);"
                 )
                 self._conn.commit()
 
@@ -86,16 +88,16 @@ class SqliteBackend:
             self._init_conn()
         return self._conn  # type: ignore
 
-    def _get_key_id(self, key: Any) -> int:
+    def _get_key_id(self, key: Any) -> Any:
         """Get the database ID for a given key, or raise KeyError if not found."""
         with self._lock:
             self._commit_batch()
             cursor = self.conn.execute(
-                f"select key,id from {self.table} where hash=?;", (hash(key),)
+                f"select key from {self.table} where hash=?;", (hash(key),)
             )
-            for k, key_id in cursor:
-                if self._load(k) == key:
-                    return key_id
+            for row in cursor:
+                if self._load(row[0]) == key:
+                    return key
             raise KeyError(key)
 
     def __getitem__(self, key: Any) -> Any:
@@ -122,8 +124,9 @@ class SqliteBackend:
         """Delete item from the dictionary."""
         with self._lock:
             self._commit_batch()
-            db_id = self._get_key_id(key)
-            self.conn.execute(f"delete from {self.table} where id=?;", (db_id,))
+            self.conn.execute(
+                f"delete from {self.table} where key=?;", (self._dump(key),)
+            )
             self._commit_needed = True
             self._write_count += 1
             if self._write_count >= self._batch_size:
@@ -206,17 +209,10 @@ class SqliteBackend:
 
     def _insert(self, key: Any, value: Any) -> None:
         """Assumes lock is held."""
-        try:
-            db_id = self._get_key_id(key)
-            self.conn.execute(
-                f"update {self.table} set value=? where id=?;",
-                (self._dump(value), db_id),
-            )
-        except KeyError:
-            self.conn.execute(
-                f"insert into {self.table} (hash, key, value) values (?, ?, ?);",
-                (hash(key), self._dump(key), self._dump(value)),
-            )
+        self.conn.execute(
+            f"INSERT OR REPLACE INTO {self.table} (key, hash, value) VALUES (?, ?, ?);",
+            (self._dump(key), hash(key), self._dump(value)),
+        )
 
     def pop(self, key: Any) -> Any:
         """Remove specified key and return the corresponding value.
@@ -250,6 +246,37 @@ class SqliteBackend:
                 for items in self.conn.execute(f"select key,value from {self.table};")
             ]
 
+    def update_batch(self, data: Dict[Any, Any]) -> None:
+        """Efficiently updates the database with a batch of data using INSERT OR REPLACE.
+
+        This method is optimized for bulk operations, such as flushing a cache
+        to the database. It bypasses the read-before-write checks of the
+        standard __setitem__ method.
+
+        Args:
+            data: A dictionary of key-value pairs to be inserted or replaced.
+        """
+        if not data:
+            return
+
+        with self._lock:
+            try:
+                # Prepare data for executemany
+                batch_data = [
+                    (self._dump(key), hash(key), self._dump(value))
+                    for key, value in data.items()
+                ]
+
+                # Use INSERT OR REPLACE for an efficient "upsert" operation
+                self.conn.executemany(
+                    f"INSERT OR REPLACE INTO {self.table} (key, hash, value) VALUES (?, ?, ?)",
+                    batch_data,
+                )
+                self.conn.commit()
+            except sqlite3.Error as e:
+                self.conn.rollback()
+                raise e
+
     def _commit_batch(self) -> None:
         """Commits the current batch of writes to the database."""
         if not self._write_batch:
@@ -257,50 +284,19 @@ class SqliteBackend:
 
         with self._lock:
             try:
-                updates = []
-                inserts = []
-                keys_to_check = set(self._write_batch.keys())
-
-                # In a single transaction, identify which keys already exist.
-                existing_keys = set()
-                # Use a parameterized query to avoid SQL injection vulnerabilities,
-                # even with internal data.
-                placeholders = ",".join("?" for _ in keys_to_check)
-                query_hashes = [hash(key) for key in keys_to_check]
-                cursor = self.conn.execute(
-                    f"SELECT key FROM {self.table} WHERE hash IN ({placeholders})",
-                    query_hashes,
+                batch_data = [
+                    (self._dump(key), hash(key), self._dump(value))
+                    for key, value in self._write_batch.items()
+                ]
+                self.conn.executemany(
+                    f"INSERT OR REPLACE INTO {self.table} (key, hash, value) VALUES (?, ?, ?)",
+                    batch_data,
                 )
-                for row in cursor:
-                    key = self._load(row[0])
-                    if key in keys_to_check:
-                        existing_keys.add(key)
-
-                # Prepare batch updates and inserts
-                for key, value in self._write_batch.items():
-                    if key in existing_keys:
-                        updates.append((self._dump(value), self._dump(key)))
-                    else:
-                        inserts.append((hash(key), self._dump(key), self._dump(value)))
-
-                # Execute batch operations
-                if updates:
-                    self.conn.executemany(
-                        f"UPDATE {self.table} SET value=? WHERE key=?", updates
-                    )
-                if inserts:
-                    self.conn.executemany(
-                        f"INSERT INTO {self.table} (hash, key, value) VALUES (?, ?, ?)",
-                        inserts,
-                    )
-
                 self.conn.commit()
                 self._write_batch.clear()
                 self._write_count = 0
             except sqlite3.Error as e:
-                # In case of an error, rollback the transaction
                 self.conn.rollback()
-                # Re-raise the exception to allow for higher-level error handling
                 raise e
 
     def commit(self, force: bool = False) -> None:
@@ -621,15 +617,15 @@ class CacheDict(collections.abc.MutableMapping):
             db_file: The path for the new database file.
             remove_old_db: If True, the old database file is removed.
         """
-        # Evict all items from the cache to the backend to ensure everything
-        # is persisted.
-        for key, value in self._cache.items():
-            self._db[key] = value
-        self._cache.clear()
-        if self.lru:
-            self._key_order = OrderedDict()
+        # Use the optimized batch update to flush the cache to the backend
+        if self._cache:
+            self._db.update_batch(self._cache)
+            self._cache.clear()
 
-        # Now, commit any pending writes in the backend and save.
+        if self.lru and self._key_order is not None:
+            self._key_order.clear()
+
+        # Now, commit any remaining pending writes in the backend and save.
         self._db.save(db_file=db_file or self._db_file, remove_old_db=remove_old_db)
 
     def close(self) -> None:
