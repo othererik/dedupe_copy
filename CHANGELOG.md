@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.10] - 2025-11-02
+- More Manifest save performance tweaks
+
+
 ## [1.1.9] - 2025-10-31
 - Manifest save performance tweaks
 
