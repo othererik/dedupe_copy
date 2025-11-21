@@ -754,7 +754,9 @@ class ProgressThread(threading.Thread):
                 last_update = time.time()
             except queue.Empty:
                 if self.save_event and self.save_event.is_set():
-                    logger.info("Saving...")
+                    if time.time() - last_update > 30:
+                        logger.info("Saving...")
+                        last_update = time.time()
                     time.sleep(1)
                 if time.time() - last_update > 60:
                     last_update = time.time()
