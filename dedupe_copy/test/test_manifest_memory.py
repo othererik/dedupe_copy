@@ -18,7 +18,8 @@ class TestManifestMemory(unittest.TestCase):
         shutil.rmtree(self.temp_dir)
 
     def test_populate_read_sources_memory_efficient(self):
-        """Verify that _populate_read_sources works correctly without loading everything into memory."""
+        """Verify that _populate_read_sources works correctly without loading 
+        everything into memory."""
         manifest = Manifest(
             None, save_path=self.manifest_path, temp_directory=self.temp_dir
         )
@@ -43,7 +44,7 @@ class TestManifestMemory(unittest.TestCase):
         # Clear read_sources to ensure it gets populated
         manifest.read_sources.clear()
 
-        # Run the method
+        # pylint: disable=protected-access
         manifest._populate_read_sources()
 
         # Verify results

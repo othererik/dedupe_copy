@@ -341,7 +341,6 @@ def _handle_arguments(args):
         "delete_duplicates": args.delete,
         "delete_on_copy": args.delete_on_copy,
         "dry_run": args.dry_run,
-        "dry_run": args.dry_run,
         "min_delete_size": args.min_delete_size,
         "verify_manifest": args.verify,
         "use_ui": args.use_ui,
