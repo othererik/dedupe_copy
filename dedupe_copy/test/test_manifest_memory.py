@@ -1,13 +1,15 @@
+"""Tests for manifest memory usage."""
+
 import unittest
-from unittest.mock import MagicMock, patch
 import os
 import tempfile
 import shutil
 from dedupe_copy.manifest import Manifest
-from dedupe_copy.disk_cache_dict import DefaultCacheDict
 
 
 class TestManifestMemory(unittest.TestCase):
+    """Test cases for manifest memory efficiency."""
+
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.manifest_path = os.path.join(self.temp_dir, "test_manifest.db")
@@ -22,9 +24,11 @@ class TestManifestMemory(unittest.TestCase):
         )
 
         # Mock md5_data to simulate a large number of files
-        # We use a generator or a custom iterator to avoid creating the dict in memory for the test setup if possible,
-        # but for this test, we just want to ensure the logic works.
-        # Real memory usage testing is hard in a unit test without psutil, so we verify correctness of the new logic.
+        # We use a generator or a custom iterator to avoid creating the dict in
+        # memory for the test setup if possible, but for this test, we just want
+        # to ensure the logic works.
+        # Real memory usage testing is hard in a unit test without psutil,
+        # so we verify correctness of the new logic.
 
         # Create a lot of dummy data
         num_files = 1000

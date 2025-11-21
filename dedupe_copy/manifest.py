@@ -268,7 +268,7 @@ class Manifest:
 
         # We can use a local buffer to batch updates to read_sources
         batch_size = 10000
-        batch = {}
+        batch: dict[str, None] = {}
 
         for _, info in self.md5_data.items():
             for file_data in info:

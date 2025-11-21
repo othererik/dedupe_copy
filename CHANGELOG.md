@@ -1,5 +1,11 @@
 # Changelog
 
+
+## [1.2.0] - 2025-11-20
+- Memory improvement
+- Improved UI experience
+
+
 ## [1.1.10] - 2025-11-02
 - More Manifest save performance tweaks
 
