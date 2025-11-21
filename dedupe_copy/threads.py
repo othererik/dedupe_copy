@@ -10,7 +10,7 @@ import shutil
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from .config import CopyConfig, WalkConfig
 from .manifest import Manifest
@@ -22,7 +22,9 @@ from .utils import (
     read_file,
 )
 
-# For message output
+if TYPE_CHECKING:
+    from rich.progress import TaskID
+    from .ui import ConsoleUI
 HIGH_PRIORITY = 1
 MEDIUM_PRIORITY = 5
 LOW_PRIORITY = 10
@@ -222,6 +224,42 @@ class CopyThread(threading.Thread):
         # Fallback if source not under any read_path
         return os.path.join(self.config.target_path, os.path.basename(src))
 
+    def _process_copy_task(self, src: str, mtime: str, size: int) -> None:
+        """Process a single copy task."""
+        if not match_extension(self.config.extensions, src):
+            return
+
+        dest = self._get_destination_path(src, mtime, size)
+        if not self.config.dry_run:
+            _copy_file(src, dest, self.config.preserve_stat, self.progress_queue)
+        elif self.progress_queue:
+            self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
+
+        if self.config.delete_on_copy:
+            self._handle_delete_on_copy(src, dest)
+
+    def _handle_delete_on_copy(self, src: str, dest: str) -> None:
+        """Handle deletion of source file after copy."""
+        if self.config.dry_run:
+            if self.progress_queue:
+                self.progress_queue.put(
+                    (
+                        HIGH_PRIORITY,
+                        "message",
+                        f"[DRY RUN] Would delete source file {src}",
+                    )
+                )
+        else:
+            try:
+                os.remove(src)
+                if self.progress_queue:
+                    self.progress_queue.put((LOW_PRIORITY, "deleted", src))
+                if self.deleted_queue:
+                    self.deleted_queue.put((src, dest))
+            except OSError as e:
+                if self.progress_queue:
+                    self.progress_queue.put((MEDIUM_PRIORITY, "error", src, str(e)))
+
     def run(self) -> None:
         """The main execution loop for the thread.
 
@@ -229,8 +267,6 @@ class CopyThread(threading.Thread):
         performs the copy operation until the stop event is set and the
         queue is empty.
         """
-        # there is a lot going on in this loop, refactor
-        # pylint: disable=R1702, R0912
         while not self.stop_event.is_set() or not self.work.empty():
             try:
                 src, mtime, size = self.work.get(True, 0.1)
@@ -238,39 +274,7 @@ class CopyThread(threading.Thread):
                 continue
 
             try:
-                if not match_extension(self.config.extensions, src):
-                    continue
-
-                dest = self._get_destination_path(src, mtime, size)
-                if not self.config.dry_run:
-                    _copy_file(
-                        src, dest, self.config.preserve_stat, self.progress_queue
-                    )
-                elif self.progress_queue:
-                    self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
-
-                if self.config.delete_on_copy:
-                    if self.config.dry_run:
-                        if self.progress_queue:
-                            self.progress_queue.put(
-                                (
-                                    HIGH_PRIORITY,
-                                    "message",
-                                    f"[DRY RUN] Would delete source file {src}",
-                                )
-                            )
-                    else:
-                        try:
-                            os.remove(src)
-                            if self.progress_queue:
-                                self.progress_queue.put((LOW_PRIORITY, "deleted", src))
-                            if self.deleted_queue:
-                                self.deleted_queue.put((src, dest))
-                        except OSError as e:
-                            if self.progress_queue:
-                                self.progress_queue.put(
-                                    (MEDIUM_PRIORITY, "error", src, str(e))
-                                )
+                self._process_copy_task(src, mtime, size)
             finally:
                 self.work.task_done()
 
@@ -568,27 +572,32 @@ class ProgressThread(threading.Thread):
         *,
         walk_queue: "queue.Queue[str]",
         stop_event: threading.Event,
-        save_event: threading.Event,
+        save_event: Optional[threading.Event] = None,
+        ui: Optional["ConsoleUI"] = None,
     ) -> None:
         """Initializes the ProgressThread.
 
         Args:
-            work_queue: The work queue to monitor.
-            result_queue: The result queue to monitor.
-            progress_queue: The queue of progress messages.
-            walk_queue: The walk queue to monitor.
+            work_queue: The queue of file paths to be processed.
+            walk_queue: The queue of directories to be walked.
+            result_queue: The queue of processing results.
+            progress_queue: The queue for reporting progress.
             stop_event: An event to signal the thread to stop.
-            save_event: An event to coordinate save operations.
+            save_event: An optional event to signal for saving progress.
+            ui: Optional ConsoleUI instance for rich output.
         """
         super().__init__()
         self.work = work_queue
+        self.walk_queue = walk_queue
         self.result_queue = result_queue
         self.progress_queue = progress_queue
-        self.walk_queue = walk_queue
         self.stop_event = stop_event
+        self.ui = ui
         self.daemon = True
+
         self.last_accepted: Optional[str] = None
         self.file_count = 0
+        self.file_count_log_interval = 1000
         self.directory_count = 0
         self.accepted_count = 0
         self.ignored_count = 0
@@ -602,6 +611,14 @@ class ProgressThread(threading.Thread):
         self.start_time = time.time()
         self.last_report_time = time.time()
         self.bytes_processed = 0
+
+        # UI Task IDs
+        self.walk_task_id: Optional["TaskID"] = None
+        self.copy_task_id: Optional["TaskID"] = None
+        self.delete_task_id: Optional["TaskID"] = None
+
+        if self.ui:
+            self.walk_task_id = self.ui.add_task("Walking filesystem...", total=None)
 
     def do_log_dir(self, _path: str) -> None:
         """Log directory processing."""
@@ -621,7 +638,14 @@ class ProgressThread(threading.Thread):
                 f"Walk queue has {self.walk_queue.qsize()} items.\n"
                 f"Current file: {repr(path)} (last accepted: {repr(self.last_accepted)})"
             )
-            logger.info(message)
+            if self.ui and self.walk_task_id is not None:
+                self.ui.update_task(
+                    "Walking filesystem...",
+                    description=f"Discovered {self.file_count} files "
+                    f"(dirs: {self.directory_count})",
+                )
+            else:
+                logger.info(message)
 
     def do_log_copied(self, src: str, dest: str) -> None:
         """Log successful file copy operations."""
@@ -632,15 +656,24 @@ class ProgressThread(threading.Thread):
         ):
             elapsed = time.time() - self.start_time
             copy_rate = self.copied_count / elapsed if elapsed > 0 else 0
-            logger.info(
-                "Copied %d items. Skipped %d items. Rate: %.1f files/sec\n"
-                "Last file: %r -> %r",
-                self.copied_count,
-                self.not_copied_count,
-                copy_rate,
-                src,
-                dest,
-            )
+            if self.ui:
+                if self.copy_task_id is None:
+                    self.copy_task_id = self.ui.add_task("Copying files...", total=None)
+                self.ui.update_task(
+                    "Copying files...",
+                    advance=1,
+                    description=f"Copied {self.copied_count} files",
+                )
+            else:
+                logger.info(
+                    "Copied %d items. Skipped %d items. Rate: %.1f files/sec\n"
+                    "Last file: %r -> %r",
+                    self.copied_count,
+                    self.not_copied_count,
+                    copy_rate,
+                    src,
+                    dest,
+                )
         self.last_copied = src
 
     def do_log_not_copied(self, _path: str) -> None:
@@ -660,11 +693,22 @@ class ProgressThread(threading.Thread):
         ):
             elapsed = time.time() - self.start_time
             delete_rate = self.deleted_count / elapsed if elapsed > 0 else 0
-            logger.info(
-                "Deleted %d items. Rate: %.1f files/sec",
-                self.deleted_count,
-                delete_rate,
-            )
+            if self.ui:
+                if self.delete_task_id is None:
+                    self.delete_task_id = self.ui.add_task(
+                        "Deleting files...", total=None
+                    )
+                self.ui.update_task(
+                    "Deleting files...",
+                    advance=1,
+                    description=f"Deleted {self.deleted_count} files",
+                )
+            else:
+                logger.info(
+                    "Deleted %d items. Rate: %.1f files/sec",
+                    self.deleted_count,
+                    delete_rate,
+                )
 
     def do_log_not_deleted(self, _path: str) -> None:
         """Log files that were not deleted."""
@@ -686,10 +730,12 @@ class ProgressThread(threading.Thread):
         error_msg = format_error_message(path, reason)
         logger.error(error_msg)
 
-    @staticmethod
-    def do_log_message(message: str) -> None:
+    def do_log_message(self, message: str) -> None:
         """Log a generic message."""
-        logger.info(message)
+        if self.ui:
+            self.ui.log(message)
+        else:
+            logger.info(message)
 
     def run(self) -> None:
         """The main execution loop for the thread.
@@ -708,7 +754,9 @@ class ProgressThread(threading.Thread):
                 last_update = time.time()
             except queue.Empty:
                 if self.save_event and self.save_event.is_set():
-                    logger.info("Saving...")
+                    if time.time() - last_update > 30:
+                        logger.info("Saving...")
+                        last_update = time.time()
                     time.sleep(1)
                 if time.time() - last_update > 60:
                     last_update = time.time()

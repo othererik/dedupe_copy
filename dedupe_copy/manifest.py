@@ -257,30 +257,34 @@ class Manifest:
         # Clear existing sources to prevent duplication when re-populating
         self.read_sources.clear()
 
-        # Collect all unique sources first to avoid repeated lookups
-        # This is much more efficient for large manifests
-        logger.info("Collecting unique source paths from manifest...")
-        unique_sources = set()
-        dict_iter = self.md5_data.items()
-        for _, info in dict_iter:
+        logger.info("Populating read sources from manifest data...")
+
+        # Iterate directly over md5_data and insert into read_sources
+        # This avoids creating a large set of all sources in memory
+        count = 0
+
+        # Use a batch update if available on the backend for better performance
+        # but even one-by-one is better than O(N) memory for the set
+
+        # We can use a local buffer to batch updates to read_sources
+        batch_size = 10000
+        batch: dict[str, None] = {}
+
+        for _, info in self.md5_data.items():
             for file_data in info:
-                unique_sources.add(file_data[0])
+                src = file_data[0]
+                batch[src] = None
+                count += 1
 
-        logger.info("Found %d unique source paths, inserting...", len(unique_sources))
+                if len(batch) >= batch_size:
+                    self.read_sources.update(batch)
+                    batch.clear()
 
-        # Temporarily increase cache size to minimize evictions during bulk insert
-        original_max_size = self.read_sources.max_size
-        try:
-            # Set cache size to accommodate all sources if reasonable
-            if len(unique_sources) < 1000000:  # Only for < 1M items
-                self.read_sources.max_size = max(original_max_size, len(unique_sources))
+        # Insert remaining items
+        if batch:
+            self.read_sources.update(batch)
 
-            # Batch insert all sources
-            for src in unique_sources:
-                self.read_sources[src] = None
-        finally:
-            # Restore original cache size
-            self.read_sources.max_size = original_max_size
+        logger.info("Read sources populated (%d files).", count)
 
     def hash_set(self) -> Set[str]:
         """Returns a set of all hash keys present in the manifest.

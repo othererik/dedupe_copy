@@ -321,6 +321,14 @@ class SqliteBackend:
         """
         return self._db_file
 
+    def clear(self) -> None:
+        """Remove all items from the dictionary."""
+        with self._lock:
+            self._write_batch.clear()
+            self._write_count = 0
+            self.conn.execute(f"delete from {self.table};")
+            self.conn.commit()
+
     def close(self) -> None:
         """Closes the database connection, committing any pending changes first."""
         with self._lock:
@@ -428,6 +436,19 @@ class CacheDict(collections.abc.MutableMapping):
         if current_dictionary:
             for key, value in current_dictionary.items():
                 self[key] = value
+
+    def clear(self) -> None:
+        """Remove all items from the dictionary."""
+        self._cache.clear()
+        if self.lru and self._key_order is not None:
+            self._key_order.clear()
+        if hasattr(self._db, "clear"):
+            self._db.clear()
+        else:
+            # Fallback for backends that don't support clear()
+            # This is slow but correct
+            for key in list(self._db.keys()):
+                del self._db[key]
 
     def __contains__(self, key: Any) -> bool:
         """Check for existence in local cache, fall back to db.
@@ -555,7 +576,7 @@ class CacheDict(collections.abc.MutableMapping):
         self._db[key] = value
         # After evicting, we need to ensure the backend is in a consistent
         # state for the next operation, so we commit the write.
-        self._db.commit(force=True)
+        # self._db.commit(force=True)
 
     def get(self, key: Any, default: Any = None) -> Any:
         """Get item or default if not found"""

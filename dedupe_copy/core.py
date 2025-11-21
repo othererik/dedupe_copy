@@ -25,6 +25,7 @@ from .threads import (
     ResultProcessor,
     WalkThread,
 )
+from .ui import ConsoleUI
 from .utils import _throttle_puts, ensure_logging_configured, lower_extension
 
 logger = logging.getLogger(__name__)
@@ -726,6 +727,7 @@ def run_dupe_copy(
     dry_run: bool = False,
     min_delete_size: int = 0,
     verify_manifest: bool = False,
+    use_ui: bool = True,
 ) -> None:
     """Main entry point for the deduplication and copy functionality.
 
@@ -757,7 +759,10 @@ def run_dupe_copy(
         delete_duplicates: If True, deletes duplicate files.
         dry_run: If True, simulates deletion without actual file removal.
         min_delete_size: Minimum size for a file to be considered for deletion.
+        dry_run: If True, simulates deletion without actual file removal.
+        min_delete_size: Minimum size for a file to be considered for deletion.
         verify_manifest: If True, verifies the integrity of the manifest.
+        use_ui: If True, uses the rich console UI.
     """
     # Ensure logging is configured for programmatic calls
     ensure_logging_configured()
@@ -878,204 +883,220 @@ def run_dupe_copy(
     result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
     progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
     walk_queue: "queue.Queue[str]" = queue.Queue()
-    progress_thread = ProgressThread(
-        work_queue,
-        result_queue,
-        progress_queue,
-        walk_queue=walk_queue,
-        stop_event=all_stop,
-        save_event=save_event,
-    )
-    progress_thread.start()
-    collisions = None
-    if manifest and (convert_manifest_paths_to or convert_manifest_paths_from):
-        manifest.convert_manifest_paths(
-            convert_manifest_paths_from, convert_manifest_paths_to
+
+    ui: Optional[ConsoleUI] = None
+    if use_ui:
+        ui = ConsoleUI()
+        ui.start()
+
+    try:
+        progress_thread = ProgressThread(
+            work_queue,
+            result_queue,
+            progress_queue,
+            walk_queue=walk_queue,
+            stop_event=all_stop,
+            save_event=save_event,
+            ui=ui,
         )
-
-    # storage for hash collisions
-    collisions_file = os.path.join(temp_directory, "collisions.db")
-    collisions = DefaultCacheDict(list, db_file=collisions_file, max_size=10000)
-    if manifest and not ignore_old_collisions:
-        # rebuild collision list
-        for md5, info in manifest.items():
-            if len(info) > 1:
-                collisions[md5] = info
-    walk_config = WalkConfig(
-        extensions=extensions,
-        ignore=ignored_patterns,
-        hash_algo=hash_algo,
-        dedupe_empty=dedupe_empty,
-    )
-
-    if no_walk:
-        progress_queue.put(
-            (
-                HIGH_PRIORITY,
-                "message",
-                "Not walking file system. Using stored manifests",
+        progress_thread.start()
+        collisions = None
+        if manifest and (convert_manifest_paths_to or convert_manifest_paths_from):
+            manifest.convert_manifest_paths(
+                convert_manifest_paths_from, convert_manifest_paths_to
             )
-        )
-        # Rebuild collision list from the manifest
-        if manifest:
-            logger.info("Manifest loaded with %d items.", len(manifest))
+
+        # storage for hash collisions
+        collisions_file = os.path.join(temp_directory, "collisions.db")
+        collisions = DefaultCacheDict(list, db_file=collisions_file, max_size=10000)
+        if manifest and not ignore_old_collisions:
+            # rebuild collision list
             for md5, info in manifest.items():
                 if len(info) > 1:
                     collisions[md5] = info
-            logger.info("Found %d collisions in manifest.", len(collisions))
-        dupes = collisions
-        all_data = manifest
-    else:
-        progress_queue.put(
-            (
-                HIGH_PRIORITY,
-                "message",
-                "Running the duplicate search, generating reports",
-            )
-        )
-        dupes, all_data = find_duplicates(
-            read_from_path or [],
-            work_queue,
-            result_queue,
-            manifest,
-            collisions,
-            walk_config=walk_config,
-            progress_queue=progress_queue,
-            walk_threads=walk_threads,
-            read_threads=read_threads,
-            save_event=save_event,
-            walk_queue=walk_queue,
-        )
-    work_queue.join()
-    result_queue.join()
-    total_size = _extension_report(all_data)
-    logger.info("Total Size of accepted: %s bytes", total_size)
-    if csv_report_path:
-        generate_report(
-            csv_report_path=csv_report_path,
-            collisions=dupes,
-            read_paths=read_from_path,
+        walk_config = WalkConfig(
+            extensions=extensions,
+            ignore=ignored_patterns,
             hash_algo=hash_algo,
+            dedupe_empty=dedupe_empty,
         )
-    if delete_duplicates:
-        if copy_to_path:
-            logger.error("Cannot use --delete and --copy-path at the same time.")
+
+        if no_walk:
+            progress_queue.put(
+                (
+                    HIGH_PRIORITY,
+                    "message",
+                    "Not walking file system. Using stored manifests",
+                )
+            )
+            # Rebuild collision list from the manifest
+            if manifest:
+                logger.info("Manifest loaded with %d items.", len(manifest))
+                for md5, info in manifest.items():
+                    if len(info) > 1:
+                        collisions[md5] = info
+                logger.info("Found %d collisions in manifest.", len(collisions))
+            dupes = collisions
+            all_data = manifest
         else:
-            delete_job = DeleteJob(
-                delete_threads=copy_threads,
-                dry_run=dry_run,
-                min_delete_size_bytes=min_delete_size,
-                dedupe_empty=dedupe_empty,
+            progress_queue.put(
+                (
+                    HIGH_PRIORITY,
+                    "message",
+                    "Running the duplicate search, generating reports",
+                )
             )
-
-            # If comparing, we want to delete ALL files that match the compare manifest's hashes.
-            hashes_to_delete_all = set(compare.md5_data) if compare else None
-
-            # When using --compare with --delete, we need to consider all files,
-            # not just those with internal duplicates, for deletion.
-            data_to_scan_for_deletes = all_data if compare else dupes
-
-            deleted_files = delete_files(
-                data_to_scan_for_deletes,
-                progress_queue,
-                delete_job=delete_job,
-                hashes_to_delete_all=hashes_to_delete_all,
+            dupes, all_data = find_duplicates(
+                read_from_path or [],
+                work_queue,
+                result_queue,
+                manifest,
+                collisions,
+                walk_config=walk_config,
+                progress_queue=progress_queue,
+                walk_threads=walk_threads,
+                read_threads=read_threads,
+                save_event=save_event,
+                walk_queue=walk_queue,
             )
-            # Update the manifest with the deleted files
-            if manifest_out_path and not dry_run:
+        work_queue.join()
+        result_queue.join()
+        total_size = _extension_report(all_data)
+        logger.info("Total Size of accepted: %s bytes", total_size)
+        if csv_report_path:
+            generate_report(
+                csv_report_path=csv_report_path,
+                collisions=dupes,
+                read_paths=read_from_path,
+                hash_algo=hash_algo,
+            )
+        if delete_duplicates:
+            if copy_to_path:
+                logger.error("Cannot use --delete and --copy-path at the same time.")
+            else:
+                delete_job = DeleteJob(
+                    delete_threads=copy_threads,
+                    dry_run=dry_run,
+                    min_delete_size_bytes=min_delete_size,
+                    dedupe_empty=dedupe_empty,
+                )
+
+                # If comparing, we want to delete ALL files that match the
+                # compare manifest's hashes.
+                hashes_to_delete_all = set(compare.md5_data) if compare else None
+
+                # When using --compare with --delete, we need to consider all files,
+                # not just those with internal duplicates, for deletion.
+                data_to_scan_for_deletes = all_data if compare else dupes
+
+                deleted_files = delete_files(
+                    data_to_scan_for_deletes,
+                    progress_queue,
+                    delete_job=delete_job,
+                    hashes_to_delete_all=hashes_to_delete_all,
+                )
                 # Update the manifest with the deleted files
-                if deleted_files:
-                    all_data.remove_files(deleted_files)
+                if manifest_out_path and not dry_run:
+                    # Update the manifest with the deleted files
+                    if deleted_files:
+                        all_data.remove_files(deleted_files)
+                    progress_queue.put(
+                        (
+                            HIGH_PRIORITY,
+                            "message",
+                            "Saving updated manifest after deletion",
+                        )
+                    )
+                    all_data.save(path=manifest_out_path, no_walk=True)
+        elif copy_to_path is not None:
+            # copy the duplicate files first and then ignore them for the full pass
+            progress_queue.put(
+                (HIGH_PRIORITY, "message", f"Running copy to {repr(copy_to_path)}")
+            )
+
+            effective_read_paths = read_from_path or []
+            if not isinstance(effective_read_paths, list):
+                effective_read_paths = [effective_read_paths]
+
+            if no_walk and not effective_read_paths and manifest:
+                manifest_paths = list(manifest.read_sources.keys())
+                if manifest_paths:
+                    # Use commonpath to determine the most likely source root.
+                    common_base = os.path.commonpath(manifest_paths)
+                    # If commonpath returns a file (e.g., only one file in manifest), get its dir.
+                    if common_base and not os.path.isdir(common_base):
+                        common_base = os.path.dirname(common_base)
+
+                    if common_base:
+                        logger.info(
+                            "No source path provided with --no-walk; using common base path "
+                            "from manifest to preserve structure: %s",
+                            common_base,
+                        )
+                        effective_read_paths = [common_base]
+
+            copy_config = CopyConfig(
+                target_path=copy_to_path,
+                read_paths=effective_read_paths,
+                extensions=extensions,
+                path_rules=path_rules_func,
+                preserve_stat=preserve_stat,
+                delete_on_copy=delete_on_copy,
+                dry_run=dry_run,
+            )
+            copy_job = CopyJob(
+                copy_config=copy_config,
+                ignore=ignored_patterns,
+                no_copy=compare,
+                dedupe_empty=dedupe_empty,
+                copy_threads=copy_threads,
+                delete_on_copy=delete_on_copy,
+                dry_run=dry_run,
+            )
+            deleted_files, moved_files = copy_data(
+                all_data,
+                progress_queue,
+                copy_job=copy_job,
+            )
+
+            # This logic handles manifest updates for both moved files (delete-on-copy)
+            # and files that were only deleted (due to --compare).
+            if moved_files or deleted_files:
+                # First, handle the path updates for files that were moved.
+                # This operation removes the old source path and adds the new destination path.
+                if moved_files:
+                    all_data.update_paths(moved_files)
+
+                # Next, handle the removal of files that were deleted but not moved.
+                # These are files that were duplicates of the --compare manifest.
+                # We must not try to re-process files that were already handled by update_paths.
+                # Convert to sets for robust duplicate handling and efficient subtraction.
+                moved_source_paths = {src for src, _ in moved_files}
+                all_deleted_paths = set(deleted_files)
+
+                files_to_remove_only = list(all_deleted_paths - moved_source_paths)
+
+                if files_to_remove_only:
+                    all_data.remove_files(files_to_remove_only)
+
+            if manifest_out_path and not dry_run:
                 progress_queue.put(
-                    (HIGH_PRIORITY, "message", "Saving updated manifest after deletion")
+                    (HIGH_PRIORITY, "message", "Saving complete manifest after copy")
                 )
                 all_data.save(path=manifest_out_path, no_walk=True)
-    elif copy_to_path is not None:
-        # copy the duplicate files first and then ignore them for the full pass
-        progress_queue.put(
-            (HIGH_PRIORITY, "message", f"Running copy to {repr(copy_to_path)}")
-        )
-
-        effective_read_paths = read_from_path or []
-        if not isinstance(effective_read_paths, list):
-            effective_read_paths = [effective_read_paths]
-
-        if no_walk and not effective_read_paths and manifest:
-            manifest_paths = list(manifest.read_sources.keys())
-            if manifest_paths:
-                # Use commonpath to determine the most likely source root.
-                common_base = os.path.commonpath(manifest_paths)
-                # If commonpath returns a file (e.g., only one file in manifest), get its dir.
-                if common_base and not os.path.isdir(common_base):
-                    common_base = os.path.dirname(common_base)
-
-                if common_base:
-                    logger.info(
-                        "No source path provided with --no-walk; using common base path "
-                        "from manifest to preserve structure: %s",
-                        common_base,
-                    )
-                    effective_read_paths = [common_base]
-
-        copy_config = CopyConfig(
-            target_path=copy_to_path,
-            read_paths=effective_read_paths,
-            extensions=extensions,
-            path_rules=path_rules_func,
-            preserve_stat=preserve_stat,
-            delete_on_copy=delete_on_copy,
-            dry_run=dry_run,
-        )
-        copy_job = CopyJob(
-            copy_config=copy_config,
-            ignore=ignored_patterns,
-            no_copy=compare,
-            dedupe_empty=dedupe_empty,
-            copy_threads=copy_threads,
-            delete_on_copy=delete_on_copy,
-            dry_run=dry_run,
-        )
-        deleted_files, moved_files = copy_data(
-            all_data,
-            progress_queue,
-            copy_job=copy_job,
-        )
-
-        # This logic handles manifest updates for both moved files (delete-on-copy)
-        # and files that were only deleted (due to --compare).
-        if moved_files or deleted_files:
-            # First, handle the path updates for files that were moved.
-            # This operation removes the old source path and adds the new destination path.
-            if moved_files:
-                all_data.update_paths(moved_files)
-
-            # Next, handle the removal of files that were deleted but not moved.
-            # These are files that were duplicates of the --compare manifest.
-            # We must not try to re-process files that were already handled by update_paths.
-            # Convert to sets for robust duplicate handling and efficient subtraction.
-            moved_source_paths = {src for src, _ in moved_files}
-            all_deleted_paths = set(deleted_files)
-
-            files_to_remove_only = list(all_deleted_paths - moved_source_paths)
-
-            if files_to_remove_only:
-                all_data.remove_files(files_to_remove_only)
-
-        if manifest_out_path and not dry_run:
-            progress_queue.put(
-                (HIGH_PRIORITY, "message", "Saving complete manifest after copy")
-            )
-            all_data.save(path=manifest_out_path, no_walk=True)
-    else:
-        # If not deleting or copying, save the manifest if a path is provided
-        if manifest_out_path and not dry_run:
-            progress_queue.put(
-                (HIGH_PRIORITY, "message", "Saving complete manifest from search")
-            )
-            all_data.save(path=manifest_out_path, no_walk=no_walk)
-    all_stop.set()
-    while progress_thread.is_alive():
-        progress_thread.join(5)
+        else:
+            # If not deleting or copying, save the manifest if a path is provided
+            if manifest_out_path and not dry_run:
+                progress_queue.put(
+                    (HIGH_PRIORITY, "message", "Saving complete manifest from search")
+                )
+                all_data.save(path=manifest_out_path, no_walk=no_walk)
+        all_stop.set()
+        while progress_thread.is_alive():
+            progress_thread.join(5)
+    finally:
+        if ui:
+            ui.stop()
     manifest.close()
     compare.close()
     collisions.close()

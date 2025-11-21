@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "DedupeCopy"
-version = "1.1.9"
+version = "1.2.0"
 description = "Find duplicates / copy and restructure file layout command-line tool"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -42,6 +42,10 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Utilities",
     "Topic :: System :: Filesystems",
+]
+
+dependencies = [
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]

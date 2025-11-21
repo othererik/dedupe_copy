@@ -20,6 +20,9 @@ A multi-threaded command-line tool for finding duplicate files and copying/restr
 - [Troubleshooting](#troubleshooting)
 - [Safety and Best Practices](#safety-and-best-practices)
 
+> [!WARNING]
+> **Security Notice**: DedupeCopy uses Python's `pickle` module for serializing manifest files. **Do not load manifest files from untrusted sources**, as this could lead to arbitrary code execution. Only use manifests that you have generated yourself or obtained from a trusted source.
+
 ## Overview
 
 DedupeCopy is designed for consolidating and restructuring sprawling file systems, particularly useful for:

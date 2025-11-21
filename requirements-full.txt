@@ -13,3 +13,4 @@ types-colorama
 pandas-stubs
 matplotlib
 coverage
+rich

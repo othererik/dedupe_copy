@@ -269,6 +269,21 @@ def _create_parser():
         default=False,
     )
 
+    output_group.add_argument(
+        "--ui",
+        help="Enable rich UI (default if TTY)",
+        action="store_true",
+        default=None,
+        dest="use_ui",
+    )
+    output_group.add_argument(
+        "--no-ui",
+        help="Disable rich UI",
+        action="store_false",
+        dest="use_ui",
+    )
+    parser.set_defaults(use_ui=sys.stdout.isatty())
+
     group = parser.add_argument_group("Path conversion")
     group.add_argument(
         "--convert-manifest-paths-from",
@@ -328,6 +343,7 @@ def _handle_arguments(args):
         "dry_run": args.dry_run,
         "min_delete_size": args.min_delete_size,
         "verify_manifest": args.verify,
+        "use_ui": args.use_ui,
     }
 
 
