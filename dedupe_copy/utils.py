@@ -66,6 +66,7 @@ def format_error_message(path: str, error: Union[str, Exception]) -> str:
     elif isinstance(error, FileNotFoundError) or "No such file" in error_str:
         suggestions.append("File may have been deleted during processing")
         suggestions.append("Check if path is on a network share that disconnected")
+        suggestions.append("Check if path is a broken symbolic link")
     elif isinstance(error, OSError) and "Errno 28" in error_str:  # No space left
         suggestions.append("Destination disk is full")
         suggestions.append("Free up space or choose a different destination")

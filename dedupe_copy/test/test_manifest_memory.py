@@ -18,7 +18,7 @@ class TestManifestMemory(unittest.TestCase):
         shutil.rmtree(self.temp_dir)
 
     def test_populate_read_sources_memory_efficient(self):
-        """Verify that _populate_read_sources works correctly without loading 
+        """Verify that _populate_read_sources works correctly without loading
         everything into memory."""
         manifest = Manifest(
             None, save_path=self.manifest_path, temp_directory=self.temp_dir

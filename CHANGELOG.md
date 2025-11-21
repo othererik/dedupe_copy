@@ -1,7 +1,7 @@
 # Changelog
 
 
-## [1.2.0] - 2025-11-20
+## [1.2.0] - 2025-11-21
 - Memory improvement
 - Improved UI experience
 
