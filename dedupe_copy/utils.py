@@ -158,12 +158,13 @@ def match_extension(extensions: Optional[List[str]], fn: str) -> bool:
     """
     if not extensions:
         return True
+    fn_lower = fn.lower()
     for included_pattern in extensions:
         # first look for an exact match
-        if fn.lower().endswith(included_pattern):
+        if fn_lower.endswith(included_pattern):
             return True
         # now try a pattern match
-        if fnmatch.fnmatch(fn.lower(), included_pattern):
+        if fnmatch.fnmatch(fn_lower, included_pattern):
             return True
     return False
 
