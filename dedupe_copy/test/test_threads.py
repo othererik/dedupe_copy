@@ -9,6 +9,7 @@ and various threading scenarios.
 import unittest
 import queue
 import threading
+import re
 from unittest.mock import MagicMock, patch
 from dedupe_copy.threads import (
     DeleteThread,
@@ -33,6 +34,7 @@ class TestIsFileProcessingRequired(unittest.TestCase):
         extensions = None
         progress_queue = queue.PriorityQueue()
 
+        # Test with fallback loop (no regex)
         result = _is_file_processing_required(
             filepath, already_processed, ignore, extensions, progress_queue
         )
@@ -41,6 +43,29 @@ class TestIsFileProcessingRequired(unittest.TestCase):
         self.assertFalse(progress_queue.empty())
         item = progress_queue.get()
         self.assertEqual(item[1], "ignored")
+
+    def test_ignored_with_regex(self):
+        """Test that ignored files are properly handled using regex optimization."""
+        filepath = "/tmp/some/file.txt"
+        already_processed = set()
+        ignore = ["*.txt"]
+        extensions = None
+        progress_queue = queue.PriorityQueue()
+
+        # Pre-compile regex as WalkConfig would
+        import fnmatch, os
+        p = fnmatch.translate(os.path.normcase("*.txt"))
+        regex = re.compile(p)
+
+        result = _is_file_processing_required(
+            filepath, already_processed, ignore, extensions, progress_queue, ignore_regex=regex
+        )
+
+        self.assertFalse(result)
+        self.assertFalse(progress_queue.empty())
+        item = progress_queue.get()
+        self.assertEqual(item[1], "ignored")
+        self.assertEqual(item[3], "*.txt") # Should identify the specific pattern
 
 
 class TestResultProcessor(unittest.TestCase):
