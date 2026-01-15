@@ -753,19 +753,18 @@ def verify_manifest_fs(manifest: Manifest, ui: Optional[ConsoleUI] = None) -> bo
                 if not os.path.exists(file_path):
                     logger.error("VERIFY FAILED: File not found: %s", file_path)
                     error_count += 1
-                    continue
-
-                actual_size = os.path.getsize(file_path)
-                if actual_size != expected_size:
-                    logger.error(
-                        "VERIFY FAILED: Size mismatch for %s: expected %d, got %d",
-                        file_path,
-                        expected_size,
-                        actual_size,
-                    )
-                    error_count += 1
                 else:
-                    verified_count += 1
+                    actual_size = os.path.getsize(file_path)
+                    if actual_size != expected_size:
+                        logger.error(
+                            "VERIFY FAILED: Size mismatch for %s: expected %d, got %d",
+                            file_path,
+                            expected_size,
+                            actual_size,
+                        )
+                        error_count += 1
+                    else:
+                        verified_count += 1
             except OSError as e:
                 logger.error("VERIFY FAILED: Could not access %s: %s", file_path, e)
                 error_count += 1
