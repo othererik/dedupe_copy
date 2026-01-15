@@ -9,6 +9,7 @@ import queue
 import shutil
 import threading
 import time
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
@@ -49,6 +50,7 @@ def _is_file_processing_required(
     ignore: Optional[List[str]],
     extensions: Optional[List[str]],
     progress_queue: Optional["queue.PriorityQueue[Any]"],
+    ignore_regex: Optional[re.Pattern] = None,
 ) -> bool:
     """Determines if a file should be processed based on various criteria.
 
@@ -62,13 +64,19 @@ def _is_file_processing_required(
         ignore: A list of glob patterns for files to ignore.
         extensions: A list of allowed file extensions.
         progress_queue: An optional queue for reporting progress.
+        ignore_regex: An optional compiled regex for ignore patterns.
 
     Returns:
         True if the file should be processed, False otherwise.
     """
     if filepath in already_processed:
         return False
-    if ignore:
+
+    is_ignored = False
+    if ignore_regex:
+        if ignore_regex.match(os.path.normcase(filepath)):
+            is_ignored = True
+    elif ignore:
         for ignored_pattern in ignore:
             if fnmatch.fnmatch(filepath, ignored_pattern):
                 if progress_queue:
@@ -76,6 +84,19 @@ def _is_file_processing_required(
                         (HIGH_PRIORITY, "ignored", filepath, ignored_pattern)
                     )
                 return False
+
+    if is_ignored and ignore:
+        # Fallback to loop only to find specific pattern for logging
+        for ignored_pattern in ignore:
+            if fnmatch.fnmatch(filepath, ignored_pattern):
+                if progress_queue:
+                    progress_queue.put(
+                        (HIGH_PRIORITY, "ignored", filepath, ignored_pattern)
+                    )
+                return False
+        # Should technically be unreachable if regex matched, but as a safeguard
+        return False
+
     if extensions:
         if not match_extension(extensions, filepath):
             return False
@@ -93,7 +114,18 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
         src: The directory path to scan.
         config: The configuration for the work distribution.
     """
-    if config.walk_config.ignore:
+    if config.walk_config.ignore_regex:
+        if config.walk_config.ignore_regex.match(os.path.normcase(src)):
+            if config.walk_config.ignore and config.progress_queue:
+                # Find specific pattern for logging
+                for ignored_pattern in config.walk_config.ignore:
+                    if fnmatch.fnmatch(src, ignored_pattern):
+                        config.progress_queue.put(
+                            (HIGH_PRIORITY, "ignored", src, ignored_pattern)
+                        )
+                        break
+            return
+    elif config.walk_config.ignore:
         for ignored_pattern in config.walk_config.ignore:
             if fnmatch.fnmatch(src, ignored_pattern):
                 if config.progress_queue:
@@ -101,7 +133,15 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
                         (HIGH_PRIORITY, "ignored", src, ignored_pattern)
                     )
                 return
-    for item in os.listdir(src):
+
+    try:
+        items = os.listdir(src)
+    except OSError as e:
+        if config.progress_queue:
+            config.progress_queue.put((MEDIUM_PRIORITY, "error", src, e))
+        return
+
+    for item in items:
         fn = os.path.join(src, item)
         if os.path.isdir(fn):
             if config.progress_queue:
@@ -118,6 +158,7 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
             config.walk_config.ignore,
             config.walk_config.extensions,
             config.progress_queue,
+            config.walk_config.ignore_regex,
         ):
             _throttle_puts(config.work_queue.qsize())
             config.work_queue.put(fn)
