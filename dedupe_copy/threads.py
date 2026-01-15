@@ -772,6 +772,29 @@ class ProgressThread(threading.Thread):
         else:
             logger.info(message)
 
+    def do_log_set_total(self, task_type: str, total: int) -> None:
+        """Set the total for a specific task type."""
+        if not self.ui:
+            return
+
+        if task_type == "copy":
+            if self.copy_task_id is None:
+                self.copy_task_id = self.ui.add_task("Copying files...", total=total)
+            else:
+                self.ui.update_task("Copying files...", total=total)
+        elif task_type == "delete":
+            if self.delete_task_id is None:
+                self.delete_task_id = self.ui.add_task("Deleting files...", total=total)
+            else:
+                self.ui.update_task("Deleting files...", total=total)
+        elif task_type == "walk":
+            if self.walk_task_id is None:
+                self.walk_task_id = self.ui.add_task(
+                    "Walking filesystem...", total=total
+                )
+            else:
+                self.ui.update_task("Walking filesystem...", total=total)
+
     def run(self) -> None:
         """The main execution loop for the thread.
 

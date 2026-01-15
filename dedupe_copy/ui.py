@@ -50,6 +50,12 @@ class ConsoleUI:
         for handler in root_logger.handlers[:]:
             root_logger.removeHandler(handler)
 
+        # Also clear dedupe_copy specific logger to ensure we use valid handlers
+        dedupe_logger = logging.getLogger("dedupe_copy")
+        for handler in dedupe_logger.handlers[:]:
+            dedupe_logger.removeHandler(handler)
+        dedupe_logger.propagate = True
+
         # Add RichHandler
         handler = RichHandler(console=self.console, rich_tracebacks=True, markup=True)
         handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
@@ -73,12 +79,19 @@ class ConsoleUI:
         return task_id
 
     def update_task(
-        self, name: str, advance: float = 1, description: Optional[str] = None
+        self,
+        name: str,
+        advance: float = 1,
+        description: Optional[str] = None,
+        total: Optional[float] = None,
     ):
         """Update a task's progress."""
         if name in self.tasks:
             self.progress.update(
-                self.tasks[name], advance=advance, description=description
+                self.tasks[name],
+                advance=advance,
+                description=description,
+                total=total,
             )
 
     def log(self, message: str, level: str = "info"):
