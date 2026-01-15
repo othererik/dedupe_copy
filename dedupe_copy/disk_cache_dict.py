@@ -237,14 +237,13 @@ class SqliteBackend:
                 for x in self.conn.execute(f"select value from {self.table};")
             ]
 
-    def items(self) -> List[Tuple[Any, Any]]:
-        """Return a list of all key-value pairs in the dictionary."""
+    def items(self) -> Iterator[Tuple[Any, Any]]:
+        """Return an iterator of all key-value pairs in the dictionary."""
         with self._lock:
             self._commit_batch()  # Ensure batch is written before reading
-            return [
-                (self._load(items[0]), self._load(items[1]))
-                for items in self.conn.execute(f"select key,value from {self.table};")
-            ]
+            cursor = self.conn.execute(f"select key,value from {self.table};")
+            for row in cursor:
+                yield (self._load(row[0]), self._load(row[1]))
 
     def update_batch(self, data: Dict[Any, Any]) -> None:
         """Efficiently updates the database with a batch of data using INSERT OR REPLACE.

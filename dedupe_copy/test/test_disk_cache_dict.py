@@ -526,7 +526,7 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
             backend["key2"] = "value2"
 
             # Get items
-            items = backend.items()
+            items = list(backend.items())
 
             self.assertEqual(len(items), 2)
             self.assertIn(("key1", "value1"), items)
