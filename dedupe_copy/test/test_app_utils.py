@@ -76,12 +76,12 @@ class TestAppUtils(unittest.TestCase):
         # Test basic cleaning and normalization
         ext_list1 = [".jpg", "png", " .gif ", "mov", "."]
         cleaned1 = clean_extensions(ext_list1)
-        self.assertEqual(cleaned1, ["*.jpg", "*.png", "*.gif", "*.mov", "*."])
+        self.assertEqual(cleaned1, [".jpg", ".png", ".gif", ".mov", "."])
 
         # Test with already wildcarded extensions
         ext_list2 = ["*.jpeg", "mp3"]
         cleaned2 = clean_extensions(ext_list2)
-        self.assertEqual(cleaned2, ["*.jpeg", "*.mp3"])
+        self.assertEqual(cleaned2, ["*.jpeg", ".mp3"])
 
         # Test with empty list
         self.assertEqual(clean_extensions([]), [])
@@ -92,12 +92,12 @@ class TestAppUtils(unittest.TestCase):
         # Test with mixed cases and spaces
         ext_list3 = ["  .TXT", "JPEG  ", "PnG", ".mp3"]
         cleaned3 = clean_extensions(ext_list3)
-        self.assertEqual(cleaned3, ["*.txt", "*.jpeg", "*.png", "*.mp3"])
+        self.assertEqual(cleaned3, [".txt", ".jpeg", ".png", ".mp3"])
 
         # Test with a single dot and other extensions
         ext_list4 = [".", "txt"]
         cleaned4 = clean_extensions(ext_list4)
-        self.assertEqual(cleaned4, ["*.", "*.txt"])
+        self.assertEqual(cleaned4, [".", ".txt"])
 
 
 if __name__ == "__main__":

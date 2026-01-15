@@ -173,8 +173,8 @@ def clean_extensions(extensions: Optional[List[str]]) -> List[str]:
     """Normalizes a list of file extensions into a consistent format.
 
     This function processes a list of extension strings, converting them to
-    lowercase and ensuring they are in a wildcard format suitable for use
-    with `fnmatch`.
+    lowercase and ensuring they are in a format suitable for use with
+    `match_extension` (either simple suffixes or wildcard patterns).
 
     Args:
         extensions: A list of file extension strings to be cleaned.
@@ -187,11 +187,17 @@ def clean_extensions(extensions: Optional[List[str]]) -> List[str]:
         for ext in extensions:
             ext = ext.strip().lower()
             if ext == ".":
-                clean.append("*.")
+                clean.append(".")
             elif ext.startswith("*"):
                 clean.append(ext)
             elif ext.startswith("."):
-                clean.append(f"*{ext}")
+                if any(c in ext for c in "*?[]"):
+                    clean.append(f"*{ext}")
+                else:
+                    clean.append(ext)
             else:
-                clean.append(f"*.{ext}")
+                if any(c in ext for c in "*?[]"):
+                    clean.append(f"*.{ext}")
+                else:
+                    clean.append(f".{ext}")
     return clean
