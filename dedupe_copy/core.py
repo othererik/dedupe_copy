@@ -1105,14 +1105,17 @@ def run_dupe_copy(
     finally:
         if ui:
             ui.stop()
-    manifest.close()
-    compare.close()
-    collisions.close()
-    try:
-        shutil.rmtree(temp_directory)
-    except OSError as err:
-        logger.warning(
-            "Failed to cleanup the collisions file: %s with err: %s",
-            collisions_file,
-            err,
-        )
+        if manifest:
+            manifest.close()
+        if compare:
+            compare.close()
+        if collisions:
+            collisions.close()
+        try:
+            shutil.rmtree(temp_directory)
+        except OSError as err:
+            logger.warning(
+                "Failed to cleanup the temp_directory: %s with err: %s",
+                temp_directory,
+                err,
+            )

@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.2.1] - 2026-01-15
+- Performance improvements
+- Thread safety fix for CacheDict usage
+- Improved user feedback
+
 
 ## [1.2.0] - 2025-11-21
 - Memory improvement
