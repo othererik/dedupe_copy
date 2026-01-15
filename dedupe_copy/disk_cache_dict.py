@@ -424,6 +424,7 @@ class CacheDict(collections.abc.MutableMapping):
             current_dictionary: An optional dictionary to pre-populate the
                                 CacheDict.
         """
+        self._lock = threading.RLock()
         self._evict_lock_held = False
         self._cache: Dict[Any, Any] = {}
         self._db_file = db_file
@@ -440,8 +441,6 @@ class CacheDict(collections.abc.MutableMapping):
         if current_dictionary:
             for key, value in current_dictionary.items():
                 self[key] = value
-
-        self._lock = threading.RLock()
 
     def clear(self) -> None:
         """Remove all items from the dictionary."""
