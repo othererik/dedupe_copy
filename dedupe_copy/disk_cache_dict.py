@@ -164,48 +164,61 @@ class SqliteBackend:
     @staticmethod
     def _dump(value: Any, version: int = -1) -> bytes:
         """Serialize value for storage in the database."""
-        # pylint: disable=too-many-return-statements
-        # Fast path for primitive types - avoid pickle overhead
-        if isinstance(value, str):
-            return sqlite3.Binary(b"S" + value.encode("utf-8"))
-        if isinstance(value, bool):
-            return sqlite3.Binary(b"B" + (b"1" if value else b"0"))
-        if isinstance(value, int):
-            return sqlite3.Binary(b"I" + str(value).encode("utf-8"))
-        if isinstance(value, float):
-            return sqlite3.Binary(b"F" + str(value).encode("utf-8"))
-        if isinstance(value, bool):
-            return sqlite3.Binary(b"B" + (b"1" if value else b"0"))
         if value is None:
             return sqlite3.Binary(b"N")
-        # Fall back to pickle for complex types
-        return sqlite3.Binary(b"P" + pickle.dumps(value, version))
 
-    # pylint: disable=too-many-return-statements
+        match value:
+            case str():
+                prefix = b"S"
+                # Encode without pickling
+                content = value.encode("utf-8")
+            case bool():
+                prefix = b"B"
+                content = b"1" if value else b"0"
+            case int():
+                prefix = b"I"
+                content = str(value).encode("utf-8")
+            case float():
+                prefix = b"F"
+                content = str(value).encode("utf-8")
+            case _:
+                prefix = b"P"
+                content = pickle.dumps(value, version)
+
+        return sqlite3.Binary(prefix + content)
+
     @staticmethod
     def _load(value: bytes) -> Any:
         """Inverse of _dump."""
         value_bytes = bytes(value)
         if not value_bytes:
             return None
+
         # Check type marker
         type_marker = value_bytes[0:1]
-        if type_marker == b"S":
-            return value_bytes[1:].decode("utf-8")
-        if type_marker == b"I":
-            return int(value_bytes[1:].decode("utf-8"))
-        if type_marker == b"B":
-            return value_bytes[1:] == b"1"
-        if type_marker == b"F":
-            return float(value_bytes[1:].decode("utf-8"))
-        if type_marker == b"X":
-            return value_bytes[1:] == b"1"
-        if type_marker == b"N":
-            return None
-        if type_marker == b"P":
-            return pickle.loads(value_bytes[1:])
-        # Legacy: no type marker, assume pickle
-        return pickle.loads(value_bytes)
+        content = value_bytes[1:]
+        result: Any = None
+
+        match type_marker:
+            case b"S":
+                result = content.decode("utf-8")
+            case b"I":
+                result = int(content.decode("utf-8"))
+            case b"B":
+                result = content == b"1"
+            case b"F":
+                result = float(content.decode("utf-8"))
+            case b"X":
+                result = content == b"1"
+            case b"N":
+                result = None
+            case b"P":
+                result = pickle.loads(content)
+            case _:
+                # Legacy: no type marker, assume pickle
+                result = pickle.loads(value_bytes)
+
+        return result
 
     def _insert(self, key: Any, value: Any) -> None:
         """Assumes lock is held."""
