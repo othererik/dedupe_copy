@@ -9,7 +9,17 @@ import shutil
 import tempfile
 import threading
 from collections import Counter
-from typing import Any, Callable, Iterator, List, Literal, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    TYPE_CHECKING,
+)
 
 from .config import CopyConfig, CopyJob, WalkConfig, DeleteJob
 from .disk_cache_dict import DefaultCacheDict
@@ -29,6 +39,9 @@ from .ui import ConsoleUI
 from .utils import _throttle_puts, ensure_logging_configured, lower_extension
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from rich.progress import TaskID
 
 
 # pylint: disable=too-many-lines
@@ -345,6 +358,40 @@ def _drain_queue(q: queue.Queue) -> list:
     return items
 
 
+def _count_files_to_copy_progress(
+    all_data: Any,
+    *,
+    copy_job: "CopyJob",
+    initial_hashes_to_skip: set,
+) -> int:
+    """Helper to count files to copy for progress bar."""
+    total_to_copy = 0
+    temp_hashes_to_skip = initial_hashes_to_skip.copy()
+
+    # We need to iterate over the data to count, but we must be careful
+    # not to modify the actual hashes_to_skip set used for the real copy loop.
+    # This mirrors the logic in the copy loop.
+    for md5, path, _, size in info_parser(all_data):
+        if md5 in temp_hashes_to_skip:
+            continue
+
+        if copy_job.ignore:
+            # Check ignored patterns
+            is_ignored = False
+            for ignored_pattern in copy_job.ignore:
+                if fnmatch.fnmatch(path, ignored_pattern):
+                    is_ignored = True
+                    break
+            if is_ignored:
+                continue
+
+        # If we reach here, it's a file we would try to copy
+        if not (size == 0 and not copy_job.dedupe_empty):
+            temp_hashes_to_skip.add(md5)
+        total_to_copy += 1
+    return total_to_copy
+
+
 def copy_data(
     all_data: Any,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
@@ -404,6 +451,21 @@ def copy_data(
         copy_workers.append(c)
         c.start()
     if progress_queue:
+        # Pre-calculate total items to copy for progress bar
+        total_to_copy = _count_files_to_copy_progress(
+            all_data,
+            copy_job=copy_job,
+            initial_hashes_to_skip=hashes_to_skip,
+        )
+
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
+                "set_total",
+                "copy",
+                total_to_copy,
+            )
+        )
         progress_queue.put(
             (
                 HIGH_PRIORITY,
@@ -611,6 +673,14 @@ def delete_files(
         progress_queue.put(
             (
                 HIGH_PRIORITY,
+                "set_total",
+                "delete",
+                files_to_delete_count,
+            )
+        )
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
                 "message",
                 f"Starting {delete_job.delete_threads} delete workers",
             )
@@ -646,17 +716,26 @@ def delete_files(
     return successfully_deleted_files
 
 
-def verify_manifest_fs(manifest: Manifest) -> bool:
+def verify_manifest_fs(manifest: Manifest, ui: Optional[ConsoleUI] = None) -> bool:
     """
     Verifies that files in the manifest exist and their sizes match.
 
     Args:
         manifest: The Manifest object to verify.
+        ui: Optional ConsoleUI for progress reporting.
 
     Returns:
         True if all files are verified successfully, False otherwise.
     """
     logger.info("Starting manifest verification for %d hashes...", len(manifest))
+    verified_count = 0
+    error_count = 0
+
+    task_id: Optional["TaskID"] = None
+    if ui:
+        task_id = ui.add_task(
+            "Verifying manifest...", total=sum(len(v) for _, v in manifest.items())
+        )
     verified_count = 0
     error_count = 0
 
@@ -682,6 +761,8 @@ def verify_manifest_fs(manifest: Manifest) -> bool:
             except OSError as e:
                 logger.error("VERIFY FAILED: Could not access %s: %s", file_path, e)
                 error_count += 1
+            if ui and task_id is not None:
+                ui.update_task("Verifying manifest...", advance=1)
 
     total_files = verified_count + error_count
     logger.info(
@@ -852,8 +933,15 @@ def run_dupe_copy(
     )
     compare = Manifest(compare_manifests, save_path=None, temp_directory=temp_directory)
 
+    ui: Optional[ConsoleUI] = None
+    if use_ui:
+        ui = ConsoleUI()
+        ui.start()
+
     if verify_manifest:
-        verify_manifest_fs(manifest)
+        verify_manifest_fs(manifest, ui=ui)
+        if ui:
+            ui.stop()
         manifest.close()
         try:
             shutil.rmtree(temp_directory)
@@ -884,10 +972,7 @@ def run_dupe_copy(
     progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
     walk_queue: "queue.Queue[str]" = queue.Queue()
 
-    ui: Optional[ConsoleUI] = None
-    if use_ui:
-        ui = ConsoleUI()
-        ui.start()
+    # ui initialized above
 
     try:
         progress_thread = ProgressThread(
