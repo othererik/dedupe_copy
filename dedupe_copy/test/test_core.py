@@ -5,9 +5,11 @@ import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
+import queue
 
-from dedupe_copy.core import info_parser, run_dupe_copy
+from dedupe_copy.core import info_parser, run_dupe_copy, copy_data
 from dedupe_copy.manifest import Manifest
+from dedupe_copy.config import CopyConfig, CopyJob
 
 
 class TestInfoParser(unittest.TestCase):
@@ -234,8 +236,7 @@ class TestCopyDataRobustness(unittest.TestCase):
                 return {f"hash_{i}" for i in range(moved_file_count, total_files)}
 
         # Create the configuration for the copy job
-        # pylint: disable=bad-option-value, import-outside-toplevel
-        from dedupe_copy.config import CopyConfig, CopyJob
+        # pylint: disable=bad-option-value
 
         copy_config = CopyConfig(
             target_path=dest_dir,
@@ -278,9 +279,6 @@ class TestCopyDataRobustness(unittest.TestCase):
         ):
             # 3. Execute the function under test
             # pylint: disable=import-outside-toplevel
-            from dedupe_copy.core import copy_data
-            import queue
-
             progress_queue = queue.PriorityQueue()
             all_deleted_files, moved_files = copy_data(
                 all_data, progress_queue, copy_job=copy_job
@@ -304,3 +302,56 @@ class TestCopyDataRobustness(unittest.TestCase):
             f"Should have drained all {total_deleted_count} deleted files, "
             f"but got {len(all_deleted_files)}.",
         )
+
+    def test_copy_data_with_ignore_patterns(self):
+        """Verify copy_data correctly skips files matching ignore patterns."""
+        # 1. Setup: Create files and test data
+        src_dir = os.path.join(self.temp_dir, "src")
+        dest_dir = os.path.join(self.temp_dir, "dest")
+        os.makedirs(src_dir)
+        os.makedirs(dest_dir)
+
+        # Create 3 files: normal, ignored_by_regex, ignored_by_list
+        files = {
+            "normal.txt": "content1",
+            "ignore_me.log": "content2",
+            "skip.tmp": "content3",
+        }
+
+        all_data = {}
+        for name, content in files.items():
+            path = os.path.join(src_dir, name)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            # Checksum doesn't matter much here
+            all_data[f"hash_{name}"] = [[path, len(content), 1.0]]
+
+        # 2. Config with ignore patterns
+
+        copy_config = CopyConfig(
+            target_path=dest_dir,
+            read_paths=[src_dir],
+            dry_run=False,
+        )
+        # Setup ignore patterns that will be compiled into regex inside CopyJob/core
+        ignored_patterns = ["*.log", "*.tmp"]
+
+        copy_job = CopyJob(
+            copy_config=copy_config,
+            ignore=ignored_patterns,  # This triggers the regex generation logic in core
+            copy_threads=1,
+            dry_run=False,
+        )
+
+        # 3. Execute
+
+        progress_queue = queue.PriorityQueue()
+
+        copy_data(all_data, progress_queue, copy_job=copy_job)
+
+        # 4. Assert
+        # normal.txt should be copied
+        self.assertTrue(os.path.exists(os.path.join(dest_dir, "normal.txt")))
+        # ignore_me.log and skip.tmp should NOT be copied
+        self.assertFalse(os.path.exists(os.path.join(dest_dir, "ignore_me.log")))
+        self.assertFalse(os.path.exists(os.path.join(dest_dir, "skip.tmp")))

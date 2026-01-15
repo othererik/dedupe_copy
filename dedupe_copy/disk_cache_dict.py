@@ -239,12 +239,16 @@ class SqliteBackend:
 
     def items(self) -> List[Tuple[Any, Any]]:
         """Return a list of all key-value pairs in the dictionary."""
+        return list(self.iter_items())
+
+    def iter_items(self) -> Iterator[Tuple[Any, Any]]:
+        """Yield key-value pairs from the dictionary."""
         with self._lock:
             self._commit_batch()  # Ensure batch is written before reading
-            return [
-                (self._load(items[0]), self._load(items[1]))
-                for items in self.conn.execute(f"select key,value from {self.table};")
-            ]
+            cursor = self.conn.execute(f"select key,value from {self.table};")
+
+        for items in cursor:
+            yield (self._load(items[0]), self._load(items[1]))
 
     def update_batch(self, data: Dict[Any, Any]) -> None:
         """Efficiently updates the database with a batch of data using INSERT OR REPLACE.
@@ -420,6 +424,7 @@ class CacheDict(collections.abc.MutableMapping):
             current_dictionary: An optional dictionary to pre-populate the
                                 CacheDict.
         """
+        self._lock = threading.RLock()
         self._evict_lock_held = False
         self._cache: Dict[Any, Any] = {}
         self._db_file = db_file
@@ -439,61 +444,68 @@ class CacheDict(collections.abc.MutableMapping):
 
     def clear(self) -> None:
         """Remove all items from the dictionary."""
-        self._cache.clear()
-        if self.lru and self._key_order is not None:
-            self._key_order.clear()
-        if hasattr(self._db, "clear"):
-            self._db.clear()
-        else:
-            # Fallback for backends that don't support clear()
-            # This is slow but correct
-            for key in list(self._db.keys()):
-                del self._db[key]
+        with self._lock:
+            self._cache.clear()
+            if self.lru and self._key_order is not None:
+                self._key_order.clear()
+            if hasattr(self._db, "clear"):
+                self._db.clear()
+            else:
+                # Fallback for backends that don't support clear()
+                # This is slow but correct
+                for key in list(self._db.keys()):
+                    del self._db[key]
 
     def __contains__(self, key: Any) -> bool:
         """Check for existence in local cache, fall back to db.
 
         Note: Currently, checking existence will fault the item into cache if found in db.
         """
-        local = key in self._cache
-        if not local:
-            return key in self._db
-        return local
+        with self._lock:
+            local = key in self._cache
+            if not local:
+                return key in self._db
+            return local
 
     def __len__(self) -> int:
         """Sum the len of every mapping"""
-        return len(self._cache) + len(self._db)
+        with self._lock:
+            return len(self._cache) + len(self._db)
 
     def __iter__(self) -> Iterator[Any]:
         """Get the keys from local and the db"""
         # this method must account for items faulting in and out of cache
         # in the iteritems case. While iterating, the cache is frozen.
-        try:
-            self._evict_lock_held = True
-            yield from self._cache
-            yield from self._db
-        finally:
-            self._evict_lock_held = False
+        with self._lock:
+            try:
+                self._evict_lock_held = True
+                # Yield from cache first
+                yield from self._cache
+                # Then yield from db
+                yield from self._db
+            finally:
+                self._evict_lock_held = False
 
     def __getitem__(self, key: Any) -> Any:
         """Returns the stored item at key from a sub mapping or
         raises KeyError"""
-        value = None
-        if key in self._cache:
-            value = self._cache[key]
-        else:
-            # no fault if we can't evict
-            if self._evict_lock_held:
-                return self._db[key]
-
-            value = self._fault(key)
-        if self.lru and self._key_order is not None:
-            # O(1) operation - track access order
-            if key in self._key_order:
-                self._key_order.move_to_end(key, last=True)
+        with self._lock:
+            value = None
+            if key in self._cache:
+                value = self._cache[key]
             else:
-                self._key_order[key] = None
-        return value
+                # no fault if we can't evict
+                if self._evict_lock_held:
+                    return self._db[key]
+
+                value = self._fault(key)
+            if self.lru and self._key_order is not None:
+                # O(1) operation - track access order
+                if key in self._key_order:
+                    self._key_order.move_to_end(key, last=True)
+                else:
+                    self._key_order[key] = None
+            return value
 
     # the type here is not ItemsView - may look into aligning
     # with parent class at a later date
@@ -503,51 +515,57 @@ class CacheDict(collections.abc.MutableMapping):
         This is a non-destructive iterator. It will not fault items
         into the cache.
         """
-        # First, yield all items from the in-memory cache.
-        yield from self._cache.items()
+        with self._lock:
+            # First, yield all items from the in-memory cache.
+            yield from self._cache.items()
 
-        # Then, iterate over items in the database backend.
-        # For each item, if its key is NOT already in the cache (which we just yielded),
-        # then yield it. This avoids yielding duplicate keys.
-        # This implementation assumes self._db.items() is an efficient way
-        # to iterate over all items in the backend storage.
-        db_items = self._db.items()
-        for key, value in db_items:
-            if key not in self._cache:
-                yield key, value
+            # Then, iterate over items in the database backend.
+            # For each item, if its key is NOT already in the cache (which we just yielded),
+            # then yield it. This avoids yielding duplicate keys.
+            # We prefer iter_items if available to stream results.
+            if hasattr(self._db, "iter_items"):
+                db_items = self._db.iter_items()
+            else:
+                db_items = self._db.items()
+
+            for key, value in db_items:
+                if key not in self._cache:
+                    yield key, value
 
     def __setitem__(self, key: Any, value: Any) -> None:
         """Put an items into the mappings, if key doesn't exist, create it"""
-        if key not in self._cache and key in self._db:
-            # no fault if we can't evict, just update db
+        with self._lock:
+            if key not in self._cache and key in self._db:
+                # no fault if we can't evict, just update db
+                if self._evict_lock_held:
+                    self._db[key] = value
+                    return
+                # dump the db value and assign in cache
+                del self._db[key]
+            if key not in self._cache:
+                if self._evict_lock_held:
+                    self._db[key] = value
+                else:
+                    self._evict()
+            self._cache[key] = value
             if self._evict_lock_held:
-                self._db[key] = value
                 return
-            # dump the db value and assign in cache
-            del self._db[key]
-        if key not in self._cache:
-            if self._evict_lock_held:
-                self._db[key] = value
-            else:
-                self._evict()
-        self._cache[key] = value
-        if self._evict_lock_held:
-            return
-        if self.lru and self._key_order is not None:
-            # O(1) operation - add if new, or move to end if exists
-            if key in self._key_order:
-                self._key_order.move_to_end(key, last=True)
-            else:
-                self._key_order[key] = None
+            if self.lru and self._key_order is not None:
+                # O(1) operation - add if new, or move to end if exists
+                if key in self._key_order:
+                    self._key_order.move_to_end(key, last=True)
+                else:
+                    self._key_order[key] = None
 
     def __delitem__(self, key: Any) -> None:
         """Remove item, raise KeyError if does not exist"""
-        if key in self._cache:
-            del self._cache[key]
-        else:
-            del self._db[key]
-        if self.lru and self._key_order is not None:
-            self._key_order.pop(key, None)
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
+            else:
+                del self._db[key]
+            if self.lru and self._key_order is not None:
+                self._key_order.pop(key, None)
 
     def _fault(self, key: Any) -> Any:
         """Bring key in from db or raise KeyError, trigger evict if over
@@ -580,9 +598,10 @@ class CacheDict(collections.abc.MutableMapping):
 
     def get(self, key: Any, default: Any = None) -> Any:
         """Get item or default if not found"""
-        if key not in self:
-            return default
-        return self[key]
+        with self._lock:
+            if key not in self:
+                return default
+            return self[key]
 
     def has_key(self, key: Any) -> bool:
         """Check if key exists in the dictionary (deprecated method)."""
@@ -590,22 +609,26 @@ class CacheDict(collections.abc.MutableMapping):
 
     def copy(self, db_file: Optional[str] = None) -> "CacheDict":
         """Returns a dictionary as a shallow from the cache dict"""
-        newcd = CacheDict(
-            max_size=self.max_size, backend=self._db, lru=self.lru, db_file=db_file
-        )
-        newcd.update(self)
-        return newcd
+        with self._lock:
+            newcd = CacheDict(
+                max_size=self.max_size, backend=self._db, lru=self.lru, db_file=db_file
+            )
+            newcd.update(self)
+            return newcd
 
     def fromkeys(
         self, keys: Iterator[Any], default: Any = None, db_file: Optional[str] = None
     ) -> "CacheDict":
         """Create a new CacheDict with keys from iterable and values set to default."""
-        newcd = CacheDict(
-            max_size=self.max_size, backend=self._db, lru=self.lru, db_file=db_file
-        )
-        for key in keys:
-            newcd[key] = default
-        return newcd
+        # This is a class method in dict, but instance method here?
+        # Assuming it creates a new instance.
+        with self._lock:
+            newcd = CacheDict(
+                max_size=self.max_size, backend=self._db, lru=self.lru, db_file=db_file
+            )
+            for key in keys:
+                newcd[key] = default
+            return newcd
 
     def db_file_path(self) -> str:
         """Returns the path to the backend database file.
@@ -622,11 +645,12 @@ class CacheDict(collections.abc.MutableMapping):
             db_file: The path to the database file to load. If None, the
                      current database is reloaded.
         """
-        # clear out local cache so we're correctly in sync
-        self._cache.clear()
-        if self.lru:
-            self._key_order = OrderedDict()
-        self._db.load(db_file=db_file)
+        with self._lock:
+            # clear out local cache so we're correctly in sync
+            self._cache.clear()
+            if self.lru:
+                self._key_order = OrderedDict()
+            self._db.load(db_file=db_file)
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
         """Saves the contents of the cache and backend to a database file.
@@ -638,21 +662,23 @@ class CacheDict(collections.abc.MutableMapping):
             db_file: The path for the new database file.
             remove_old_db: If True, the old database file is removed.
         """
-        # Use the optimized batch update to flush the cache to the backend
-        if self._cache:
-            self._db.update_batch(self._cache)
-            self._cache.clear()
+        with self._lock:
+            # Use the optimized batch update to flush the cache to the backend
+            if self._cache:
+                self._db.update_batch(self._cache)
+                self._cache.clear()
 
-        if self.lru and self._key_order is not None:
-            self._key_order.clear()
+            if self.lru and self._key_order is not None:
+                self._key_order.clear()
 
-        # Now, commit any remaining pending writes in the backend and save.
-        self._db.save(db_file=db_file or self._db_file, remove_old_db=remove_old_db)
+            # Now, commit any remaining pending writes in the backend and save.
+            self._db.save(db_file=db_file or self._db_file, remove_old_db=remove_old_db)
 
     def close(self) -> None:
         """Closes the underlying database connection."""
-        if hasattr(self._db, "close"):
-            self._db.close()
+        with self._lock:
+            if hasattr(self._db, "close"):
+                self._db.close()
 
 
 class DefaultCacheDict(CacheDict):

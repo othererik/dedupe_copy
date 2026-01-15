@@ -4,6 +4,7 @@ import datetime
 import fnmatch
 import logging
 import os
+import re
 import queue
 import shutil
 import tempfile
@@ -385,6 +386,14 @@ def copy_data(
     if no_copy_hashes:
         hashes_to_skip.update(no_copy_hashes)
 
+    # Pre-compile ignore patterns for performance
+    ignore_regex = None
+    if copy_job.ignore:
+        # Normalize patterns to match fnmatch behavior (handles case and slashes)
+        norm_patterns = [os.path.normcase(p) for p in copy_job.ignore]
+        regexes = [fnmatch.translate(p) for p in norm_patterns]
+        ignore_regex = re.compile("|".join(regexes))
+
     if progress_queue:
         progress_queue.put(
             (
@@ -416,11 +425,10 @@ def copy_data(
     for md5, path, mtime, size in info_parser(all_data):
         if md5 not in hashes_to_skip:
             action_required = True
-            if copy_job.ignore:
-                for ignored_pattern in copy_job.ignore:
-                    if fnmatch.fnmatch(path, ignored_pattern):
-                        action_required = False
-                        break
+            if ignore_regex:
+                if ignore_regex.match(os.path.normcase(path)):
+                    action_required = False
+
             if action_required:
                 if not (size == 0 and not copy_job.dedupe_empty):
                     # Add hash to skip set so other files with the same hash are not copied
@@ -1097,14 +1105,17 @@ def run_dupe_copy(
     finally:
         if ui:
             ui.stop()
-    manifest.close()
-    compare.close()
-    collisions.close()
-    try:
-        shutil.rmtree(temp_directory)
-    except OSError as err:
-        logger.warning(
-            "Failed to cleanup the collisions file: %s with err: %s",
-            collisions_file,
-            err,
-        )
+        if manifest:
+            manifest.close()
+        if compare:
+            compare.close()
+        if collisions:
+            collisions.close()
+        try:
+            shutil.rmtree(temp_directory)
+        except OSError as err:
+            logger.warning(
+                "Failed to cleanup the temp_directory: %s with err: %s",
+                temp_directory,
+                err,
+            )

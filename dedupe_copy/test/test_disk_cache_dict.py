@@ -1,5 +1,7 @@
 """Test suite covering the db backed dictionary"""
 
+# pylint: disable=too-many-lines
+
 import collections
 import os
 import random
@@ -176,6 +178,24 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
                 f"Incorrect value for key {key}. Expected: {mirror[key]}, "
                 f"Actual: {value}",
             )
+
+    def test_items_yield_from_cache(self):
+        """Test items() method explicitly yielding from cache."""
+        # Clean state
+        self.dcd.clear()
+
+        # Add items to fill cache but not overflow (size=10)
+        items = {i: f"val_{i}" for i in range(5)}
+        for k, v in items.items():
+            self.dcd[k] = v
+
+        # Verify items are in cache
+        # pylint: disable=protected-access
+        self.assertEqual(len(self.dcd._cache), 5)
+
+        # Iterate and verify
+        yielded_items = dict(self.dcd.items())
+        self.assertEqual(yielded_items, items)
 
     def _populate(self, size=100):
         for i in range(size):
@@ -526,7 +546,7 @@ class DcdActionSuite(  # pylint: disable=too-many-public-methods,too-many-instan
             backend["key2"] = "value2"
 
             # Get items
-            items = backend.items()
+            items = list(backend.items())
 
             self.assertEqual(len(items), 2)
             self.assertIn(("key1", "value1"), items)

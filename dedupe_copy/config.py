@@ -1,6 +1,9 @@
 """Configuration classes for dedupe_copy"""
 
-from dataclasses import dataclass
+import fnmatch
+import os
+import re
+from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
 
 
@@ -14,12 +17,25 @@ class WalkConfig:
         ignore: An optional list of glob patterns to ignore during the walk.
         hash_algo: The hashing algorithm to use for file content.
         dedupe_empty: If True, empty files are included in the walk.
+        ignore_regex: A compiled regex pattern for efficient ignore matching.
     """
 
     extensions: Optional[List[str]] = None
     ignore: Optional[List[str]] = None
     hash_algo: str = "md5"
     dedupe_empty: bool = False
+    ignore_regex: Optional[re.Pattern] = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        """Compiles ignore patterns into a single regex for performance."""
+        if self.ignore:
+            # Normalize patterns (handles case sensitivity on Windows)
+            normalized_patterns = [os.path.normcase(p) for p in self.ignore]
+            # Convert globs to regex patterns
+            regex_patterns = [fnmatch.translate(p) for p in normalized_patterns]
+            # Combine into one regex
+            combined_pattern = "|".join(regex_patterns)
+            self.ignore_regex = re.compile(combined_pattern)
 
 
 @dataclass

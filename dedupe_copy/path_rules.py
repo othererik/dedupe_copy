@@ -75,7 +75,7 @@ def _best_match(extensions: Any, ext: str) -> Optional[str]:
     """Returns the best matching extension_pattern for ext from a list of
     extension patterns or none if no extension applies
     """
-    ext = f"*.{ext}"
+    ext = f".{ext}"
     if ext in extensions:
         return ext
     matches = []

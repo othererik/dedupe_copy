@@ -8,7 +8,7 @@ import logging
 import os
 import random
 import threading
-from typing import Any, List, Optional, Set, Tuple, Union
+from typing import Any, Iterable, Iterator, List, Optional, Set, Tuple, Union
 
 from .disk_cache_dict import CacheDict, DefaultCacheDict
 
@@ -308,11 +308,11 @@ class Manifest:
 
     @staticmethod
     def _combine_manifests(
-        manifests: List[Tuple[Any, Any]], temp_directory: Optional[str]
+        manifests: Iterable[Tuple[Any, Any]], temp_directory: Optional[str]
     ) -> Tuple[Any, Any]:
         """Combine multiple manifest data structures into one.
         Args:
-            manifests: List of (md5_data, read_sources) tuples to combine
+            manifests: Iterable of (md5_data, read_sources) tuples to combine
             temp_directory: The directory to use for temporary files.
         Returns:
             Tuple of (combined_md5_data, combined_read_sources)
@@ -356,38 +356,23 @@ class Manifest:
         # Close existing manifests before replacing them
         self.close()
 
-        # This will become the new manifest data. Start with empty.
+        # Define generator to load manifests one by one
+        def manifest_generator() -> Iterator[Tuple[Any, Any]]:
+            for src in manifests:
+                m, r = self._load_manifest(src)
+                try:
+                    yield m, r
+                finally:
+                    # Ensure the temporary manifest is closed to release file handles
+                    if hasattr(m, "close"):
+                        m.close()
+                    if hasattr(r, "close"):
+                        r.close()
+
+        # Combine using the generator
         self.md5_data, self.read_sources = self._combine_manifests(
-            [], self.temp_directory
+            manifest_generator(), self.temp_directory
         )
-
-        # Iteratively load and combine manifests, closing each one after use.
-        for src in manifests:
-            m, r = self._load_manifest(src)
-            try:
-                for key, files in m.items():
-                    current_files = self.md5_data[key]
-                    # Use a set for faster lookups
-                    existing_files = {tuple(f) for f in current_files}
-                    new_files_added = False
-                    for info in files:
-                        info_tuple = tuple(info)
-                        if info_tuple not in existing_files:
-                            current_files.append(info)
-                            existing_files.add(info_tuple)
-                            new_files_added = True
-
-                    if new_files_added:
-                        self.md5_data[key] = current_files
-
-                for key in r:
-                    self.read_sources[key] = None
-            finally:
-                # Ensure the temporary manifest is closed to release file handles
-                if hasattr(m, "close"):
-                    m.close()
-                if hasattr(r, "close"):
-                    r.close()
 
     def convert_manifest_paths(
         self, paths_from: str, paths_to: str, temp_directory: Optional[str] = None

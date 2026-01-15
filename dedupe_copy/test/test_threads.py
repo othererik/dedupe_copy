@@ -9,6 +9,9 @@ and various threading scenarios.
 import unittest
 import queue
 import threading
+import re
+import fnmatch
+import os
 from unittest.mock import MagicMock, patch
 from dedupe_copy.threads import (
     DeleteThread,
@@ -17,6 +20,8 @@ from dedupe_copy.threads import (
     ResultProcessor,
     WalkThread,
     _is_file_processing_required,
+    distribute_work,
+    DistributeWorkConfig,
 )
 from dedupe_copy.config import WalkConfig
 from dedupe_copy.manifest import Manifest
@@ -33,6 +38,7 @@ class TestIsFileProcessingRequired(unittest.TestCase):
         extensions = None
         progress_queue = queue.PriorityQueue()
 
+        # Test with fallback loop (no regex)
         result = _is_file_processing_required(
             filepath, already_processed, ignore, extensions, progress_queue
         )
@@ -41,6 +47,96 @@ class TestIsFileProcessingRequired(unittest.TestCase):
         self.assertFalse(progress_queue.empty())
         item = progress_queue.get()
         self.assertEqual(item[1], "ignored")
+
+    def test_ignored_with_regex(self):
+        """Test that ignored files are properly handled using regex optimization."""
+        filepath = "/tmp/some/file.txt"
+        already_processed = set()
+        ignore = ["*.txt"]
+        extensions = None
+        progress_queue = queue.PriorityQueue()
+
+        # Pre-compile regex as WalkConfig would
+
+        p = fnmatch.translate(os.path.normcase("*.txt"))
+        regex = re.compile(p)
+
+        result = _is_file_processing_required(
+            filepath,
+            already_processed,
+            ignore,
+            extensions,
+            progress_queue,
+            ignore_regex=regex,
+        )
+
+        self.assertFalse(result)
+        self.assertFalse(progress_queue.empty())
+        item = progress_queue.get()
+        self.assertEqual(item[1], "ignored")
+        self.assertEqual(item[3], "*.txt")  # Should identify the specific pattern
+
+
+class TestDistributeWork(unittest.TestCase):
+    """Test cases for the distribute_work function."""
+
+    def setUp(self):
+        """Set up test environment."""
+        self.src = "/tmp/test"
+        self.progress_queue = queue.PriorityQueue()
+        self.work_queue = queue.Queue()
+        self.walk_queue = queue.Queue()
+        self.already_processed = set()
+
+    @patch("dedupe_copy.threads.os.listdir")
+    @patch("dedupe_copy.threads._check_is_ignored")
+    def test_distribute_work_ignored_directory(self, mock_check_ignored, mock_listdir):
+        """Test distribute_work returns early if directory is ignored (line 129 coverage)."""
+        mock_check_ignored.return_value = True
+
+        # Create a mock config
+        walk_config = MagicMock()
+        walk_config.ignore = ["/tmp/test"]
+        walk_config.ignore_regex = None
+
+        config = DistributeWorkConfig(
+            already_processed=self.already_processed,
+            walk_config=walk_config,
+            progress_queue=self.progress_queue,
+            work_queue=self.work_queue,
+            walk_queue=self.walk_queue,
+        )
+
+        distribute_work(self.src, config)
+
+        # Verify os.listdir was NOT called
+        mock_listdir.assert_not_called()
+
+    @patch("dedupe_copy.threads.os.listdir")
+    @patch("dedupe_copy.threads._check_is_ignored")
+    def test_distribute_work_listdir_oserror(self, mock_check_ignored, mock_listdir):
+        """Test distribute_work handles OSError from listdir (lines 133-136 coverage)."""
+        mock_check_ignored.return_value = False
+        mock_listdir.side_effect = OSError("Access denied")
+
+        # Create a mock config
+        walk_config = MagicMock()
+        config = DistributeWorkConfig(
+            already_processed=self.already_processed,
+            walk_config=walk_config,
+            progress_queue=self.progress_queue,
+            work_queue=self.work_queue,
+            walk_queue=self.walk_queue,
+        )
+
+        distribute_work(self.src, config)
+
+        # Verify error reported to progress queue
+        self.assertFalse(self.progress_queue.empty())
+        _, type_, path, error = self.progress_queue.get()
+        self.assertEqual(type_, "error")
+        self.assertEqual(path, self.src)
+        self.assertIsInstance(error, OSError)
 
 
 class TestResultProcessor(unittest.TestCase):

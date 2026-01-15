@@ -112,16 +112,35 @@ def hash_file(src: str, hash_algo: str = "md5") -> str:
             "xxh64 algorithm requested, but the 'xxhash' library is not installed. "
             "Please install it with 'pip install xxhash'."
         )
+    # Use hashlib.file_digest if available (Python 3.11+)
+    if hasattr(hashlib, "file_digest"):
+        with open(src, "rb") as inhandle:
+            if xxhash and hash_algo == "xxh64":
+                digest = hashlib.file_digest(inhandle, xxhash.xxh64)
+            else:
+                digest = hashlib.file_digest(inhandle, "md5")
+        return digest.hexdigest()
+
+    # Fallback to manual buffering with readinto/memoryview to avoid
+    # allocating new bytes objects for each chunk
     if xxhash and hash_algo == "xxh64":
         checksum = xxhash.xxh64()
     else:
         checksum = hashlib.md5()
 
+    buffer = bytearray(READ_CHUNK)
+    mv = memoryview(buffer)
+
     with open(src, "rb") as inhandle:
-        chunk = inhandle.read(READ_CHUNK)
-        while chunk:
-            checksum.update(chunk)
-            chunk = inhandle.read(READ_CHUNK)
+        while True:
+            # readinto returns number of bytes read
+            n = inhandle.readinto(mv)
+            if not n:
+                break
+            if n < READ_CHUNK:
+                checksum.update(mv[:n])
+            else:
+                checksum.update(mv)
     return checksum.hexdigest()
 
 
@@ -173,8 +192,8 @@ def clean_extensions(extensions: Optional[List[str]]) -> List[str]:
     """Normalizes a list of file extensions into a consistent format.
 
     This function processes a list of extension strings, converting them to
-    lowercase and ensuring they are in a wildcard format suitable for use
-    with `fnmatch`.
+    lowercase and ensuring they are in a format suitable for use with
+    `match_extension` (either simple suffixes or wildcard patterns).
 
     Args:
         extensions: A list of file extension strings to be cleaned.
@@ -187,11 +206,17 @@ def clean_extensions(extensions: Optional[List[str]]) -> List[str]:
         for ext in extensions:
             ext = ext.strip().lower()
             if ext == ".":
-                clean.append("*.")
+                clean.append(".")
             elif ext.startswith("*"):
                 clean.append(ext)
             elif ext.startswith("."):
-                clean.append(f"*{ext}")
+                if any(c in ext for c in "*?[]"):
+                    clean.append(f"*{ext}")
+                else:
+                    clean.append(ext)
             else:
-                clean.append(f"*.{ext}")
+                if any(c in ext for c in "*?[]"):
+                    clean.append(f"*.{ext}")
+                else:
+                    clean.append(f".{ext}")
     return clean
