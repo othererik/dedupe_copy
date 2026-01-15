@@ -1,6 +1,6 @@
 """DedupeCopy - Find duplicates and copy/restructure file layouts."""
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 __author__ = "Erik Schweller"
 __email__ = "othererik@gmail.com"
 
