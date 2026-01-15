@@ -112,16 +112,35 @@ def hash_file(src: str, hash_algo: str = "md5") -> str:
             "xxh64 algorithm requested, but the 'xxhash' library is not installed. "
             "Please install it with 'pip install xxhash'."
         )
+    # Use hashlib.file_digest if available (Python 3.11+)
+    if hasattr(hashlib, "file_digest"):
+        with open(src, "rb") as inhandle:
+            if xxhash and hash_algo == "xxh64":
+                digest = hashlib.file_digest(inhandle, xxhash.xxh64)
+            else:
+                digest = hashlib.file_digest(inhandle, "md5")
+        return digest.hexdigest()
+
+    # Fallback to manual buffering with readinto/memoryview to avoid
+    # allocating new bytes objects for each chunk
     if xxhash and hash_algo == "xxh64":
         checksum = xxhash.xxh64()
     else:
         checksum = hashlib.md5()
 
+    buffer = bytearray(READ_CHUNK)
+    mv = memoryview(buffer)
+
     with open(src, "rb") as inhandle:
-        chunk = inhandle.read(READ_CHUNK)
-        while chunk:
-            checksum.update(chunk)
-            chunk = inhandle.read(READ_CHUNK)
+        while True:
+            # readinto returns number of bytes read
+            n = inhandle.readinto(mv)
+            if not n:
+                break
+            if n < READ_CHUNK:
+                checksum.update(mv[:n])
+            else:
+                checksum.update(mv)
     return checksum.hexdigest()
 
 
