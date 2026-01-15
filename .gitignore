@@ -159,3 +159,4 @@ cython_debug/
 test_file.txt
 dedupe_copy/test/performance_data/
 *.png
+benchmark_temp/
