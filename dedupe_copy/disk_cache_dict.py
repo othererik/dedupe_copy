@@ -237,13 +237,18 @@ class SqliteBackend:
                 for x in self.conn.execute(f"select value from {self.table};")
             ]
 
-    def items(self) -> Iterator[Tuple[Any, Any]]:
-        """Return an iterator of all key-value pairs in the dictionary."""
+    def items(self) -> List[Tuple[Any, Any]]:
+        """Return a list of all key-value pairs in the dictionary."""
+        return list(self.iter_items())
+
+    def iter_items(self) -> Iterator[Tuple[Any, Any]]:
+        """Yield key-value pairs from the dictionary."""
         with self._lock:
             self._commit_batch()  # Ensure batch is written before reading
             cursor = self.conn.execute(f"select key,value from {self.table};")
-            for row in cursor:
-                yield (self._load(row[0]), self._load(row[1]))
+
+        for items in cursor:
+            yield (self._load(items[0]), self._load(items[1]))
 
     def update_batch(self, data: Dict[Any, Any]) -> None:
         """Efficiently updates the database with a batch of data using INSERT OR REPLACE.
@@ -508,9 +513,12 @@ class CacheDict(collections.abc.MutableMapping):
         # Then, iterate over items in the database backend.
         # For each item, if its key is NOT already in the cache (which we just yielded),
         # then yield it. This avoids yielding duplicate keys.
-        # This implementation assumes self._db.items() is an efficient way
-        # to iterate over all items in the backend storage.
-        db_items = self._db.items()
+        # We prefer iter_items if available to stream results.
+        if hasattr(self._db, "iter_items"):
+            db_items = self._db.iter_items()
+        else:
+            db_items = self._db.items()
+
         for key, value in db_items:
             if key not in self._cache:
                 yield key, value
