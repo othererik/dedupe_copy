@@ -359,40 +359,6 @@ def _drain_queue(q: queue.Queue) -> list:
     return items
 
 
-def _count_files_to_copy_progress(
-    all_data: Any,
-    *,
-    copy_job: "CopyJob",
-    initial_hashes_to_skip: set,
-) -> int:
-    """Helper to count files to copy for progress bar."""
-    total_to_copy = 0
-    temp_hashes_to_skip = initial_hashes_to_skip.copy()
-
-    # We need to iterate over the data to count, but we must be careful
-    # not to modify the actual hashes_to_skip set used for the real copy loop.
-    # This mirrors the logic in the copy loop.
-    for md5, path, _, size in info_parser(all_data):
-        if md5 in temp_hashes_to_skip:
-            continue
-
-        if copy_job.ignore:
-            # Check ignored patterns
-            is_ignored = False
-            for ignored_pattern in copy_job.ignore:
-                if fnmatch.fnmatch(path, ignored_pattern):
-                    is_ignored = True
-                    break
-            if is_ignored:
-                continue
-
-        # If we reach here, it's a file we would try to copy
-        if not (size == 0 and not copy_job.dedupe_empty):
-            temp_hashes_to_skip.add(md5)
-        total_to_copy += 1
-    return total_to_copy
-
-
 def copy_data(
     all_data: Any,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
@@ -459,20 +425,41 @@ def copy_data(
         )
         copy_workers.append(c)
         c.start()
-    if progress_queue:
-        # Pre-calculate total items to copy for progress bar
-        total_to_copy = _count_files_to_copy_progress(
-            all_data,
-            copy_job=copy_job,
-            initial_hashes_to_skip=hashes_to_skip,
-        )
+    # In a single pass, determine which files to copy and which to delete.
+    # This avoids iterating over `all_data` twice (once for a count, once for the work).
+    files_to_copy = []
+    for md5, path, mtime, size in info_parser(all_data):
+        if md5 not in hashes_to_skip:
+            action_required = True
+            if ignore_regex and ignore_regex.match(os.path.normcase(path)):
+                action_required = False
 
+            if action_required:
+                files_to_copy.append((path, mtime, size))
+                if not (size == 0 and not copy_job.dedupe_empty):
+                    # Add hash to skip set so other files with same hash are not copied
+                    hashes_to_skip.add(md5)
+            elif progress_queue:
+                progress_queue.put((LOW_PRIORITY, "not_copied", path))
+        elif copy_job.delete_on_copy and delete_only_queue is not None:
+            # If a file's hash is in our skip set (from compare manifest or a
+            # file we've already queued for copying), and we are in "move"
+            # mode, delete this duplicate from the source.
+            _throttle_puts(delete_only_queue.qsize())
+            delete_only_queue.put(path)
+            if progress_queue:
+                progress_queue.put((LOW_PRIORITY, "queued_for_delete", path))
+        elif progress_queue:
+            progress_queue.put((LOW_PRIORITY, "not_copied", path))
+
+    # Now that we have the final list, set up the progress bar and queue the work.
+    if progress_queue:
         progress_queue.put(
             (
                 HIGH_PRIORITY,
                 "set_total",
                 "copy",
-                total_to_copy,
+                len(files_to_copy),
             )
         )
         progress_queue.put(
@@ -483,33 +470,9 @@ def copy_data(
             )
         )
 
-    # --- Start of inlined queue_copy_work logic ---
-    for md5, path, mtime, size in info_parser(all_data):
-        if md5 not in hashes_to_skip:
-            action_required = True
-            if ignore_regex:
-                if ignore_regex.match(os.path.normcase(path)):
-                    action_required = False
-
-            if action_required:
-                if not (size == 0 and not copy_job.dedupe_empty):
-                    # Add hash to skip set so other files with the same hash are not copied
-                    hashes_to_skip.add(md5)
-                _throttle_puts(copy_queue.qsize())
-                copy_queue.put((path, mtime, size))
-            elif progress_queue:
-                progress_queue.put((LOW_PRIORITY, "not_copied", path))
-        elif copy_job.delete_on_copy and delete_only_queue is not None:
-            # If a file's hash is in our skip set (either from compare manifest
-            # or from a file we've already queued for copying), and we are in "move"
-            # mode, delete this duplicate from the source.
-            _throttle_puts(delete_only_queue.qsize())
-            delete_only_queue.put(path)
-            if progress_queue:
-                progress_queue.put((LOW_PRIORITY, "queued_for_delete", path))
-        elif progress_queue:
-            progress_queue.put((LOW_PRIORITY, "not_copied", path))
-    # --- End of inlined queue_copy_work logic ---
+    for path, mtime, size in files_to_copy:
+        _throttle_puts(copy_queue.qsize())
+        copy_queue.put((path, mtime, size))
 
     # Wait for all tasks to be processed by the workers
     copy_queue.join()
