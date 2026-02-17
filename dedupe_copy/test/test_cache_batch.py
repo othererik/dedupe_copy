@@ -1,10 +1,13 @@
+# pylint: disable=protected-access
+"""Tests for batch update functionality in CacheDict."""
+
 import os
 import shutil
 import tempfile
 import unittest
-from collections import OrderedDict
 
-from dedupe_copy.disk_cache_dict import CacheDict, SqliteBackend
+from dedupe_copy.disk_cache_dict import CacheDict
+
 
 class TestCacheBatch(unittest.TestCase):
     """Test suite for CacheDict batch update functionality."""
@@ -97,7 +100,7 @@ class TestCacheBatch(unittest.TestCase):
         # old1 and old2 were in cache. update_batch logic removes them from cache and updates DB.
         # old3 remains in cache.
         # So we have old3 in cache, and everything else in DB (until accessed).
-        self.assertEqual(len(cd), 3 + 8) # 11 items
+        self.assertEqual(len(cd), 3 + 8)  # 11 items
 
         cd.close()
 
@@ -154,6 +157,7 @@ class TestCacheBatch(unittest.TestCase):
         cd.close()
 
     def test_empty_batch(self):
+        """Test that updating with an empty batch does nothing."""
         cd = CacheDict(db_file=self.db_file)
         cd.update_batch({})
         self.assertEqual(len(cd), 0)
