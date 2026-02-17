@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 import logging
 import os
+import re
 import sys
 import time
 from typing import Any, List, Optional, Tuple, Union
@@ -161,20 +162,77 @@ def read_file(src: str, hash_algo: str = "md5") -> Tuple[str, int, float, str]:
     return (file_hash, size, mtime, src)
 
 
-def match_extension(extensions: Optional[List[str]], fn: str) -> bool:
+class ExtensionMatcher:
+    """Efficiently matches filenames against a list of extensions/patterns.
+
+    This class compiles the extension list into a set of exact suffixes and a
+    combined regular expression for wildcard patterns, providing significantly
+    faster matching than iterating through the list.
+    """
+
+    # pylint: disable=too-few-public-methods
+
+    def __init__(self, extensions: Optional[List[str]]):
+        self.match_all = False
+        if not extensions:
+            self.match_all = True
+            return
+
+        self.exact_matches: set[str] = set()
+        self.wildcard_patterns: List[str] = []
+
+        for ext in extensions:
+            # We assume extensions might be raw or cleaned.
+            # Convert to lower case for case-insensitive matching.
+            ext = ext.lower()
+            if any(c in ext for c in "*?[]"):
+                self.wildcard_patterns.append(ext)
+            else:
+                self.exact_matches.add(ext)
+
+        self.exact_tuple = tuple(self.exact_matches)
+
+        self.regex: Optional[re.Pattern] = None
+        if self.wildcard_patterns:
+            regexes = [fnmatch.translate(p) for p in self.wildcard_patterns]
+            self.regex = re.compile("|".join(regexes))
+
+    def match(self, fn: str) -> bool:
+        """Checks if the filename matches any of the stored patterns."""
+        if self.match_all:
+            return True
+
+        fn_lower = fn.lower()
+        if self.exact_tuple and fn_lower.endswith(self.exact_tuple):
+            return True
+
+        if self.regex:
+            if self.regex.match(fn_lower):
+                return True
+
+        return False
+
+
+def match_extension(
+    extensions: Union[Optional[List[str]], "ExtensionMatcher"], fn: str
+) -> bool:
     """Checks if a filename matches any of the provided extension patterns.
 
     This function supports both exact extension matches and glob-style
     wildcard patterns.
 
     Args:
-        extensions: A list of extension patterns to check against. If None or
-                    empty, the function returns True.
+        extensions: A list of extension patterns to check against, or an
+                    ExtensionMatcher instance. If None or empty list, the
+                    function returns True.
         fn: The filename to check.
 
     Returns:
         True if the filename matches any of the patterns, False otherwise.
     """
+    if isinstance(extensions, ExtensionMatcher):
+        return extensions.match(fn)
+
     if not extensions:
         return True
     fn_lower = fn.lower()

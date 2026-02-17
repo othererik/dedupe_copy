@@ -91,6 +91,7 @@ def _is_file_processing_required(
     extensions: Optional[List[str]],
     progress_queue: Optional["queue.PriorityQueue[Any]"],
     ignore_regex: Optional[re.Pattern] = None,
+    extension_matcher: Optional[Any] = None,
 ) -> bool:
     """Determines if a file should be processed based on various criteria.
 
@@ -105,6 +106,7 @@ def _is_file_processing_required(
         extensions: A list of allowed file extensions.
         progress_queue: An optional queue for reporting progress.
         ignore_regex: An optional compiled regex for ignore patterns.
+        extension_matcher: An optional compiled extension matcher.
 
     Returns:
         True if the file should be processed, False otherwise.
@@ -115,7 +117,10 @@ def _is_file_processing_required(
     if _check_is_ignored(filepath, ignore, ignore_regex, progress_queue):
         return False
 
-    if extensions:
+    if extension_matcher:
+        if not extension_matcher.match(filepath):
+            return False
+    elif extensions:
         if not match_extension(extensions, filepath):
             return False
     return True
@@ -165,6 +170,7 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
             config.walk_config.extensions,
             config.progress_queue,
             config.walk_config.ignore_regex,
+            extension_matcher=config.walk_config.extension_matcher,
         ):
             _throttle_puts(config.work_queue.qsize())
             config.work_queue.put(fn)
@@ -273,7 +279,10 @@ class CopyThread(threading.Thread):
 
     def _process_copy_task(self, src: str, mtime: str, size: int) -> None:
         """Process a single copy task."""
-        if not match_extension(self.config.extensions, src):
+        if self.config.extension_matcher:
+            if not self.config.extension_matcher.match(src):
+                return
+        elif not match_extension(self.config.extensions, src):
             return
 
         dest = self._get_destination_path(src, mtime, size)
