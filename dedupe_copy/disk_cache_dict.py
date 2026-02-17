@@ -224,12 +224,10 @@ class SqliteBackend:
         """Return an iterator over the keys of the dictionary."""
         with self._lock:
             self._commit_batch()
-            # Fetch all keys at once to avoid lock contention during iteration
-            keys = [
-                self._load(k[0])
-                for k in self.conn.execute(f"select key from {self.table};")
-            ]
-        return iter(keys)
+            # Yield keys one by one to avoid loading all into memory
+            cursor = self.conn.execute(f"select key from {self.table};")
+            for k in cursor:
+                yield self._load(k[0])
 
     def __len__(self) -> int:
         """Return the number of items in the dictionary."""
