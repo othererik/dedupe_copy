@@ -795,5 +795,3 @@ class DefaultCacheDict(CacheDict):
         for key in keys:
             newcd[key] = default
         return newcd
-
-
