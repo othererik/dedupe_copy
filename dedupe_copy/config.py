@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
 
+from dedupe_copy.utils import ExtensionMatcher
+
 
 @dataclass
 class WalkConfig:
@@ -18,6 +20,7 @@ class WalkConfig:
         hash_algo: The hashing algorithm to use for file content.
         dedupe_empty: If True, empty files are included in the walk.
         ignore_regex: A compiled regex pattern for efficient ignore matching.
+        extension_matcher: A compiled matcher for efficient extension checking.
     """
 
     extensions: Optional[List[str]] = None
@@ -25,6 +28,7 @@ class WalkConfig:
     hash_algo: str = "md5"
     dedupe_empty: bool = False
     ignore_regex: Optional[re.Pattern] = field(default=None, init=False)
+    extension_matcher: Optional[ExtensionMatcher] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         """Compiles ignore patterns into a single regex for performance."""
@@ -36,6 +40,7 @@ class WalkConfig:
             # Combine into one regex
             combined_pattern = "|".join(regex_patterns)
             self.ignore_regex = re.compile(combined_pattern)
+        self.extension_matcher = ExtensionMatcher(self.extensions)
 
 
 @dataclass
@@ -50,6 +55,7 @@ class CopyConfig:
         preserve_stat: If True, file metadata (like timestamps) is preserved.
         delete_on_copy: If True, delete source files after a successful copy.
         dry_run: If True, simulate operations without making changes.
+        extension_matcher: A compiled matcher for efficient extension checking.
     """
 
     target_path: str
@@ -59,6 +65,11 @@ class CopyConfig:
     preserve_stat: bool = False
     delete_on_copy: bool = False
     dry_run: bool = False
+    extension_matcher: Optional[ExtensionMatcher] = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        """Initialize extension matcher."""
+        self.extension_matcher = ExtensionMatcher(self.extensions)
 
 
 @dataclass
