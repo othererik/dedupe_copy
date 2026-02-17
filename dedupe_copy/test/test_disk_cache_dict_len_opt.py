@@ -1,7 +1,10 @@
+"""Test suite for verifying the optimized __len__ implementation in SqliteBackend."""
+
 import os
 import unittest
 from dedupe_copy import disk_cache_dict
 from dedupe_copy.test import utils
+
 
 class TestSqliteBackendLenOptimization(unittest.TestCase):
     """Test suite for verifying the optimized __len__ implementation in SqliteBackend."""
@@ -25,26 +28,36 @@ class TestSqliteBackendLenOptimization(unittest.TestCase):
         for i in range(count):
             self.backend[f"key{i}"] = i
         self.backend.commit()
-        self.assertEqual(len(self.backend), count, f"Length should be {count} after insertion")
+        self.assertEqual(
+            len(self.backend), count, f"Length should be {count} after insertion"
+        )
 
         # 3. Update existing items (length should not change)
         for i in range(10):
             self.backend[f"key{i}"] = i + 1000
         self.backend.commit()
-        self.assertEqual(len(self.backend), count, "Length should not change after updating existing keys")
+        self.assertEqual(
+            len(self.backend),
+            count,
+            "Length should not change after updating existing keys",
+        )
 
         # 4. Insert new items via update_batch
         new_items = {f"new{i}": i for i in range(50)}
         self.backend.update_batch(new_items)
         count += 50
-        self.assertEqual(len(self.backend), count, f"Length should be {count} after update_batch")
+        self.assertEqual(
+            len(self.backend), count, f"Length should be {count} after update_batch"
+        )
 
         # 5. Delete items
         for i in range(10):
             del self.backend[f"key{i}"]
         self.backend.commit()
         count -= 10
-        self.assertEqual(len(self.backend), count, f"Length should be {count} after deletion")
+        self.assertEqual(
+            len(self.backend), count, f"Length should be {count} after deletion"
+        )
 
         # 6. Clear
         self.backend.clear()
@@ -63,7 +76,9 @@ class TestSqliteBackendLenOptimization(unittest.TestCase):
 
         new_backend = disk_cache_dict.SqliteBackend(db_file=self.db_file)
         try:
-            self.assertEqual(len(new_backend), count, "Length should be persisted after reopen")
+            self.assertEqual(
+                len(new_backend), count, "Length should be persisted after reopen"
+            )
 
             # Add more items
             new_backend["extra"] = 999
@@ -91,6 +106,7 @@ class TestSqliteBackendLenOptimization(unittest.TestCase):
             self.assertEqual(len(other_backend), count, "Length should match loaded DB")
         finally:
             other_backend.close()
+
 
 if __name__ == "__main__":
     unittest.main()

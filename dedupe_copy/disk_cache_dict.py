@@ -83,7 +83,8 @@ class SqliteBackend:
 
                 # Maintain a cached count in a metadata table
                 self._conn.execute(
-                    "CREATE TABLE IF NOT EXISTS _meta_info (tablename TEXT PRIMARY KEY, count INTEGER);"
+                    "CREATE TABLE IF NOT EXISTS _meta_info "
+                    "(tablename TEXT PRIMARY KEY, count INTEGER);"
                 )
                 # Initialize count if missing
                 self._conn.execute(
@@ -93,12 +94,16 @@ class SqliteBackend:
 
                 # Create triggers to keep count updated
                 self._conn.execute(
-                    f"CREATE TRIGGER IF NOT EXISTS {self.table}_ins_count AFTER INSERT ON {self.table} "
-                    f"BEGIN UPDATE _meta_info SET count = count + 1 WHERE tablename = '{self.table}'; END;"
+                    f"CREATE TRIGGER IF NOT EXISTS {self.table}_ins_count "
+                    f"AFTER INSERT ON {self.table} "
+                    f"BEGIN UPDATE _meta_info SET count = count + 1 "
+                    f"WHERE tablename = '{self.table}'; END;"
                 )
                 self._conn.execute(
-                    f"CREATE TRIGGER IF NOT EXISTS {self.table}_del_count AFTER DELETE ON {self.table} "
-                    f"BEGIN UPDATE _meta_info SET count = count - 1 WHERE tablename = '{self.table}'; END;"
+                    f"CREATE TRIGGER IF NOT EXISTS {self.table}_del_count "
+                    f"AFTER DELETE ON {self.table} "
+                    f"BEGIN UPDATE _meta_info SET count = count - 1 "
+                    f"WHERE tablename = '{self.table}'; END;"
                 )
 
                 self._conn.commit()
