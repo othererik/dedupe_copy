@@ -357,6 +357,15 @@ class SqliteBackend:
                     pass
             self._conn = None
 
+    def cleanup(self) -> None:
+        """Closes the database and removes the file."""
+        self.close()
+        if self._db_file and os.path.exists(self._db_file):
+            try:
+                os.unlink(self._db_file)
+            except OSError:
+                pass
+
     def __del__(self) -> None:
         """Destructor to ensure the database connection is closed."""
         try:
@@ -425,6 +434,7 @@ class CacheDict(collections.abc.MutableMapping):
         backend: Optional[Any] = None,
         lru: bool = False,
         current_dictionary: Optional[Dict[Any, Any]] = None,
+        delete_on_close: bool = False,
     ) -> None:
         """Initializes the CacheDict.
 
@@ -436,6 +446,7 @@ class CacheDict(collections.abc.MutableMapping):
             lru: If True, a Least Recently Used (LRU) eviction policy is used.
             current_dictionary: An optional dictionary to pre-populate the
                                 CacheDict.
+            delete_on_close: If True, the backend file is deleted when closed.
         """
         self._lock = threading.RLock()
         self._evict_lock_held = False
@@ -450,10 +461,32 @@ class CacheDict(collections.abc.MutableMapping):
         self._key_order: Optional[OrderedDict] = None
         if lru:
             self._key_order = OrderedDict()
+
+        self._delete_on_close = delete_on_close
+        if db_file is None:
+            self._delete_on_close = True
+
         # Note: Performance could be improved with a batched option
         if current_dictionary:
             for key, value in current_dictionary.items():
                 self[key] = value
+
+    def __enter__(self) -> "CacheDict":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self._delete_on_close:
+            self.cleanup()
+        else:
+            self.close()
+
+    def cleanup(self) -> None:
+        """Closes the backend and removes the database file."""
+        with self._lock:
+            if hasattr(self._db, "cleanup"):
+                self._db.cleanup()
+            else:
+                self.close()
 
     def clear(self) -> None:
         """Remove all items from the dictionary."""
@@ -764,5 +797,3 @@ class DefaultCacheDict(CacheDict):
         return newcd
 
 
-# Note: Cleanup of temporary dictionary files is currently handled by caller.
-# A future enhancement could add a context manager or explicit cleanup helper.
