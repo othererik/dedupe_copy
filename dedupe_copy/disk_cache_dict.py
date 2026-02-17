@@ -484,7 +484,7 @@ class SqliteSetBackend:
         """Return connection."""
         if self._conn is None:
             self._init_conn()
-        return self._conn
+        return self._conn  # type: ignore
 
     def _get_key_id(self, key: Any) -> Any:
         """Get ID for key."""
