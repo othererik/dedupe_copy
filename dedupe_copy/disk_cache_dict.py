@@ -299,8 +299,11 @@ class SqliteBackend:
             self._commit_batch()  # Ensure batch is written before reading
             cursor = self.conn.execute(f"select key,value from {self.table};")
 
-        for items in cursor:
-            yield (self._load(items[0]), self._load(items[1]))
+        def _yield_items() -> Iterator[Tuple[Any, Any]]:
+            for items in cursor:
+                yield (self._load(items[0]), self._load(items[1]))
+
+        return _yield_items()
 
     def update_batch(self, data: Dict[Any, Any]) -> None:
         """Efficiently updates the database with a batch of data using INSERT OR REPLACE.
@@ -854,21 +857,26 @@ class CacheDict(collections.abc.MutableMapping):
         into the cache.
         """
         with self._lock:
-            # First, yield all items from the in-memory cache.
-            yield from self._cache.items()
+            # First, capture all items from the in-memory cache.
+            cache_items = list(self._cache.items())
+            cache_keys = set(self._cache.keys())
 
-            # Then, iterate over items in the database backend.
-            # For each item, if its key is NOT already in the cache (which we just yielded),
-            # then yield it. This avoids yielding duplicate keys.
+            # Then, prepare to iterate over items in the database backend.
             # We prefer iter_items if available to stream results.
             if hasattr(self._db, "iter_items"):
                 db_items = self._db.iter_items()
             else:
                 db_items = self._db.items()
 
-            for key, value in db_items:
-                if key not in self._cache:
-                    yield key, value
+        # Yield from the in-memory cache snapshot.
+        yield from cache_items
+
+        # Iterate over items in the database backend.
+        # For each item, if its key is NOT already in the cache snapshot,
+        # then yield it. This avoids yielding duplicate keys.
+        for key, value in db_items:
+            if key not in cache_keys:
+                yield key, value
 
     def __setitem__(self, key: Any, value: Any) -> None:
         """Put an items into the mappings, if key doesn't exist, create it"""
