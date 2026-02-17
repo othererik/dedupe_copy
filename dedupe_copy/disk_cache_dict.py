@@ -700,8 +700,58 @@ class CacheDict(collections.abc.MutableMapping):
             self._key_order = OrderedDict()
         # Note: Performance could be improved with a batched option
         if current_dictionary:
-            for key, value in current_dictionary.items():
-                self[key] = value
+            self.update_batch(current_dictionary)
+
+    def update_batch(self, data: Dict[Any, Any]) -> None:
+        """Batch update items.
+
+        If the data fits in the remaining cache, it is added to the cache.
+        Otherwise, it is flushed to the DB.
+        """
+        if not data:
+            return
+
+        with self._lock:
+            # If the new data fits in the remaining cache space, just add it to cache
+            remaining_space = self.max_size - len(self._cache)
+            if len(data) <= remaining_space:
+                self._update_cache_batch(data)
+                return
+
+            # If it doesn't fit, dump to DB.
+            self._flush_batch_to_db(data)
+
+    def _update_cache_batch(self, data: Dict[Any, Any]) -> None:
+        """Helper to update cache with a batch of items."""
+        self._cache.update(data)
+        if self.lru and self._key_order is not None:
+            for key in data:
+                if key in self._key_order:
+                    self._key_order.move_to_end(key, last=True)
+                else:
+                    self._key_order[key] = None
+
+    def _flush_batch_to_db(self, data: Dict[Any, Any]) -> None:
+        """Helper to flush a batch of items to the DB, ensuring cache consistency."""
+        # Remove keys from cache that are being updated to ensure consistency
+        if len(data) > len(self._cache):
+            # Iterate cache to find keys to remove
+            keys_to_remove = [k for k in list(self._cache.keys()) if k in data]
+        else:
+            # Iterate data
+            keys_to_remove = [k for k in data if k in self._cache]
+
+        for k in keys_to_remove:
+            del self._cache[k]
+            if self.lru and self._key_order is not None:
+                self._key_order.pop(k, None)
+
+        # Update DB
+        if hasattr(self._db, "update_batch"):
+            self._db.update_batch(data)
+        else:
+            for k, v in data.items():
+                self._db[k] = v
 
     def clear(self) -> None:
         """Remove all items from the dictionary."""
