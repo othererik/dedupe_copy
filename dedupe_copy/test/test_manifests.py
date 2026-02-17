@@ -7,7 +7,7 @@ from unittest.mock import patch
 from dedupe_copy.test import utils
 
 from dedupe_copy.manifest import Manifest
-from dedupe_copy.disk_cache_dict import DefaultCacheDict, CacheDict
+from dedupe_copy.disk_cache_dict import DefaultCacheDict, CacheDict, PersistentSet
 
 
 class TestManifests(unittest.TestCase):
@@ -31,22 +31,24 @@ class TestManifests(unittest.TestCase):
 
     def setup_manifest(self):
         """Set up a test manifest with fake data."""
-        md5data, sources = utils.gen_fake_manifest()
+        md5data, sources_dict = utils.gen_fake_manifest()
         md5data = _dcd_from_manifest(md5data, self.temp_dict)
-        sources = _dcd_from_manifest(sources, self.scratch_dict)
+        # Convert sources to PersistentSet
+        sources = PersistentSet(db_file=self.scratch_dict)
+        sources.update(sources_dict.keys())
         self.manifest.md5_data = md5data
         self.manifest.read_sources = sources
         return md5data, sources
 
     def check_manifest(self, manifest, md5_data, sources):
         """Verify manifest contents match expected data."""
-        print(manifest.md5_data.items())
-        print(manifest.read_sources.items())
-        print(md5_data.items())
-        print(sources.items())
+        # sources might be CacheDict (legacy test) or PersistentSet
+        sources_keys = list(sources.keys()) if hasattr(sources, "keys") else list(sources)
+        manifest_sources_keys = list(manifest.read_sources)
+
         self.assertEqual(
-            sorted(sources.keys()),
-            sorted(manifest.read_sources.keys()),
+            sorted(sources_keys),
+            sorted(manifest_sources_keys),
             "sources does not agree with manifest sources",
         )
         self.assertEqual(
@@ -69,7 +71,7 @@ class TestManifests(unittest.TestCase):
         md5data, sources = self.setup_manifest()
         self.manifest.save(path=self.manifest_path)
         dcd_check = DefaultCacheDict(list, db_file=self.manifest_path)
-        sources_check = DefaultCacheDict(list, db_file=self.read_path)
+        sources_check = PersistentSet(db_file=self.read_path)
         self.check_manifest(self.manifest, md5data, sources)
         self.check_manifest(self.manifest, dcd_check, sources_check)
         del md5data
@@ -82,7 +84,7 @@ class TestManifests(unittest.TestCase):
         self.manifest.convert_manifest_paths(
             "/a/b", "/fred", temp_directory=self.temp_dir
         )
-        for path in self.manifest.read_sources.keys():
+        for path in self.manifest.read_sources:
             self.assertTrue(
                 (not path.startswith("/a/b"))
                 and (path.startswith("/c/b") or path.startswith("/fred"))
@@ -99,15 +101,18 @@ class TestManifests(unittest.TestCase):
 
     def test_load_single(self):
         """Load a previously saved manifest"""
-        md5data, sources = utils.gen_fake_manifest()
-        md5data = _dcd_from_manifest(md5data, self.temp_dict)
-        sources = _dcd_from_manifest(sources, f"{self.temp_dict}.read")
+        md5data_dict, sources_dict = utils.gen_fake_manifest()
+        md5data = _dcd_from_manifest(md5data_dict, self.temp_dict)
+        sources = _dcd_from_manifest(sources_dict, f"{self.temp_dict}.read")
         md5data.save()
         sources.save()
+
+        # Close handles to avoid lock contention or schema mismatch after migration
+        md5data.close()
+        sources.close()
+
         manifest = Manifest(self.temp_dict, temp_directory=self.temp_dir)
-        self.check_manifest(manifest, md5data, sources)
-        del md5data
-        del sources
+        self.check_manifest(manifest, md5data_dict, sources_dict)
 
     def test_load_list(self):
         """Loading a list of manifests"""
@@ -115,19 +120,23 @@ class TestManifests(unittest.TestCase):
         master_sources = {}
         paths = []
         for i in range(5):
-            md5data, sources = utils.gen_fake_manifest()
+            md5data_dict, sources_dict = utils.gen_fake_manifest()
             path = f"{self.temp_dict}{i}"
             paths.append(path)
-            md5data = _dcd_from_manifest(md5data, path)
-            sources = _dcd_from_manifest(sources, f"{path}.read")
-            master_md5.update(md5data)
-            master_sources.update(sources)
+
+            md5data = _dcd_from_manifest(md5data_dict, path)
+            sources = _dcd_from_manifest(sources_dict, f"{path}.read")
+
+            master_md5.update(md5data_dict)
+            master_sources.update(sources_dict)
+
             md5data.save()
             sources.save()
+            md5data.close()
+            sources.close()
+
         combined = Manifest(paths, temp_directory=self.temp_dir)
         self.check_manifest(combined, master_md5, master_sources)
-        del md5data
-        del sources
 
     def test_populate_read_sources(self):
         """Test _populate_read_sources method"""
@@ -142,7 +151,7 @@ class TestManifests(unittest.TestCase):
             for file_info in file_list:
                 expected_sources.add(file_info[0])
 
-        self.assertEqual(set(self.manifest.read_sources.keys()), expected_sources)
+        self.assertEqual(set(self.manifest.read_sources), expected_sources)
 
     def test_avoids_double_close_on_combine(self):
         """Test that combining manifests does not double-close file handles."""
@@ -160,7 +169,7 @@ class TestManifests(unittest.TestCase):
 
         with (
             patch.object(DefaultCacheDict, "close") as mock_dcd_close,
-            patch.object(CacheDict, "close") as mock_cd_close,
+            patch.object(PersistentSet, "close") as mock_ps_close,
         ):
 
             manifest = Manifest(paths, temp_directory=self.temp_dir)
@@ -172,7 +181,7 @@ class TestManifests(unittest.TestCase):
             # With 2 manifests, this means 3 calls each.
             # The bug causes an extra N calls, making it 2N+1, so 5 calls.
             self.assertEqual(mock_dcd_close.call_count, 3)
-            self.assertEqual(mock_cd_close.call_count, 3)
+            self.assertEqual(mock_ps_close.call_count, 3)
 
 
 def _dcd_from_manifest(data, path):

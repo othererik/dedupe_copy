@@ -14,10 +14,69 @@ import sys
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Iterable
 
 IS_WIN = sys.platform == "win32"
 DEBUG = False
+
+
+def _serialize(value: Any, version: int = -1) -> bytes:
+    """Serialize value for storage in the database."""
+    if value is None:
+        return sqlite3.Binary(b"N")
+
+    match value:
+        case str():
+            prefix = b"S"
+            # Encode without pickling
+            content = value.encode("utf-8")
+        case bool():
+            prefix = b"B"
+            content = b"1" if value else b"0"
+        case int():
+            prefix = b"I"
+            content = str(value).encode("utf-8")
+        case float():
+            prefix = b"F"
+            content = str(value).encode("utf-8")
+        case _:
+            prefix = b"P"
+            content = pickle.dumps(value, version)
+
+    return sqlite3.Binary(prefix + content)
+
+
+def _deserialize(value: bytes) -> Any:
+    """Inverse of _serialize."""
+    value_bytes = bytes(value)
+    if not value_bytes:
+        return None
+
+    # Check type marker
+    type_marker = value_bytes[0:1]
+    content = value_bytes[1:]
+    result: Any = None
+
+    match type_marker:
+        case b"S":
+            result = content.decode("utf-8")
+        case b"I":
+            result = int(content.decode("utf-8"))
+        case b"B":
+            result = content == b"1"
+        case b"F":
+            result = float(content.decode("utf-8"))
+        case b"X":
+            result = content == b"1"
+        case b"N":
+            result = None
+        case b"P":
+            result = pickle.loads(content)
+        case _:
+            # Legacy: no type marker, assume pickle
+            result = pickle.loads(value_bytes)
+
+    return result
 
 
 class SqliteBackend:
@@ -164,61 +223,12 @@ class SqliteBackend:
     @staticmethod
     def _dump(value: Any, version: int = -1) -> bytes:
         """Serialize value for storage in the database."""
-        if value is None:
-            return sqlite3.Binary(b"N")
-
-        match value:
-            case str():
-                prefix = b"S"
-                # Encode without pickling
-                content = value.encode("utf-8")
-            case bool():
-                prefix = b"B"
-                content = b"1" if value else b"0"
-            case int():
-                prefix = b"I"
-                content = str(value).encode("utf-8")
-            case float():
-                prefix = b"F"
-                content = str(value).encode("utf-8")
-            case _:
-                prefix = b"P"
-                content = pickle.dumps(value, version)
-
-        return sqlite3.Binary(prefix + content)
+        return _serialize(value, version)
 
     @staticmethod
     def _load(value: bytes) -> Any:
         """Inverse of _dump."""
-        value_bytes = bytes(value)
-        if not value_bytes:
-            return None
-
-        # Check type marker
-        type_marker = value_bytes[0:1]
-        content = value_bytes[1:]
-        result: Any = None
-
-        match type_marker:
-            case b"S":
-                result = content.decode("utf-8")
-            case b"I":
-                result = int(content.decode("utf-8"))
-            case b"B":
-                result = content == b"1"
-            case b"F":
-                result = float(content.decode("utf-8"))
-            case b"X":
-                result = content == b"1"
-            case b"N":
-                result = None
-            case b"P":
-                result = pickle.loads(content)
-            case _:
-                # Legacy: no type marker, assume pickle
-                result = pickle.loads(value_bytes)
-
-        return result
+        return _deserialize(value)
 
     def _insert(self, key: Any, value: Any) -> None:
         """Assumes lock is held."""
@@ -396,6 +406,221 @@ class SqliteBackend:
             db_file: The path to the database file to load. If None, the
                      current database is reloaded.
         """
+        with self._lock:
+            self.commit(force=True)
+            self.close()
+            db_file = db_file or self._db_file
+            self._db_file = db_file
+            self._init_conn()
+            self._commit_needed = False
+            self._write_count = 0
+
+
+class SqliteSetBackend:
+    """Manages a thread-safe SQLite database for set storage (keys only)."""
+
+    def __init__(
+        self,
+        db_file: Optional[str] = None,
+        db_table: str = "sql_set_table",
+        unlink_old_db: bool = False,
+    ) -> None:
+        if db_file is None:
+            db_file = f"db_set_{int(time.time())}.db"
+        if unlink_old_db and os.path.exists(db_file):
+            os.unlink(db_file)
+        self._db_file = db_file
+        self.table = db_table
+        self._lock = threading.RLock()
+        self._conn: Optional[sqlite3.Connection] = None
+        self._init_conn()
+        self._commit_needed = False
+        self._write_batch: set = set()
+        self._write_count = 0
+        self._batch_size = 5000
+
+    def _init_conn(self) -> None:
+        with self._lock:
+            if self._conn is None:
+                self._conn = sqlite3.connect(
+                    self._db_file, check_same_thread=False, timeout=10
+                )
+                self._conn.execute("PRAGMA journal_mode=WAL;")
+                self._conn.execute("PRAGMA synchronous=NORMAL;")
+                self._conn.execute("PRAGMA cache_size = -64000;")
+                self._conn.execute(
+                    f"CREATE TABLE IF NOT EXISTS {self.table} ("
+                    "key BLOB PRIMARY KEY, "
+                    "hash INTEGER);"
+                )
+                self._conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {self.table}_hash_index ON {self.table}(hash);"
+                )
+
+                # Check for legacy table and migrate if needed
+                try:
+                    cursor = self._conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='sql_dict_table';"
+                    )
+                    if cursor.fetchone():
+                        # Migration needed
+                        self._conn.execute(
+                            f"INSERT OR IGNORE INTO {self.table} (key, hash) SELECT key, hash FROM sql_dict_table;"
+                        )
+                        self._conn.execute("DROP TABLE sql_dict_table;")
+                except sqlite3.Error:
+                    pass
+
+                self._conn.commit()
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._init_conn()
+        return self._conn
+
+    def _get_key_id(self, key: Any) -> Any:
+        with self._lock:
+            self._commit_batch()
+            cursor = self.conn.execute(
+                f"select key from {self.table} where hash=?;", (hash(key),)
+            )
+            for row in cursor:
+                if self._load(row[0]) == key:
+                    return key
+            raise KeyError(key)
+
+    def add(self, key: Any) -> None:
+        with self._lock:
+            self._write_batch.add(key)
+            self._write_count += 1
+            if self._write_count >= self._batch_size:
+                self._commit_batch()
+
+    def remove(self, key: Any) -> None:
+        with self._lock:
+            self._commit_batch()
+            self.conn.execute(
+                f"delete from {self.table} where key=?;", (self._dump(key),)
+            )
+            self._commit_needed = True
+            self._write_count += 1
+            if self._write_count >= self._batch_size:
+                self.commit()
+
+    def __contains__(self, key: Any) -> bool:
+        with self._lock:
+            if key in self._write_batch:
+                return True
+            try:
+                cursor = self.conn.execute(
+                    f"select key from {self.table} where hash=?;", (hash(key),)
+                )
+                for row in cursor:
+                    if self._load(row[0]) == key:
+                        return True
+                return False
+            except KeyError:
+                return False
+
+    def __iter__(self) -> Iterator[Any]:
+        with self._lock:
+            self._commit_batch()
+            keys = [
+                self._load(k[0])
+                for k in self.conn.execute(f"select key from {self.table};")
+            ]
+        return iter(keys)
+
+    def __len__(self) -> int:
+        with self._lock:
+            self._commit_batch()
+            return self.conn.execute(f"select count(*) from {self.table};").fetchone()[0]
+
+    @staticmethod
+    def _dump(value: Any) -> bytes:
+        return _serialize(value)
+
+    @staticmethod
+    def _load(value: bytes) -> Any:
+        return _deserialize(value)
+
+    def update_batch(self, keys: Iterable[Any]) -> None:
+        if not keys:
+            return
+        with self._lock:
+            try:
+                batch_data = [(self._dump(key), hash(key)) for key in keys]
+                self.conn.executemany(
+                    f"INSERT OR REPLACE INTO {self.table} (key, hash) VALUES (?, ?)",
+                    batch_data,
+                )
+                self.conn.commit()
+            except sqlite3.Error as e:
+                self.conn.rollback()
+                raise e
+
+    def _commit_batch(self) -> None:
+        if not self._write_batch:
+            return
+        with self._lock:
+            try:
+                batch_data = [(self._dump(key), hash(key)) for key in self._write_batch]
+                self.conn.executemany(
+                    f"INSERT OR REPLACE INTO {self.table} (key, hash) VALUES (?, ?)",
+                    batch_data,
+                )
+                self.conn.commit()
+                self._write_batch.clear()
+                self._write_count = 0
+            except sqlite3.Error as e:
+                self.conn.rollback()
+                raise e
+
+    def commit(self, force: bool = False) -> None:
+        with self._lock:
+            self._commit_batch()
+            if self._commit_needed or force:
+                self.conn.commit()
+            self._commit_needed = False
+            self._write_count = 0
+
+    def db_file_path(self) -> str:
+        return self._db_file
+
+    def clear(self) -> None:
+        with self._lock:
+            self._write_batch.clear()
+            self._write_count = 0
+            self.conn.execute(f"delete from {self.table};")
+            self.conn.commit()
+
+    def close(self) -> None:
+        with self._lock:
+            if self._conn:
+                try:
+                    self.commit(force=True)
+                    self._conn.close()
+                except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                    pass
+            self._conn = None
+
+    def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
+        with self._lock:
+            self.commit(force=True)
+            current_db_file = self._db_file
+            if db_file is not None and db_file != current_db_file:
+                dest_conn = sqlite3.connect(db_file)
+                with dest_conn:
+                    self.conn.backup(dest_conn)
+                dest_conn.close()
+                if remove_old_db:
+                    self.close()
+                    os.unlink(current_db_file)
+                    self._db_file = db_file
+                    self._init_conn()
+
+    def load(self, db_file: Optional[str] = None) -> None:
         with self._lock:
             self.commit(force=True)
             self.close()
@@ -762,6 +987,103 @@ class DefaultCacheDict(CacheDict):
         for key in keys:
             newcd[key] = default
         return newcd
+
+
+class PersistentSet(collections.abc.MutableSet):
+    """A set-like class with an in-memory cache and a disk backend."""
+
+    def __init__(
+        self,
+        max_size: int = 100000,
+        db_file: Optional[str] = None,
+        *,
+        backend: Optional[Any] = None,
+    ) -> None:
+        self._lock = threading.RLock()
+        self._cache: set = set()
+        self._db_file = db_file
+        if backend:
+            self._db = backend
+        else:
+            self._db = SqliteSetBackend(db_file)
+        self.max_size = max_size
+
+    def __contains__(self, key: Any) -> bool:
+        with self._lock:
+            if key in self._cache:
+                return True
+            return key in self._db
+
+    def __iter__(self) -> Iterator[Any]:
+        with self._lock:
+            yield from self._cache
+            # Avoid yielding duplicates
+            for key in self._db:
+                if key not in self._cache:
+                    yield key
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._cache) + len(self._db)
+
+    def add(self, key: Any) -> None:
+        with self._lock:
+            if key in self._cache:
+                return
+            if key in self._db:
+                return
+
+            if len(self._cache) >= self.max_size:
+                self._evict()
+            self._cache.add(key)
+
+    def discard(self, key: Any) -> None:
+        with self._lock:
+            if key in self._cache:
+                self._cache.remove(key)
+            if key in self._db:
+                self._db.remove(key)
+
+    def _evict(self) -> None:
+        if not self._cache:
+            return
+        # Simple random eviction since set doesn't track order
+        key = next(iter(self._cache))
+        self._cache.remove(key)
+        self._db.add(key)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+            self._db.clear()
+
+    def update(self, keys: Iterable[Any]) -> None:
+        with self._lock:
+            # Only add keys that are not already in the cache.
+            # This preserves the disjoint property (key in cache OR db).
+            keys_to_add = [k for k in keys if k not in self._cache]
+            if keys_to_add:
+                self._db.update_batch(keys_to_add)
+
+    def db_file_path(self) -> str:
+        return self._db.db_file_path()
+
+    def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
+        with self._lock:
+            if self._cache:
+                self._db.update_batch(self._cache)
+                self._cache.clear()
+            self._db.save(db_file=db_file, remove_old_db=remove_old_db)
+
+    def load(self, db_file: Optional[str] = None) -> None:
+        with self._lock:
+            self._cache.clear()
+            self._db.load(db_file=db_file)
+
+    def close(self) -> None:
+        with self._lock:
+            if hasattr(self._db, "close"):
+                self._db.close()
 
 
 # Note: Cleanup of temporary dictionary files is currently handled by caller.
