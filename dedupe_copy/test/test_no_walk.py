@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from dedupe_copy.bin.dedupecopy_cli import run_cli
-from dedupe_copy.disk_cache_dict import CacheDict
+from dedupe_copy.disk_cache_dict import PersistentSet
 
 
 class TestNoWalk(unittest.TestCase):
@@ -144,17 +144,17 @@ class TestNoWalk(unittest.TestCase):
         read_manifest_path = self.manifest_path + ".read"
 
         # 1. Create inconsistent manifest by removing an entry from the .read file
-        read_manifest = CacheDict(db_file=read_manifest_path)
+        read_manifest = PersistentSet(db_file=read_manifest_path)
         read_manifest.load()
         self.assertEqual(len(read_manifest), 5, "Initial manifest should have 5 files.")
 
         key_to_remove = os.path.join(self.files_dir, "a.txt")
-        del read_manifest[key_to_remove]
+        read_manifest.discard(key_to_remove)
         read_manifest.save()
         read_manifest.close()
 
         # 2. Verify inconsistency and get count
-        read_manifest_reloaded = CacheDict(db_file=read_manifest_path)
+        read_manifest_reloaded = PersistentSet(db_file=read_manifest_path)
         read_manifest_reloaded.load()
         inconsistent_count = len(read_manifest_reloaded)
         self.assertEqual(
@@ -179,7 +179,7 @@ class TestNoWalk(unittest.TestCase):
                 run_cli()
 
         # 4. Check that the file count has NOT changed
-        final_read_manifest = CacheDict(db_file=read_manifest_path)
+        final_read_manifest = PersistentSet(db_file=read_manifest_path)
         final_read_manifest.load()
         final_count = len(final_read_manifest)
         final_read_manifest.close()

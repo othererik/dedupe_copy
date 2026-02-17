@@ -1074,7 +1074,7 @@ def run_dupe_copy(
                 effective_read_paths = [effective_read_paths]
 
             if no_walk and not effective_read_paths and manifest:
-                manifest_paths = list(manifest.read_sources.keys())
+                manifest_paths = list(manifest.read_sources)
                 if manifest_paths:
                     # Use commonpath to determine the most likely source root.
                     common_base = os.path.commonpath(manifest_paths)

@@ -319,8 +319,8 @@ class TestResultProcessor(unittest.TestCase):
         processor._commit_batch()
 
         # Verify that manifest.read_sources was updated
-        manifest.read_sources.__setitem__.assert_any_call("file1.txt", None)
-        manifest.read_sources.__setitem__.assert_any_call("file2.txt", None)
+        manifest.read_sources.add.assert_any_call("file1.txt")
+        manifest.read_sources.add.assert_any_call("file2.txt")
 
 
 class TestReadThread(unittest.TestCase):

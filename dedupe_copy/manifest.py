@@ -10,7 +10,7 @@ import random
 import threading
 from typing import Any, Iterable, Iterator, List, Optional, Set, Tuple, Union
 
-from .disk_cache_dict import CacheDict, DefaultCacheDict
+from .disk_cache_dict import DefaultCacheDict, PersistentSet
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class Manifest:
             self.md5_data = DefaultCacheDict(
                 list, db_file=self.path, max_size=self.cache_size
             )
-            self.read_sources = CacheDict(
+            self.read_sources = PersistentSet(
                 db_file=sources_path, max_size=self.cache_size
             )
 
@@ -214,8 +214,7 @@ class Manifest:
 
         # Update read_sources separately for efficiency
         for path in files_to_remove_set:
-            if path in self.read_sources:
-                del self.read_sources[path]
+            self.read_sources.discard(path)
 
     def update_paths(self, moved_files: List[Tuple[str, str]]) -> None:
         """Updates file paths in the manifest after a move operation.
@@ -245,9 +244,8 @@ class Manifest:
                     new_path = path_map[old_path]
                     new_file_list.append([new_path] + list(file_info[1:]))
                     # Update read_sources as well
-                    if old_path in self.read_sources:
-                        del self.read_sources[old_path]
-                    self.read_sources[new_path] = None
+                    self.read_sources.discard(old_path)
+                    self.read_sources.add(new_path)
                 else:
                     new_file_list.append(file_info)
             self.md5_data[hash_val] = new_file_list
@@ -268,12 +266,12 @@ class Manifest:
 
         # We can use a local buffer to batch updates to read_sources
         batch_size = 10000
-        batch: dict[str, None] = {}
+        batch: List[str] = []
 
         for _, info in self.md5_data.items():
             for file_data in info:
                 src = file_data[0]
-                batch[src] = None
+                batch.append(src)
                 count += 1
 
                 if len(batch) >= batch_size:
@@ -301,7 +299,7 @@ class Manifest:
         md5_data = DefaultCacheDict(list, db_file=path, max_size=self.cache_size)
         md5_data.load()
         logger.info("... read %d hashes", len(md5_data))
-        read_sources = CacheDict(db_file=f"{path}.read", max_size=self.cache_size)
+        read_sources = PersistentSet(db_file=f"{path}.read", max_size=self.cache_size)
         read_sources.load()
         logger.info("... in %d files", len(read_sources))
         return md5_data, read_sources
@@ -323,7 +321,7 @@ class Manifest:
         )
         combined_read_path = f"{combined_md5_path}.read"
         combined_md5 = DefaultCacheDict(list, db_file=combined_md5_path)
-        combined_read = CacheDict(db_file=combined_read_path)
+        combined_read = PersistentSet(db_file=combined_read_path)
 
         for m, r in manifests:
             for key, files in m.items():
@@ -341,7 +339,7 @@ class Manifest:
                 if new_files_added:
                     combined_md5[key] = current_files
             for key in r:
-                combined_read[key] = None
+                combined_read.add(key)
         return combined_md5, combined_read
 
     def _load_manifest_list(self, manifests: List[str]) -> None:
@@ -398,16 +396,14 @@ class Manifest:
                 )
             self.md5_data[key] = new_values
         # build a new set of values and move into place
-        # Note: Using CacheDict for read_sources (could optimize with a persistent
-        # set implementation)
         db_file = self.read_sources.db_file_path()
         assert temp_directory is not None, "temp_directory must be provided"
-        new_sources = CacheDict(
+        new_sources = PersistentSet(
             db_file=os.path.join(temp_directory, "temp_convert.dict"),
             max_size=self.cache_size,
         )
         for key in self.read_sources:
-            new_sources[key.replace(paths_from, paths_to, 1)] = None
+            new_sources.add(key.replace(paths_from, paths_to, 1))
         del self.read_sources
         new_sources.save(db_file=db_file)
         self.read_sources = new_sources

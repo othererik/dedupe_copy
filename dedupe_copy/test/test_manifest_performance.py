@@ -34,7 +34,7 @@ class TestManifestPerformance(unittest.TestCase):
 
         # Use a temporary dict to build the data efficiently in memory first
         temp_md5_data = defaultdict(list)
-        temp_read_sources = {}
+        temp_read_sources = set()
 
         print("Populating test data in memory...")
         for i in range(num_files):
@@ -43,7 +43,7 @@ class TestManifestPerformance(unittest.TestCase):
             file_info = (file_path, 1024, time.time())
 
             temp_md5_data[hash_val].append(file_info)
-            temp_read_sources[file_path] = None
+            temp_read_sources.add(file_path)
 
             if i % 10 == 0:
                 files_to_remove.append(file_path)
@@ -52,8 +52,9 @@ class TestManifestPerformance(unittest.TestCase):
         # Batch write to the DefaultCacheDict to avoid slow read-modify-write cycles
         for key, value in temp_md5_data.items():
             manifest.md5_data[key] = value
-        for key, value in temp_read_sources.items():
-            manifest.read_sources[key] = value
+
+        manifest.read_sources.update(temp_read_sources)
+
         manifest.md5_data.save()
         manifest.read_sources.save()
         print("Test data populated.")

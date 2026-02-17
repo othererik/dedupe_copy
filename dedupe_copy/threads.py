@@ -419,7 +419,7 @@ class ResultProcessor(threading.Thread):
                 # Add the new file paths to read_sources as well
                 if isinstance(self.manifest, Manifest):
                     for file_info in new_files:
-                        self.manifest.read_sources[file_info[0]] = None
+                        self.manifest.read_sources.add(file_info[0])
 
                 if is_collision:
                     self.collisions[md5] = self.md5_data[md5]
