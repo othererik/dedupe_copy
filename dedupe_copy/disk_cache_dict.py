@@ -6,6 +6,8 @@ for persistence. The current implementation uses SQLite as the storage
 backend, managed by the `SqliteBackend` class.
 """
 
+# pylint: disable=too-many-lines
+
 import collections.abc
 import os
 import pickle
@@ -425,6 +427,7 @@ class SqliteSetBackend:
         db_table: str = "sql_set_table",
         unlink_old_db: bool = False,
     ) -> None:
+        """Initializes the backend."""
         if db_file is None:
             db_file = f"db_set_{int(time.time())}.db"
         if unlink_old_db and os.path.exists(db_file):
@@ -440,6 +443,7 @@ class SqliteSetBackend:
         self._batch_size = 5000
 
     def _init_conn(self) -> None:
+        """Initializes connection and schema."""
         with self._lock:
             if self._conn is None:
                 self._conn = sqlite3.connect(
@@ -460,12 +464,14 @@ class SqliteSetBackend:
                 # Check for legacy table and migrate if needed
                 try:
                     cursor = self._conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name='sql_dict_table';"
+                        "SELECT name FROM sqlite_master WHERE type='table' "
+                        "AND name='sql_dict_table';"
                     )
                     if cursor.fetchone():
                         # Migration needed
                         self._conn.execute(
-                            f"INSERT OR IGNORE INTO {self.table} (key, hash) SELECT key, hash FROM sql_dict_table;"
+                            f"INSERT OR IGNORE INTO {self.table} (key, hash) "
+                            "SELECT key, hash FROM sql_dict_table;"
                         )
                         self._conn.execute("DROP TABLE sql_dict_table;")
                 except sqlite3.Error:
@@ -475,11 +481,13 @@ class SqliteSetBackend:
 
     @property
     def conn(self) -> sqlite3.Connection:
+        """Return connection."""
         if self._conn is None:
             self._init_conn()
         return self._conn
 
     def _get_key_id(self, key: Any) -> Any:
+        """Get ID for key."""
         with self._lock:
             self._commit_batch()
             cursor = self.conn.execute(
@@ -491,6 +499,7 @@ class SqliteSetBackend:
             raise KeyError(key)
 
     def add(self, key: Any) -> None:
+        """Add item."""
         with self._lock:
             self._write_batch.add(key)
             self._write_count += 1
@@ -498,6 +507,7 @@ class SqliteSetBackend:
                 self._commit_batch()
 
     def remove(self, key: Any) -> None:
+        """Remove item."""
         with self._lock:
             self._commit_batch()
             self.conn.execute(
@@ -509,6 +519,7 @@ class SqliteSetBackend:
                 self.commit()
 
     def __contains__(self, key: Any) -> bool:
+        """Check existence."""
         with self._lock:
             if key in self._write_batch:
                 return True
@@ -524,6 +535,7 @@ class SqliteSetBackend:
                 return False
 
     def __iter__(self) -> Iterator[Any]:
+        """Iterate keys."""
         with self._lock:
             self._commit_batch()
             keys = [
@@ -533,19 +545,23 @@ class SqliteSetBackend:
         return iter(keys)
 
     def __len__(self) -> int:
+        """Return size."""
         with self._lock:
             self._commit_batch()
             return self.conn.execute(f"select count(*) from {self.table};").fetchone()[0]
 
     @staticmethod
     def _dump(value: Any) -> bytes:
+        """Serialize."""
         return _serialize(value)
 
     @staticmethod
     def _load(value: bytes) -> Any:
+        """Deserialize."""
         return _deserialize(value)
 
     def update_batch(self, keys: Iterable[Any]) -> None:
+        """Batch update."""
         if not keys:
             return
         with self._lock:
@@ -561,6 +577,7 @@ class SqliteSetBackend:
                 raise e
 
     def _commit_batch(self) -> None:
+        """Commit pending writes."""
         if not self._write_batch:
             return
         with self._lock:
@@ -578,6 +595,7 @@ class SqliteSetBackend:
                 raise e
 
     def commit(self, force: bool = False) -> None:
+        """Commit transaction."""
         with self._lock:
             self._commit_batch()
             if self._commit_needed or force:
@@ -586,9 +604,11 @@ class SqliteSetBackend:
             self._write_count = 0
 
     def db_file_path(self) -> str:
+        """Return DB path."""
         return self._db_file
 
     def clear(self) -> None:
+        """Clear all data."""
         with self._lock:
             self._write_batch.clear()
             self._write_count = 0
@@ -596,6 +616,7 @@ class SqliteSetBackend:
             self.conn.commit()
 
     def close(self) -> None:
+        """Close connection."""
         with self._lock:
             if self._conn:
                 try:
@@ -606,6 +627,7 @@ class SqliteSetBackend:
             self._conn = None
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
+        """Save to new file."""
         with self._lock:
             self.commit(force=True)
             current_db_file = self._db_file
@@ -621,6 +643,7 @@ class SqliteSetBackend:
                     self._init_conn()
 
     def load(self, db_file: Optional[str] = None) -> None:
+        """Load from file."""
         with self._lock:
             self.commit(force=True)
             self.close()
@@ -1026,25 +1049,28 @@ class PersistentSet(collections.abc.MutableSet):
         with self._lock:
             return len(self._cache) + len(self._db)
 
-    def add(self, key: Any) -> None:
+    def add(self, value: Any) -> None:
+        """Add element."""
         with self._lock:
-            if key in self._cache:
+            if value in self._cache:
                 return
-            if key in self._db:
+            if value in self._db:
                 return
 
             if len(self._cache) >= self.max_size:
                 self._evict()
-            self._cache.add(key)
+            self._cache.add(value)
 
-    def discard(self, key: Any) -> None:
+    def discard(self, value: Any) -> None:
+        """Remove element."""
         with self._lock:
-            if key in self._cache:
-                self._cache.remove(key)
-            if key in self._db:
-                self._db.remove(key)
+            if value in self._cache:
+                self._cache.remove(value)
+            if value in self._db:
+                self._db.remove(value)
 
     def _evict(self) -> None:
+        """Evict item from cache to db."""
         if not self._cache:
             return
         # Simple random eviction since set doesn't track order
@@ -1053,11 +1079,13 @@ class PersistentSet(collections.abc.MutableSet):
         self._db.add(key)
 
     def clear(self) -> None:
+        """Clear set."""
         with self._lock:
             self._cache.clear()
             self._db.clear()
 
     def update(self, keys: Iterable[Any]) -> None:
+        """Update set with keys."""
         with self._lock:
             # Only add keys that are not already in the cache.
             # This preserves the disjoint property (key in cache OR db).
@@ -1066,9 +1094,11 @@ class PersistentSet(collections.abc.MutableSet):
                 self._db.update_batch(keys_to_add)
 
     def db_file_path(self) -> str:
+        """Return DB path."""
         return self._db.db_file_path()
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
+        """Save set."""
         with self._lock:
             if self._cache:
                 self._db.update_batch(self._cache)
@@ -1076,11 +1106,13 @@ class PersistentSet(collections.abc.MutableSet):
             self._db.save(db_file=db_file, remove_old_db=remove_old_db)
 
     def load(self, db_file: Optional[str] = None) -> None:
+        """Load set."""
         with self._lock:
             self._cache.clear()
             self._db.load(db_file=db_file)
 
     def close(self) -> None:
+        """Close set."""
         with self._lock:
             if hasattr(self._db, "close"):
                 self._db.close()

@@ -7,7 +7,7 @@ from unittest.mock import patch
 from dedupe_copy.test import utils
 
 from dedupe_copy.manifest import Manifest
-from dedupe_copy.disk_cache_dict import DefaultCacheDict, CacheDict, PersistentSet
+from dedupe_copy.disk_cache_dict import DefaultCacheDict, PersistentSet
 
 
 class TestManifests(unittest.TestCase):

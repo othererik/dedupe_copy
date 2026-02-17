@@ -10,7 +10,7 @@ import random
 import threading
 from typing import Any, Iterable, Iterator, List, Optional, Set, Tuple, Union
 
-from .disk_cache_dict import CacheDict, DefaultCacheDict, PersistentSet
+from .disk_cache_dict import DefaultCacheDict, PersistentSet
 
 logger = logging.getLogger(__name__)
 

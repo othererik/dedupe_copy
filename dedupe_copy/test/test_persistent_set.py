@@ -1,19 +1,22 @@
+"""Test suite for PersistentSet."""
+
 import unittest
 import os
-import shutil
 import sqlite3
 import random
 from dedupe_copy import disk_cache_dict
 from dedupe_copy.test import utils
 
+
 class TestPersistentSet(unittest.TestCase):
+    """Test suite for PersistentSet."""
+
     def setUp(self):
         self.temp_dir = utils.make_temp_dir("set_temp")
-        self.db_file = os.path.join(self.temp_dir, f"test_set_{random.getrandbits(16)}.db")
-        self.pset = disk_cache_dict.PersistentSet(
-            max_size=10,
-            db_file=self.db_file
+        self.db_file = os.path.join(
+            self.temp_dir, f"test_set_{random.getrandbits(16)}.db"
         )
+        self.pset = disk_cache_dict.PersistentSet(max_size=10, db_file=self.db_file)
 
     def tearDown(self):
         self.pset.close()
@@ -54,7 +57,7 @@ class TestPersistentSet(unittest.TestCase):
         self.assertIn("b", self.pset)
 
         # Discard non-existent
-        self.pset.discard("c") # Should not raise error
+        self.pset.discard("c")  # Should not raise error
 
     def test_iter(self):
         """Test iteration."""
@@ -104,7 +107,7 @@ class TestPersistentSet(unittest.TestCase):
         # Create legacy DB using SqliteBackend
         backend = disk_cache_dict.SqliteBackend(db_file=legacy_db)
         backend["old_key_1"] = None
-        backend["old_key_2"] = "some value" # Value is ignored in set
+        backend["old_key_2"] = "some value"  # Value is ignored in set
         backend.commit()
         backend.close()
 
@@ -120,10 +123,14 @@ class TestPersistentSet(unittest.TestCase):
         # We can inspect the DB
         conn = sqlite3.connect(legacy_db)
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sql_dict_table';")
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sql_dict_table';"
+        )
         self.assertIsNone(cursor.fetchone(), "Legacy table should be dropped")
 
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sql_set_table';")
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sql_set_table';"
+        )
         self.assertIsNotNone(cursor.fetchone(), "New table should exist")
         conn.close()
         pset.close()

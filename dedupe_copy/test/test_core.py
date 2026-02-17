@@ -60,8 +60,8 @@ class TestRunDupeCopy(unittest.TestCase):
             [file1_path, 17, os.path.getmtime(file1_path)],
             [file2_path, 17, os.path.getmtime(file2_path)],
         ]
-        manifest.read_sources[file1_path] = None
-        manifest.read_sources[file2_path] = None
+        manifest.read_sources.add(file1_path)
+        manifest.read_sources.add(file2_path)
         manifest.save()
         manifest.close()
 
