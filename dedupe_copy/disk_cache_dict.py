@@ -452,8 +452,50 @@ class CacheDict(collections.abc.MutableMapping):
             self._key_order = OrderedDict()
         # Note: Performance could be improved with a batched option
         if current_dictionary:
-            for key, value in current_dictionary.items():
-                self[key] = value
+            self.update_batch(current_dictionary)
+
+    def update_batch(self, data: Dict[Any, Any]) -> None:
+        """Batch update items.
+
+        If the data fits in the remaining cache, it is added to the cache.
+        Otherwise, it is flushed to the DB.
+        """
+        if not data:
+            return
+
+        with self._lock:
+            # If the new data fits in the remaining cache space, just add it to cache
+            remaining_space = self.max_size - len(self._cache)
+            if len(data) <= remaining_space:
+                self._cache.update(data)
+                if self.lru and self._key_order is not None:
+                    for key in data:
+                        if key in self._key_order:
+                            self._key_order.move_to_end(key, last=True)
+                        else:
+                            self._key_order[key] = None
+                return
+
+            # If it doesn't fit, dump to DB.
+            # Remove keys from cache that are being updated to ensure consistency
+            if len(data) > len(self._cache):
+                # Iterate cache to find keys to remove
+                keys_to_remove = [k for k in list(self._cache.keys()) if k in data]
+            else:
+                # Iterate data
+                keys_to_remove = [k for k in data if k in self._cache]
+
+            for k in keys_to_remove:
+                del self._cache[k]
+                if self.lru and self._key_order is not None:
+                    self._key_order.pop(k, None)
+
+            # Update DB
+            if hasattr(self._db, "update_batch"):
+                self._db.update_batch(data)
+            else:
+                for k, v in data.items():
+                    self._db[k] = v
 
     def clear(self) -> None:
         """Remove all items from the dictionary."""
