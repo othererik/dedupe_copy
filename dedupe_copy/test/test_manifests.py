@@ -43,7 +43,9 @@ class TestManifests(unittest.TestCase):
     def check_manifest(self, manifest, md5_data, sources):
         """Verify manifest contents match expected data."""
         # sources might be CacheDict (legacy test) or PersistentSet
-        sources_keys = list(sources.keys()) if hasattr(sources, "keys") else list(sources)
+        sources_keys = (
+            list(sources.keys()) if hasattr(sources, "keys") else list(sources)
+        )
         manifest_sources_keys = list(manifest.read_sources)
 
         self.assertEqual(

@@ -230,8 +230,8 @@ def match_extension(
     Returns:
         True if the filename matches any of the patterns, False otherwise.
     """
-    if isinstance(extensions, ExtensionMatcher):
-        return extensions.match(fn)
+    if hasattr(extensions, "match"):
+        return extensions.match(fn)  # type: ignore[union-attr]
 
     if not extensions:
         return True

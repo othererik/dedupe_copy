@@ -11,13 +11,14 @@ import time
 from pathlib import Path
 import tempfile
 
-try:
-    import matplotlib.pyplot as plt
 
+try:
+    import matplotlib.pyplot as plt  # type: ignore
     # Use more readable labels for log scale
-    from matplotlib.ticker import FuncFormatter
+    from matplotlib.ticker import FuncFormatter  # type: ignore
 except ImportError:
     plt = None  # type: ignore
+    FuncFormatter = None  # type: ignore
 
 from dedupe_copy.manifest import Manifest
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.2] - 2026-02-17
+- Test coverage improvements (disk_cache_dict, utils)
+- Code quality improvements (formatting, linting, type hinting)
+- Robustness improvements in extension matching (Case insensitive, duck typing)
+- Robustness improvements in disk cache dictionary (Exception handling, Race conditions)
+
 ## [1.2.1] - 2026-01-15
 - Performance improvements
 - Thread safety fix for CacheDict usage
