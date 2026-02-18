@@ -14,8 +14,8 @@ from pathlib import Path
 import tempfile
 
 try:
-    import matplotlib.pyplot as plt
-    from matplotlib.ticker import FuncFormatter
+    import matplotlib.pyplot as plt  # type: ignore
+    from matplotlib.ticker import FuncFormatter  # type: ignore
 except ImportError:
     plt = None  # type: ignore
 

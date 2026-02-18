@@ -135,5 +135,6 @@ class TestPersistentSet(unittest.TestCase):
         conn.close()
         pset.close()
 
+
 if __name__ == "__main__":
     unittest.main()

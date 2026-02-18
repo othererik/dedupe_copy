@@ -576,7 +576,9 @@ class SqliteSetBackend:
         """Return size."""
         with self._lock:
             self._commit_batch()
-            return self.conn.execute(f"select count(*) from {self.table};").fetchone()[0]
+            return self.conn.execute(f"select count(*) from {self.table};").fetchone()[
+                0
+            ]
 
     @staticmethod
     def _dump(value: Any) -> bytes:
