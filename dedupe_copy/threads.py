@@ -1,7 +1,7 @@
-"""Thread workers for walking, hashing, copying, and progress reporting
-"""
+"""Thread workers for walking, hashing, copying, and progress reporting"""
 
 import fnmatch
+import functools
 import logging
 import os
 import queue
@@ -55,6 +55,14 @@ class DistributeWorkConfig:
     walk_queue: "queue.Queue[str]"
 
 
+@functools.lru_cache(maxsize=128)
+def _compile_ignore_regex(ignore_tuple: Tuple[str, ...]) -> "re.Pattern[Any]":
+    """Compiles a tuple of ignore patterns into a single regex."""
+    normalized_patterns = [os.path.normcase(p) for p in ignore_tuple]
+    combined = "|".join(fnmatch.translate(p) for p in normalized_patterns)
+    return re.compile(combined)
+
+
 def _check_is_ignored(
     path: str,
     ignore: Optional[List[str]],
@@ -74,13 +82,16 @@ def _check_is_ignored(
         return True
 
     if ignore:
-        for ignored_pattern in ignore:
-            if fnmatch.fnmatch(path, ignored_pattern):
-                if progress_queue:
-                    progress_queue.put(
-                        (HIGH_PRIORITY, "ignored", path, ignored_pattern)
-                    )
-                return True
+        compiled_regex = _compile_ignore_regex(tuple(ignore))
+        if compiled_regex.match(os.path.normcase(path)):
+            if progress_queue:
+                for ignored_pattern in ignore:
+                    if fnmatch.fnmatch(path, ignored_pattern):
+                        progress_queue.put(
+                            (HIGH_PRIORITY, "ignored", path, ignored_pattern)
+                        )
+                        break
+            return True
     return False
 
 
