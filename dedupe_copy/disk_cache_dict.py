@@ -477,6 +477,7 @@ class SqliteSetBackend:
                 self._conn = sqlite3.connect(
                     self._db_file, check_same_thread=False, timeout=10
                 )
+                self._conn.execute("PRAGMA recursive_triggers = ON;")
                 self._conn.execute("PRAGMA journal_mode=WAL;")
                 self._conn.execute("PRAGMA synchronous=NORMAL;")
                 self._conn.execute("PRAGMA cache_size = -64000;")
@@ -504,6 +505,31 @@ class SqliteSetBackend:
                         self._conn.execute("DROP TABLE sql_dict_table;")
                 except sqlite3.Error:
                     pass
+
+                # Maintain a cached count in a metadata table
+                self._conn.execute(
+                    "CREATE TABLE IF NOT EXISTS _meta_info "
+                    "(tablename TEXT PRIMARY KEY, count INTEGER);"
+                )
+                # Initialize count if missing
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO _meta_info (tablename, count) "
+                    f"SELECT '{self.table}', count(*) FROM {self.table};"
+                )
+
+                # Create triggers to keep count updated
+                self._conn.execute(
+                    f"CREATE TRIGGER IF NOT EXISTS {self.table}_ins_count "
+                    f"AFTER INSERT ON {self.table} "
+                    f"BEGIN UPDATE _meta_info SET count = count + 1 "
+                    f"WHERE tablename = '{self.table}'; END;"
+                )
+                self._conn.execute(
+                    f"CREATE TRIGGER IF NOT EXISTS {self.table}_del_count "
+                    f"AFTER DELETE ON {self.table} "
+                    f"BEGIN UPDATE _meta_info SET count = count - 1 "
+                    f"WHERE tablename = '{self.table}'; END;"
+                )
 
                 self._conn.commit()
 
@@ -576,9 +602,9 @@ class SqliteSetBackend:
         """Return size."""
         with self._lock:
             self._commit_batch()
-            return self.conn.execute(f"select count(*) from {self.table};").fetchone()[
-                0
-            ]
+            return self.conn.execute(
+                "select count from _meta_info where tablename = ?;", (self.table,)
+            ).fetchone()[0]
 
     @staticmethod
     def _dump(value: Any) -> bytes:
