@@ -1,5 +1,4 @@
-"""Thread workers for walking, hashing, copying, and progress reporting
-"""
+"""Thread workers for walking, hashing, copying, and progress reporting"""
 
 import fnmatch
 import logging
@@ -154,6 +153,10 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
 
     for item in items:
         fn = os.path.join(src, item)
+        if os.path.islink(fn):
+            if config.progress_queue:
+                config.progress_queue.put((HIGH_PRIORITY, "ignored", fn, "symlink"))
+            continue
         if os.path.isdir(fn):
             if config.progress_queue:
                 config.progress_queue.put((LOW_PRIORITY, "dir", fn))
