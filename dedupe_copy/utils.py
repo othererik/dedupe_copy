@@ -9,7 +9,6 @@ import sys
 import time
 from typing import Any, List, Optional, Tuple, Union
 
-
 logger = logging.getLogger(__name__)
 
 # Optional import of xxhash for faster hashing if available
@@ -185,7 +184,7 @@ class ExtensionMatcher:
             # We assume extensions might be raw or cleaned.
             # Convert to lower case for case-insensitive matching.
             ext = ext.lower()
-            if any(c in ext for c in "*?[]"):
+            if "*" in ext or "?" in ext or "[" in ext or "]" in ext:
                 self.wildcard_patterns.append(ext)
             else:
                 self.exact_matches.add(ext)
@@ -268,12 +267,12 @@ def clean_extensions(extensions: Optional[List[str]]) -> List[str]:
             elif ext.startswith("*"):
                 clean.append(ext)
             elif ext.startswith("."):
-                if any(c in ext for c in "*?[]"):
+                if "*" in ext or "?" in ext or "[" in ext or "]" in ext:
                     clean.append(f"*{ext}")
                 else:
                     clean.append(ext)
             else:
-                if any(c in ext for c in "*?[]"):
+                if "*" in ext or "?" in ext or "[" in ext or "]" in ext:
                     clean.append(f"*.{ext}")
                 else:
                     clean.append(f".{ext}")
