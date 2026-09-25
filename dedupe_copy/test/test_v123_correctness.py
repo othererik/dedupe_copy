@@ -733,4 +733,3 @@ s.close()
             mock_sleep.assert_not_called()
             _throttle_puts(MAX_TARGET_QUEUE_SIZE)
             mock_sleep.assert_called_once()
-
