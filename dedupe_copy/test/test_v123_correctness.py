@@ -8,11 +8,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from dedupe_copy.bin.dedupecopy_cli import run_cli
+from dedupe_copy.config import DeleteJob
 from dedupe_copy.core import delete_files, run_dupe_copy
-from dedupe_copy.disk_cache_dict import (
-    CacheDict,
-    DefaultCacheDict,
-)
+from dedupe_copy.disk_cache_dict import CacheDict
 from dedupe_copy.manifest import Manifest
 from dedupe_copy.path_rules import strip_read_path_prefix
 from dedupe_copy.utils import (
@@ -44,7 +43,7 @@ class TestV123Correctness(unittest.TestCase):
         dest_dir = os.path.join(self.temp_dir, "dest")
         manifest_out = os.path.join(self.temp_dir, "out.db")
 
-        def failing_copyfile(src, dst, *args, **kwargs):
+        def failing_copyfile(_src, dst, *_args, **_kwargs):
             # Simulate partial write before disk full error
             with open(dst, "wb") as f:
                 f.write(b"partial")
@@ -228,8 +227,6 @@ class TestV123Correctness(unittest.TestCase):
 
     def test_delete_files_deduplicates_identical_paths_in_collision_list(self):
         """delete_files() must deduplicate equivalent paths before deleting."""
-        from dedupe_copy.config import DeleteJob
-
         sole_file = self._create_file("dir/sole.txt", b"important")
         non_norm_path = os.path.join(self.temp_dir, "dir", ".", "sole.txt")
 
@@ -273,7 +270,7 @@ class TestV123Correctness(unittest.TestCase):
         self.assertEqual(rel, "2024/pic.jpg")
 
     def test_cross_process_pythonhashseed_sqlite_persistence(self):
-        """Manifests and SqliteBackend/SqliteSetBackend must work across different PYTHONHASHSEEDs."""
+        """Manifests and SQLite backends must work across different PYTHONHASHSEEDs."""
         db_path = os.path.join(self.temp_dir, "hashseed_dict.db")
         set_path = os.path.join(self.temp_dir, "hashseed_set.db")
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -335,6 +332,7 @@ s.close()
 
     def test_cachedict_disjointness_and_backend_invariants(self):
         """Verify CacheDict cache/db disjointness, KeyError on delete, and copy isolation."""
+        # pylint: disable=protected-access
         d = CacheDict(max_size=3, db_file=os.path.join(self.temp_dir, "orig.db"))
         try:
             # Populate enough items to force eviction into SQLite
@@ -362,7 +360,7 @@ s.close()
             with self.assertRaises(KeyError):
                 del d._db["nonexistent_key_xyz"]
 
-            # Test __setitem__ while _evict_lock_held is True writes to _db without duplicating into _cache
+            # Test __setitem__ with _evict_lock_held writes to _db without duplicating into _cache
             d._evict_lock_held = True
             try:
                 d["reentrant_key"] = "val"
@@ -385,8 +383,6 @@ s.close()
 
     def test_cli_rename_on_collision_argument_parsing(self):
         """CLI parser accepts --rename-on-collision and passes it to run_dupe_copy."""
-        from dedupe_copy.bin.dedupecopy_cli import run_cli
-
         with (
             patch(
                 "sys.argv",

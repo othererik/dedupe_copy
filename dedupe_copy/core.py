@@ -546,6 +546,23 @@ def copy_data(
     return all_deleted_files, moved_files
 
 
+def _select_files_for_deletion(
+    file_list: List[Any], delete_all: bool
+) -> List[Any]:
+    """Deduplicates file_list by normalized path and selects files to delete."""
+    unique_by_path = {}
+    for file_info in file_list:
+        norm_p = os.path.normcase(os.path.abspath(file_info[0]))
+        if norm_p not in unique_by_path:
+            unique_by_path[norm_p] = file_info
+    sorted_file_list = sorted(unique_by_path.values(), key=lambda x: x[0])
+    if delete_all:
+        return sorted_file_list
+    if len(sorted_file_list) > 1:
+        return sorted_file_list[1:]
+    return []
+
+
 def delete_files(
     duplicates: Any,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
@@ -585,20 +602,9 @@ def delete_files(
         if not file_list:
             continue
 
-        unique_by_path = {}
-        for file_info in file_list:
-            norm_p = os.path.normcase(os.path.abspath(file_info[0]))
-            if norm_p not in unique_by_path:
-                unique_by_path[norm_p] = file_info
-
-        sorted_file_list = sorted(unique_by_path.values(), key=lambda x: x[0])
-        files_to_process = []
-
-        if _hash in hashes_to_delete_all:
-            files_to_process.extend(sorted_file_list)
-        elif len(sorted_file_list) > 1:
-            # Default behavior: keep the first file, queue the rest for deletion
-            files_to_process.extend(sorted_file_list[1:])
+        files_to_process = _select_files_for_deletion(
+            file_list, _hash in hashes_to_delete_all
+        )
 
         for file_info in files_to_process:
             path_to_delete, size, _ = file_info
@@ -758,6 +764,15 @@ def verify_manifest_fs(manifest: Manifest, ui: Optional[ConsoleUI] = None) -> bo
 
     logger.error("Manifest verification failed.")
     return False
+
+
+def _populate_collisions_from_manifest(
+    manifest: Manifest, collisions: Any, dedupe_empty: bool
+) -> None:
+    """Populates the collisions dictionary from a loaded manifest."""
+    for md5, info in manifest.items():
+        if len(info) > 1 and (dedupe_empty or info[0][1] > 0):
+            collisions[md5] = info
 
 
 # pylint: disable=too-many-statements
@@ -981,10 +996,7 @@ def run_dupe_copy(
         collisions_file = os.path.join(temp_directory, "collisions.db")
         collisions = DefaultCacheDict(list, db_file=collisions_file, max_size=10000)
         if manifest and not ignore_old_collisions:
-            # rebuild collision list
-            for md5, info in manifest.items():
-                if len(info) > 1 and (dedupe_empty or info[0][1] > 0):
-                    collisions[md5] = info
+            _populate_collisions_from_manifest(manifest, collisions, dedupe_empty)
         walk_config = WalkConfig(
             extensions=extensions,
             ignore=ignored_patterns,
@@ -1004,9 +1016,9 @@ def run_dupe_copy(
             if manifest:
                 logger.info("Manifest loaded with %d items.", len(manifest))
                 if ignore_old_collisions:
-                    for md5, info in manifest.items():
-                        if len(info) > 1 and (dedupe_empty or info[0][1] > 0):
-                            collisions[md5] = info
+                    _populate_collisions_from_manifest(
+                        manifest, collisions, dedupe_empty
+                    )
                 logger.info("Found %d collisions in manifest.", len(collisions))
             dupes = collisions
             all_data = manifest

@@ -248,11 +248,27 @@ class Manifest:
                     pass
 
         # Update read_sources separately for efficiency
+        self._discard_from_read_sources(files_to_remove_set)
+
+    def _discard_from_read_sources(self, paths: Any) -> None:
+        """Removes multiple paths from read_sources using batching if available."""
+        if not paths:
+            return
         if hasattr(self.read_sources, "discard_batch"):
-            self.read_sources.discard_batch(files_to_remove_set)
+            self.read_sources.discard_batch(paths)
         else:
-            for path in files_to_remove_set:
+            for path in paths:
                 self.read_sources.discard(path)
+
+    def _add_to_read_sources(self, paths: List[str]) -> None:
+        """Adds multiple paths to read_sources using batching if available."""
+        if not paths:
+            return
+        if hasattr(self.read_sources, "update"):
+            self.read_sources.update(paths)
+        else:
+            for path in paths:
+                self.read_sources.add(path)
 
     def update_paths(self, moved_files: List[Tuple[str, str]]) -> None:
         """Updates file paths in the manifest after a move operation.
@@ -266,12 +282,11 @@ class Manifest:
 
         # Create a mapping of old paths to new paths for quick lookup
         path_map = dict(moved_files)
-        hashes_to_modify = {}
-
-        # Find which hashes are affected
-        for hash_val, file_list in self.md5_data.items():
-            if any(file_info[0] in path_map for file_info in file_list):
-                hashes_to_modify[hash_val] = file_list
+        hashes_to_modify = {
+            hash_val: file_list
+            for hash_val, file_list in self.md5_data.items()
+            if any(file_info[0] in path_map for file_info in file_list)
+        }
 
         old_paths_to_discard = []
         new_paths_to_add = []
@@ -290,18 +305,8 @@ class Manifest:
                     new_file_list.append(file_info)
             self.md5_data[hash_val] = new_file_list
 
-        if old_paths_to_discard:
-            if hasattr(self.read_sources, "discard_batch"):
-                self.read_sources.discard_batch(old_paths_to_discard)
-            else:
-                for old_path in old_paths_to_discard:
-                    self.read_sources.discard(old_path)
-        if new_paths_to_add:
-            if hasattr(self.read_sources, "update"):
-                self.read_sources.update(new_paths_to_add)
-            else:
-                for new_path in new_paths_to_add:
-                    self.read_sources.add(new_path)
+        self._discard_from_read_sources(old_paths_to_discard)
+        self._add_to_read_sources(new_paths_to_add)
 
     def _populate_read_sources(self) -> None:
         """Populate the read_sources list from the md5_data."""

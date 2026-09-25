@@ -133,6 +133,27 @@ def _is_file_processing_required(
     return True
 
 
+def _mark_path_seen(
+    path: str,
+    seen_paths: Optional[set],
+    seen_lock: Optional[threading.Lock],
+) -> bool:
+    """Returns True if path was not previously seen (and records it), False otherwise."""
+    if seen_paths is None:
+        return True
+    norm_p = os.path.normcase(os.path.abspath(path))
+    if seen_lock is not None:
+        with seen_lock:
+            if norm_p in seen_paths:
+                return False
+            seen_paths.add(norm_p)
+            return True
+    if norm_p in seen_paths:
+        return False
+    seen_paths.add(norm_p)
+    return True
+
+
 def distribute_work(src: str, config: DistributeWorkConfig) -> None:
     """Scans a directory and distributes its contents to worker queues.
 
@@ -179,17 +200,8 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
             config.walk_config.ignore_regex,
             extension_matcher=config.walk_config.extension_matcher,
         ):
-            if config.seen_paths is not None:
-                norm_fn = os.path.normcase(os.path.abspath(fn))
-                if config.seen_lock is not None:
-                    with config.seen_lock:
-                        if norm_fn in config.seen_paths:
-                            continue
-                        config.seen_paths.add(norm_fn)
-                else:
-                    if norm_fn in config.seen_paths:
-                        continue
-                    config.seen_paths.add(norm_fn)
+            if not _mark_path_seen(fn, config.seen_paths, config.seen_lock):
+                continue
             _throttle_puts(config.work_queue.qsize())
             config.work_queue.put(fn)
             if config.progress_queue:
@@ -325,7 +337,8 @@ class CopyThread(threading.Thread):
                                 MEDIUM_PRIORITY,
                                 "error",
                                 src,
-                                f"Error copying to {repr(dest)}: Source and destination are the same file",
+                                f"Error copying to {repr(dest)}: "
+                                "Source and destination are the same file",
                             )
                         )
                     return None
@@ -362,7 +375,8 @@ class CopyThread(threading.Thread):
                             "error",
                             src,
                             f"Destination path collision at {repr(dest)}; "
-                            "skipping copy to prevent data loss (use --rename-on-collision to rename).",
+                            "skipping copy to prevent data loss "
+                            "(use --rename-on-collision to rename).",
                         )
                     )
                 return None
@@ -512,6 +526,26 @@ class ResultProcessor(threading.Thread):
         self._local_cache: dict[str, list[tuple[str, int, float]]] = {}
         self._batch_count = 0
 
+    def _merge_files_for_hash(
+        self, md5: str, new_files: list[tuple[str, int, float]]
+    ) -> tuple[list[tuple[str, int, float]], int]:
+        """Merges new file entries for a hash while deduplicating by normalized path."""
+        current_files = list(self.md5_data[md5])
+        index_by_norm_path = {
+            os.path.normcase(os.path.abspath(f[0])): idx
+            for idx, f in enumerate(current_files)
+        }
+        added_distinct = 0
+        for file_info in new_files:
+            norm_p = os.path.normcase(os.path.abspath(file_info[0]))
+            if norm_p in index_by_norm_path:
+                current_files[index_by_norm_path[norm_p]] = file_info
+            else:
+                index_by_norm_path[norm_p] = len(current_files)
+                current_files.append(file_info)
+                added_distinct += 1
+        return current_files, added_distinct
+
     def _commit_batch(self) -> None:
         """Commits the local cache to the main manifest."""
         if not self._local_cache:
@@ -529,21 +563,9 @@ class ResultProcessor(threading.Thread):
         for md5, new_files in self._local_cache.items():
             try:
                 already_existed = md5 in self.md5_data
-                current_files = list(self.md5_data[md5])
-                index_by_norm_path = {
-                    os.path.normcase(os.path.abspath(f[0])): idx
-                    for idx, f in enumerate(current_files)
-                }
-                added_distinct = 0
-                for file_info in new_files:
-                    norm_p = os.path.normcase(os.path.abspath(file_info[0]))
-                    if norm_p in index_by_norm_path:
-                        current_files[index_by_norm_path[norm_p]] = file_info
-                    else:
-                        index_by_norm_path[norm_p] = len(current_files)
-                        current_files.append(file_info)
-                        added_distinct += 1
-
+                current_files, added_distinct = self._merge_files_for_hash(
+                    md5, new_files
+                )
                 self.md5_data[md5] = current_files
 
                 # Add the new file paths to read_sources as well
@@ -888,17 +910,12 @@ class WalkThread(threading.Thread):
                             )
                     if not os.path.isdir(src):
                         raise ValueError(f"Unexpected file in work queue: {src!r}")
-                    if self.distribute_config.seen_paths is not None:
-                        norm_dir = os.path.normcase(os.path.abspath(src))
-                        if self.distribute_config.seen_lock is not None:
-                            with self.distribute_config.seen_lock:
-                                if norm_dir in self.distribute_config.seen_paths:
-                                    continue
-                                self.distribute_config.seen_paths.add(norm_dir)
-                        else:
-                            if norm_dir in self.distribute_config.seen_paths:
-                                continue
-                            self.distribute_config.seen_paths.add(norm_dir)
+                    if not _mark_path_seen(
+                        src,
+                        self.distribute_config.seen_paths,
+                        self.distribute_config.seen_lock,
+                    ):
+                        continue
                     distribute_work(src, self.distribute_config)
                 finally:
                     self.walk_queue.task_done()
