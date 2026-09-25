@@ -261,14 +261,9 @@ class Manifest:
                 self.read_sources.discard(path)
 
     def _add_to_read_sources(self, paths: List[str]) -> None:
-        """Adds multiple paths to read_sources using batching if available."""
-        if not paths:
-            return
-        if hasattr(self.read_sources, "update"):
+        """Adds multiple paths to read_sources using batching."""
+        if paths:
             self.read_sources.update(paths)
-        else:
-            for path in paths:
-                self.read_sources.add(path)
 
     def update_paths(self, moved_files: List[Tuple[str, str]]) -> None:
         """Updates file paths in the manifest after a move operation.

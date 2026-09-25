@@ -26,7 +26,7 @@ DEBUG = False
 def _serialize(value: Any, version: int = -1) -> bytes:
     """Serialize value for storage in the database."""
     if value is None:
-        return sqlite3.Binary(b"N")
+        return b"N"
 
     match value:
         case str():
@@ -46,7 +46,7 @@ def _serialize(value: Any, version: int = -1) -> bytes:
             prefix = b"P"
             content = pickle.dumps(value, version)
 
-    return sqlite3.Binary(prefix + content)
+    return prefix + content
 
 
 def _deserialize(value: bytes) -> Any:
@@ -640,10 +640,11 @@ class SqliteSetBackend:
                 return True
             if not self._has_db_rows:
                 return False
-            cursor = self.conn.execute(
-                f"select 1 from {self.table} where key=?;", (self._dump(key),)
-            )
-            return cursor.fetchone() is not None
+            try:
+                self._get_key_id(key)
+                return True
+            except KeyError:
+                return False
 
     def __iter__(self) -> Iterator[Any]:
         """Iterate keys."""

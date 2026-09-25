@@ -1,19 +1,33 @@
 """Regression tests for v1.2.3 correctness, data safety, and performance fixes."""
 
 import os
+import queue
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from dedupe_copy.bin.dedupecopy_cli import run_cli
-from dedupe_copy.config import DeleteJob
+from dedupe_copy.config import CopyConfig, DeleteJob
 from dedupe_copy.core import delete_files, run_dupe_copy
-from dedupe_copy.disk_cache_dict import CacheDict
-from dedupe_copy.manifest import Manifest
+from dedupe_copy.disk_cache_dict import (
+    CacheDict,
+    PersistentSet,
+    SqliteBackend,
+    SqliteSetBackend,
+)
+from dedupe_copy.manifest import Manifest, _stage_sqlite_file
 from dedupe_copy.path_rules import strip_read_path_prefix
+from dedupe_copy.threads import (
+    CopyThread,
+    _copy_file,
+    _is_file_processing_required,
+    _mark_path_seen,
+)
 from dedupe_copy.utils import (
     ExtensionMatcher,
     MAX_TARGET_QUEUE_SIZE,
@@ -340,21 +354,28 @@ s.close()
                 d[f"k{i}"] = i
             self.assertEqual(len(d), 6)
 
-            # Find keys currently in SQLite (not in _cache)
+            # Find keys currently in SQLite (not in _cache) and one in _cache
             db_keys = [k for k in [f"k{i}" for i in range(6)] if k not in d._cache]
+            cache_key = next(iter(d._cache))
             self.assertTrue(len(db_keys) >= 2)
             target_key = db_keys[0]
             remaining_key = db_keys[1]
 
+            # Free 1 slot in _cache so update_batch takes the _update_cache_batch path
+            del d[cache_key]
+            self.assertEqual(len(d), 5)
+
             # Updating via update_batch where target_key goes into _cache must remove it from _db
             d.update_batch({target_key: 999})
+            self.assertIn(target_key, d._cache)
+            self.assertNotIn(target_key, d._db)
             self.assertEqual(d[target_key], 999)
-            self.assertEqual(len(d), 6)
+            self.assertEqual(len(d), 5)
 
             # Deleting target_key must completely remove it from d
             del d[target_key]
             self.assertNotIn(target_key, d)
-            self.assertEqual(len(d), 5)
+            self.assertEqual(len(d), 4)
 
             # Deleting a missing key from SqliteBackend must raise KeyError
             with self.assertRaises(KeyError):
@@ -368,18 +389,184 @@ s.close()
                 d._evict_lock_held = False
             self.assertNotIn("reentrant_key", d._cache)
             self.assertIn("reentrant_key", d._db)
-            self.assertEqual(len(d), 6)
+            self.assertEqual(len(d), 5)
 
-            # Test copy() isolation using a key that still exists
+            # Test copy() and fromkeys() isolation
             d_copy = d.copy(db_file=os.path.join(self.temp_dir, "copy.db"))
+            d_fk = d.fromkeys(
+                ["fk1", "fk2"], 42, db_file=os.path.join(self.temp_dir, "fk.db")
+            )
             try:
                 self.assertIsNot(d_copy._db, d._db)
                 d_copy[remaining_key] = 12345
                 self.assertNotEqual(d[remaining_key], 12345)
+                self.assertEqual(d_fk["fk1"], 42)
             finally:
                 d_copy.close()
+                d_fk.close()
         finally:
             d.close()
+
+    def test_sqlite_backends_and_persistent_set_edge_cases(self):
+        """Cover SqliteBackend, SqliteSetBackend, and PersistentSet fast-paths and edge cases."""
+        # pylint: disable=protected-access
+        b_path = os.path.join(self.temp_dir, "empty_backend.db")
+        backend = SqliteBackend(db_file=b_path)
+        try:
+            with self.assertRaises(KeyError):
+                _ = backend["missing"]
+            with self.assertRaises(KeyError):
+                del backend["missing"]
+            backend._insert("direct_k", "direct_v")
+            self.assertTrue(backend._has_db_rows)
+            self.assertEqual(backend["direct_k"], "direct_v")
+        finally:
+            backend.close()
+
+        # SqliteSetBackend with db_file=None and unlink_old_db=True
+        s_none = SqliteSetBackend(db_file=None)
+        none_path = s_none.db_file_path()
+        s_none.close()
+        if os.path.exists(none_path):
+            os.unlink(none_path)
+
+        s_path = os.path.join(self.temp_dir, "set_edge.db")
+        self._create_file("set_edge.db", b"")
+        sb = SqliteSetBackend(db_file=s_path, unlink_old_db=True)
+        try:
+            with self.assertRaises(KeyError):
+                sb._get_key_id("missing_empty")
+            sb.remove_batch([])
+            sb.add("buffered_1")
+            sb.remove_batch(["buffered_1"])
+            self.assertNotIn("buffered_1", sb)
+
+            sb.add("buffered_2")
+            sb.remove("buffered_2")
+            self.assertNotIn("buffered_2", sb)
+
+            sb.add("pending_up")
+            sb.update_batch(["pending_up", "committed_1"])
+            self.assertIn("committed_1", sb)
+            self.assertNotIn("never_added", sb)
+
+            sb._batch_size = 1
+            sb.remove("committed_1")
+            self.assertNotIn("committed_1", sb)
+
+            sb.update_batch(["err_key"])
+            mock_conn = MagicMock()
+            mock_conn.executemany.side_effect = sqlite3.OperationalError("boom")
+            with patch.object(SqliteSetBackend, "conn", new=mock_conn):
+                with self.assertRaises(sqlite3.OperationalError):
+                    sb.remove_batch(["err_key"])
+                mock_conn.rollback.assert_called_once()
+        finally:
+            sb.close()
+
+        # PersistentSet with a custom backend lacking remove_batch
+        custom_backend = {"a", "b"}
+        ps = PersistentSet(backend=custom_backend)
+        ps.discard_batch(["a"])
+        self.assertNotIn("a", custom_backend)
+
+    def test_manifest_and_path_rules_edge_cases(self):
+        """Cover _stage_sqlite_file on 0-byte file, _discard_from_read_sources, and path_rules."""
+        # pylint: disable=protected-access
+        zero_src = self._create_file("zero.db", b"")
+        zero_dst = os.path.join(self.temp_dir, "sub_stage", "zero_copy.db")
+        _stage_sqlite_file(zero_src, zero_dst)
+        self.assertTrue(os.path.exists(zero_dst))
+
+        m = Manifest(None, temp_directory=self.temp_dir)
+        try:
+            m._discard_from_read_sources([])
+            m._add_to_read_sources([])
+            m.read_sources = {"/p/1", "/p/2"}
+            m._discard_from_read_sources(["/p/1"])
+            self.assertEqual(m.read_sources, {"/p/2"})
+        finally:
+            m.close()
+
+        self.assertEqual(strip_read_path_prefix("/a/b.txt", None), ("a/b.txt", False))
+        self.assertEqual(strip_read_path_prefix("/a/b.txt", ["/"]), ("a/b.txt", True))
+        self.assertEqual(strip_read_path_prefix("/a", ["/a"]), ("", True))
+        self.assertEqual(
+            strip_read_path_prefix("/unrelated/b.txt", ["/data"]),
+            ("unrelated/b.txt", False),
+        )
+
+    def test_threads_and_core_edge_cases(self):
+        """Cover edge cases in threads.py and core.py (--no-walk with --ignore-old-collisions)."""
+        # pylint: disable=protected-access
+        f_a = self._create_file("dupes/a.txt", b"dupe_content")
+        self._create_file("dupes/b.txt", b"dupe_content")
+        m_in = os.path.join(self.temp_dir, "dupes_in.db")
+        r_out = os.path.join(self.temp_dir, "dupes_report.csv")
+
+        run_dupe_copy(
+            read_from_path=[os.path.join(self.temp_dir, "dupes")],
+            manifest_out_path=m_in,
+        )
+        run_dupe_copy(
+            manifests_in_paths=[m_in],
+            csv_report_path=r_out,
+            no_walk=True,
+            ignore_old_collisions=True,
+        )
+        self.assertTrue(os.path.exists(r_out))
+
+        # Relative path in _is_file_processing_required when abspath is in already_processed
+        rel_path = os.path.relpath(f_a, os.getcwd())
+        self.assertFalse(
+            _is_file_processing_required(
+                rel_path, {os.path.abspath(f_a)}, None, None, None
+            )
+        )
+
+        # _mark_path_seen without lock
+        seen: set = set()
+        self.assertTrue(_mark_path_seen(f_a, seen, None))
+        self.assertFalse(_mark_path_seen(f_a, seen, None))
+
+        # Direct _copy_file samefile and cleanup OSError
+        pq: "queue.PriorityQueue" = queue.PriorityQueue()
+        self.assertFalse(_copy_file(f_a, f_a, False, pq))
+
+        dest_fail = os.path.join(self.temp_dir, "fail_clean.txt")
+
+        def fail_copy_and_leave(_s, d):
+            with open(d, "wb") as f:
+                f.write(b"x")
+            raise OSError("copy failed")
+
+        with (
+            patch("dedupe_copy.threads.shutil.copyfile", side_effect=fail_copy_and_leave),
+            patch("dedupe_copy.threads.os.remove", side_effect=OSError("unlink failed")),
+        ):
+            self.assertFalse(_copy_file(f_a, dest_fail, False, pq))
+
+        # CopyThread._resolve_destination_path and _handle_delete_on_copy edge cases
+        ct = CopyThread(
+            queue.Queue(),
+            threading.Event(),
+            copy_config=CopyConfig(
+                target_path=self.temp_dir,
+                read_paths=[self.temp_dir],
+                rename_on_collision=True,
+            ),
+            progress_queue=pq,
+        )
+        existing_dest = self._create_file("existing_dest.txt", b"diff")
+        with patch("dedupe_copy.threads.os.path.samefile", side_effect=OSError("err")):
+            with patch(
+                "dedupe_copy.threads.os.path.getsize", side_effect=OSError("err")
+            ):
+                resolved = ct._resolve_destination_path(f_a, existing_dest)
+                self.assertTrue(resolved and resolved.endswith("existing_dest_1.txt"))
+
+        ct._handle_delete_on_copy(f_a, f_a)
+        self.assertTrue(os.path.exists(f_a))
 
     def test_cli_rename_on_collision_argument_parsing(self):
         """CLI parser accepts --rename-on-collision and passes it to run_dupe_copy."""
@@ -493,7 +680,3 @@ s.close()
 
             _throttle_puts(MAX_TARGET_QUEUE_SIZE)
             mock_sleep.assert_called_once()
-
-
-if __name__ == "__main__":
-    unittest.main()
