@@ -27,8 +27,10 @@ __all__ = [
 
 from .config import CopyConfig, WalkConfig
 from .manifest import Manifest
+from .path_rules import strip_read_path_prefix
 from .utils import (
     _throttle_puts,
+    hash_file,
     lower_extension,
     match_extension,
     read_file,
@@ -53,6 +55,8 @@ class DistributeWorkConfig:
     progress_queue: Optional["queue.PriorityQueue[Any]"]
     work_queue: "queue.Queue[str]"
     walk_queue: "queue.Queue[str]"
+    seen_paths: Optional[set] = None
+    seen_lock: Optional[threading.Lock] = None
 
 
 def _check_is_ignored(
@@ -113,6 +117,9 @@ def _is_file_processing_required(
     """
     if filepath in already_processed:
         return False
+    abs_filepath = os.path.abspath(filepath)
+    if abs_filepath != filepath and abs_filepath in already_processed:
+        return False
 
     if _check_is_ignored(filepath, ignore, ignore_regex, progress_queue):
         return False
@@ -123,6 +130,27 @@ def _is_file_processing_required(
     elif extensions:
         if not match_extension(extensions, filepath):
             return False
+    return True
+
+
+def _mark_path_seen(
+    path: str,
+    seen_paths: Optional[set],
+    seen_lock: Optional[threading.Lock],
+) -> bool:
+    """Returns True if path was not previously seen (and records it), False otherwise."""
+    if seen_paths is None:
+        return True
+    norm_p = os.path.normcase(os.path.abspath(path))
+    if seen_lock is not None:
+        with seen_lock:
+            if norm_p in seen_paths:
+                return False
+            seen_paths.add(norm_p)
+            return True
+    if norm_p in seen_paths:
+        return False
+    seen_paths.add(norm_p)
     return True
 
 
@@ -172,6 +200,8 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
             config.walk_config.ignore_regex,
             extension_matcher=config.walk_config.extension_matcher,
         ):
+            if not _mark_path_seen(fn, config.seen_paths, config.seen_lock):
+                continue
             _throttle_puts(config.work_queue.qsize())
             config.work_queue.put(fn)
             if config.progress_queue:
@@ -183,10 +213,15 @@ def _copy_file(
     dest: str,
     preserve_stat: bool,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
-) -> None:
-    """Helper to copy a single file."""
+) -> bool:
+    """Helper to copy a single file. Returns True on success, False on failure."""
     dest_dir = os.path.dirname(dest)
+    dest_existed = os.path.exists(dest)
     try:
+        if os.path.abspath(src) == os.path.abspath(dest) or (
+            dest_existed and os.path.exists(src) and os.path.samefile(src, dest)
+        ):
+            raise shutil.SameFileError(f"{src!r} and {dest!r} are the same file")
         if not os.path.exists(dest_dir):
             try:
                 os.makedirs(dest_dir)
@@ -199,7 +234,13 @@ def _copy_file(
             shutil.copyfile(src, dest)
         if progress_queue:
             progress_queue.put((LOW_PRIORITY, "copied", src, dest))
+        return True
     except (OSError, IOError, shutil.Error) as e:
+        if not dest_existed and os.path.exists(dest):
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
         if progress_queue:
             progress_queue.put(
                 (
@@ -209,6 +250,7 @@ def _copy_file(
                     f"Error copying to {repr(dest)}: {e}",
                 )
             )
+        return False
 
 
 class CopyThread(threading.Thread):
@@ -268,14 +310,89 @@ class CopyThread(threading.Thread):
             return dest
 
         # Default behavior: preserve original directory structure (no_change)
-        # Get relative path from the read_path root
-        for read_path in self.config.read_paths:
-            if src.startswith(read_path):
-                rel_path = os.path.relpath(src, read_path)
-                return os.path.join(self.config.target_path, rel_path)
+        # Get relative path from the read_path root on a strict path boundary
+        rel_path, matched = strip_read_path_prefix(src, self.config.read_paths)
+        if matched:
+            return os.path.join(self.config.target_path, rel_path)
 
         # Fallback if source not under any read_path
         return os.path.join(self.config.target_path, os.path.basename(src))
+
+    def _resolve_destination_path(self, src: str, dest: str) -> Optional[str]:
+        """Resolves destination path collisions safely across worker threads."""
+        # pylint: disable=protected-access
+        with self.config._dest_lock:
+            norm_src = os.path.normcase(os.path.abspath(src))
+            norm_dest = os.path.normcase(os.path.abspath(dest))
+
+            try:
+                if norm_src == norm_dest or (
+                    os.path.exists(dest)
+                    and os.path.exists(src)
+                    and os.path.samefile(src, dest)
+                ):
+                    if self.progress_queue:
+                        self.progress_queue.put(
+                            (
+                                MEDIUM_PRIORITY,
+                                "error",
+                                src,
+                                f"Error copying to {repr(dest)}: "
+                                "Source and destination are the same file",
+                            )
+                        )
+                    return None
+            except OSError:
+                pass
+
+            claimed_by = self.config._claimed_destinations.get(norm_dest)
+            is_collision = False
+            if claimed_by is not None and claimed_by != norm_src:
+                is_collision = True
+            elif claimed_by is None and os.path.exists(dest):
+                # Destination already exists on disk from prior state.
+                # Check if it already has identical content to src (e.g. resumed manifest run).
+                try:
+                    same_content = (
+                        os.path.exists(src)
+                        and os.path.getsize(dest) == os.path.getsize(src)
+                        and hash_file(dest) == hash_file(src)
+                    )
+                except OSError:
+                    same_content = False
+                if not same_content:
+                    is_collision = True
+
+            if not is_collision:
+                self.config._claimed_destinations[norm_dest] = norm_src
+                return dest
+
+            if not self.config.rename_on_collision:
+                if self.progress_queue:
+                    self.progress_queue.put(
+                        (
+                            MEDIUM_PRIORITY,
+                            "error",
+                            src,
+                            f"Destination path collision at {repr(dest)}; "
+                            "skipping copy to prevent data loss "
+                            "(use --rename-on-collision to rename).",
+                        )
+                    )
+                return None
+
+            base, ext = os.path.splitext(dest)
+            counter = 1
+            while True:
+                candidate = f"{base}_{counter}{ext}"
+                norm_cand = os.path.normcase(os.path.abspath(candidate))
+                if (
+                    norm_cand not in self.config._claimed_destinations
+                    and not os.path.exists(candidate)
+                ):
+                    self.config._claimed_destinations[norm_cand] = norm_src
+                    return candidate
+                counter += 1
 
     def _process_copy_task(self, src: str, mtime: str, size: int) -> None:
         """Process a single copy task."""
@@ -285,11 +402,19 @@ class CopyThread(threading.Thread):
         elif not match_extension(self.config.extensions, src):
             return
 
-        dest = self._get_destination_path(src, mtime, size)
+        initial_dest = self._get_destination_path(src, mtime, size)
+        dest = self._resolve_destination_path(src, initial_dest)
+        if dest is None:
+            return
+
+        copied: Optional[bool] = True
         if not self.config.dry_run:
-            _copy_file(src, dest, self.config.preserve_stat, self.progress_queue)
+            copied = _copy_file(src, dest, self.config.preserve_stat, self.progress_queue)
         elif self.progress_queue:
             self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
+
+        if copied is False:
+            return
 
         if self.config.delete_on_copy:
             self._handle_delete_on_copy(src, dest)
@@ -307,6 +432,12 @@ class CopyThread(threading.Thread):
                 )
         else:
             try:
+                if os.path.abspath(src) == os.path.abspath(dest) or (
+                    os.path.exists(src)
+                    and os.path.exists(dest)
+                    and os.path.samefile(src, dest)
+                ):
+                    return
                 os.remove(src)
                 if self.progress_queue:
                     self.progress_queue.put((LOW_PRIORITY, "deleted", src))
@@ -395,6 +526,26 @@ class ResultProcessor(threading.Thread):
         self._local_cache: dict[str, list[tuple[str, int, float]]] = {}
         self._batch_count = 0
 
+    def _merge_files_for_hash(
+        self, md5: str, new_files: list[tuple[str, int, float]]
+    ) -> tuple[list[tuple[str, int, float]], int]:
+        """Merges new file entries for a hash while deduplicating by normalized path."""
+        current_files = list(self.md5_data[md5])
+        index_by_norm_path = {
+            os.path.normcase(os.path.abspath(f[0])): idx
+            for idx, f in enumerate(current_files)
+        }
+        added_distinct = 0
+        for file_info in new_files:
+            norm_p = os.path.normcase(os.path.abspath(file_info[0]))
+            if norm_p in index_by_norm_path:
+                current_files[index_by_norm_path[norm_p]] = file_info
+            else:
+                index_by_norm_path[norm_p] = len(current_files)
+                current_files.append(file_info)
+                added_distinct += 1
+        return current_files, added_distinct
+
     def _commit_batch(self) -> None:
         """Commits the local cache to the main manifest."""
         if not self._local_cache:
@@ -411,24 +562,23 @@ class ResultProcessor(threading.Thread):
 
         for md5, new_files in self._local_cache.items():
             try:
-                # A collision exists if the hash is already in the manifest,
-                # OR if we are adding more than one file with this hash in the current batch.
                 already_existed = md5 in self.md5_data
-                is_collision = already_existed or (len(new_files) > 1)
-
-                # If we are not de-duplicating empty files, they are never a collision.
-                if not self.dedupe_empty and new_files and new_files[0][1] == 0:
-                    is_collision = False
-
-                # Efficiently update the manifest
-                current_files = self.md5_data[md5]
-                current_files.extend(new_files)
+                current_files, added_distinct = self._merge_files_for_hash(
+                    md5, new_files
+                )
                 self.md5_data[md5] = current_files
 
                 # Add the new file paths to read_sources as well
                 if isinstance(self.manifest, Manifest):
                     for file_info in new_files:
                         self.manifest.read_sources.add(file_info[0])
+
+                is_collision = len(current_files) > 1 or (
+                    already_existed and not current_files and added_distinct > 0
+                )
+                # If we are not de-duplicating empty files, they are never a collision.
+                if not self.dedupe_empty and new_files and new_files[0][1] == 0:
+                    is_collision = False
 
                 if is_collision:
                     self.collisions[md5] = self.md5_data[md5]
@@ -706,6 +856,8 @@ class WalkThread(threading.Thread):
         already_processed: Any,
         progress_queue: Optional["queue.PriorityQueue[Any]"] = None,
         save_event: Optional[threading.Event] = None,
+        seen_paths: Optional[set] = None,
+        seen_lock: Optional[threading.Lock] = None,
     ) -> None:
         """Initializes the WalkThread.
 
@@ -717,6 +869,8 @@ class WalkThread(threading.Thread):
             already_processed: A set-like object of already processed paths.
             progress_queue: An optional queue for reporting progress.
             save_event: An optional event to coordinate save operations.
+            seen_paths: Optional shared set of already visited paths in this walk.
+            seen_lock: Optional lock protecting seen_paths.
         """
         super().__init__()
         self.walk_queue = walk_queue
@@ -727,6 +881,8 @@ class WalkThread(threading.Thread):
             progress_queue=progress_queue,
             work_queue=work_queue,
             walk_queue=walk_queue,
+            seen_paths=seen_paths,
+            seen_lock=seen_lock,
         )
         self.save_event = save_event
         self.daemon = True
@@ -754,6 +910,12 @@ class WalkThread(threading.Thread):
                             )
                     if not os.path.isdir(src):
                         raise ValueError(f"Unexpected file in work queue: {src!r}")
+                    if not _mark_path_seen(
+                        src,
+                        self.distribute_config.seen_paths,
+                        self.distribute_config.seen_lock,
+                    ):
+                        continue
                     distribute_work(src, self.distribute_config)
                 finally:
                     self.walk_queue.task_done()

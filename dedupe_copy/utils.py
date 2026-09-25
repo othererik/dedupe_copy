@@ -84,7 +84,8 @@ def format_error_message(path: str, error: Union[str, Exception]) -> str:
 
 def _throttle_puts(current_size: int) -> None:
     """Delay for some factor to avoid overloading queues"""
-    time.sleep(min((current_size * 2) / float(MAX_TARGET_QUEUE_SIZE), 60))
+    if current_size >= MAX_TARGET_QUEUE_SIZE:
+        time.sleep(min((current_size * 2) / float(MAX_TARGET_QUEUE_SIZE), 60))
 
 
 def lower_extension(src: str) -> str:
@@ -181,10 +182,7 @@ class ExtensionMatcher:
         self.exact_matches: set[str] = set()
         self.wildcard_patterns: List[str] = []
 
-        for ext in extensions:
-            # We assume extensions might be raw or cleaned.
-            # Convert to lower case for case-insensitive matching.
-            ext = ext.lower()
+        for ext in clean_extensions(extensions):
             if any(c in ext for c in "*?[]"):
                 self.wildcard_patterns.append(ext)
             else:

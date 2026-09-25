@@ -244,16 +244,16 @@ dedupecopy -p /source/path -c /destination/path -m manifest.db
 Creates a manifest file that allows you to resume if interrupted. For example, if the operation is stopped, you can resume it with:
 
 ```bash
-dedupecopy -p /source/path -c /destination/path -i manifest.db -m manifest.db
+dedupecopy -p /source/path -c /destination/path -i manifest.db -m manifest_new.db
 ```
 
 ### Delete Duplicates
 
 ```bash
-dedupecopy -p /path/to/search --delete --dry-run
+dedupecopy -p /path/to/search --delete -m manifest.db --dry-run
 ```
 
-This will scan the specified path and show you which files would be deleted. Once you are sure, you can run the command again without `--dry-run` to perform the deletion.
+This will scan the specified path and show you which files would be deleted. Once you are sure, you can run the command again without `--dry-run` to perform the deletion and save the resulting manifest.
 
 ## Key Concepts
 
@@ -285,6 +285,7 @@ Both `-i` and `--compare` use existing manifests to determine which files to ski
 
 - **Purpose**: Resume an interrupted operation or continue from a previous run.
 - **Behavior**: Files in this manifest are considered "already processed" and are skipped. They **are** included in the output manifest.
+- **Expected End State**: The input manifest on disk (`manifest.db` and `manifest.db.read`) is staged into a temporary working directory when loaded and is **never modified in place**. After the run finishes, the input manifest remains completely unchanged on disk; any newly scanned files, path conversions, or deletions are written only to the output manifest specified via `-m`.
 - **Use Case**: You started a large copy, it was interrupted, and you want to resume without re-scanning everything.
 
 ```bash
@@ -313,7 +314,7 @@ dedupecopy -p /phone_backup -c /main_archive --compare main_archive.db -m phone_
 | **Files Copied?**            | No (already processed)       | No (treated as duplicates)        |
 | **Included in Output?**      | Yes                          | No                                |
 | **Primary Use Case**         | Resume Operations            | Deduplicate Across Sources        |
-| **Can use with same output?**| **No** (safety rule)         | Yes                               |
+| **Can use with same output?**| **No** (safety rule)         | **No** (safety rule)              |
 
 **Note on `--no-walk`**: When using `-i` or `--compare`, you can also use `--no-walk` to prevent the tool from scanning the source file system. This is useful when you want to operate *only* on the files listed in the manifests.
 
@@ -378,7 +379,7 @@ Scans all three source paths and copies unique files to backup.
 #### Resume an interrupted copy
 
 ```bash
-dedupecopy -p /source -c /destination -i manifest.db -m manifest.db
+dedupecopy -p /source -c /destination -i manifest.db -m manifest_new.db
 ```
 
 Loads the previous manifest and resumes where it left off.
@@ -437,6 +438,7 @@ Different organization rules for different file types.
 | `--dry-run` | Simulate operations without making any changes to the filesystem. |
 | `--min-delete-size BYTES` | Minimum size of a file to be considered for deletion (e.g., `1048576` for 1MB). Default: `0`. |
 | `--delete-on-copy` | Deletes source files after a successful copy. Requires `--copy-path` and `-m`.  WARNING: this will consider duplicated objects as copied and remove them.  |
+| `--rename-on-collision` | Automatically rename destination files (e.g., `file_1.ext`, `file_2.ext`) when different-content files map to the same destination path, instead of skipping the colliding file with an error. |
 
 ### Output Control Options
 
@@ -537,6 +539,13 @@ dedupecopy -p /media -c /organized \
 - **JPG files** are organized by date.
 - **MP4 files** are organized into an `mp4` folder.
 - **PDF files** keep their original directory structure.
+
+#### Handling Destination Path Collisions
+
+When consolidating multiple source directories or flattening folder structures (for example, using `mtime` or `extension` rules), two files with **different contents** may map to the same destination path (e.g., `/source1/IMG_0001.jpg` and `/source2/IMG_0001.jpg` both mapping to `/organized/2024_03/IMG_0001.jpg`).
+
+- **Default (Safe Skip)**: DedupeCopy refuses to overwrite an existing destination file that has different content, logs a collision error, skips copying the colliding file, and leaves the source file untouched (even if `--delete-on-copy` is enabled).
+- **Auto-Rename (`--rename-on-collision`)**: Pass `--rename-on-collision` to automatically disambiguate colliding destination filenames by appending `_1`, `_2`, etc. before the file extension (e.g., `IMG_0001_1.jpg`, `IMG_0001_2.jpg`). All unique files are copied without overwriting existing files, and if `--delete-on-copy` is enabled, the output manifest records the renamed destination path.
 
 ## Advanced Workflows
 
@@ -869,7 +878,7 @@ If a run is interrupted:
 
 ```bash
 # Resume using the manifest
-dedupecopy -p /source -c /destination -i manifest.db -m manifest.db
+dedupecopy -p /source -c /destination -i manifest.db -m manifest_new.db
 ```
 
 Files already processed (in manifest) are skipped.
@@ -919,7 +928,9 @@ To prevent accidental data loss, DedupeCopy enforces the following rules for man
 
 1.  **Destructive Operations Require an Output Manifest**: Any operation that modifies the set of files being tracked (e.g., `--delete`, `--delete-on-copy`) **requires** the `-m`/`--manifest-dump-path` option. This ensures that the results of the operation are saved to a new manifest, preserving the original.
 
-2.  **Input and Output Manifests Must Be Different**: To protect your original manifest, you cannot use the same file path for both `-i`/`--manifest-read-path` and `-m`/`--manifest-dump-path`. This prevents the input manifest from being overwritten.
+2.  **Input/Comparison and Output Manifests Must Be Different**: To protect your existing manifests, you cannot use the same file path for `-i`/`--manifest-read-path` (or `--compare`) and `-m`/`--manifest-dump-path`. This prevents input or comparison manifests from being overwritten.
+
+3.  **Input Manifests Are Never Modified In Place**: When an input manifest (`-i`) is loaded, DedupeCopy stages its database files into a temporary working directory. The original input manifest on disk is guaranteed to remain in its exact initial state after the command finishes, even if new files are scanned, paths are converted, or no `-m` output path is specified.
 
 **Example of a safe delete operation:**
 ```bash

@@ -26,7 +26,7 @@ Examples:
       Note: Directory structure is preserved by default. Use -R for custom organization.
 
   Resume an interrupted run (assuming "-m manifest" used in prior run):
-    dedupecopy -p /Users/ -r dupes_2.csv -i manifest -m manifest
+    dedupecopy -p /Users/ -r dupes_2.csv -i manifest -m manifest_new
 
   Verify that files in a manifest exist and sizes match:
     dedupecopy --no-walk --verify --manifest-read-path my_manifest
@@ -47,7 +47,8 @@ Examples:
             --compare source1_manifest --compare target_manifest --no-walk
 
   Delete duplicates from a manifest, skipping files smaller than 1MB:
-    dedupecopy --no-walk --delete --manifest-read-path my_manifest.db --min-delete-size 1048576
+    dedupecopy --no-walk --delete -i my_manifest.db -m my_manifest_clean.db \
+        --min-delete-size 1048576
 """
 
 
@@ -202,6 +203,14 @@ def _create_parser():
         default=False,
         action="store_true",
     )
+    parser.add_argument(
+        "--rename-on-collision",
+        help="When copying, rename files that collide at the same destination "
+        "path (e.g. file_1.ext) instead of skipping them.",
+        required=False,
+        default=False,
+        action="store_true",
+    )
 
     performance = parser.add_argument_group("Performance Related")
     performance.add_argument(
@@ -344,6 +353,7 @@ def _handle_arguments(args):
         "min_delete_size": args.min_delete_size,
         "verify_manifest": args.verify,
         "use_ui": args.use_ui,
+        "rename_on_collision": args.rename_on_collision,
     }
 
 
