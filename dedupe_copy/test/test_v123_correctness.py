@@ -688,11 +688,11 @@ s.close()
         finally:
             m_out.close()
 
-        # Also verify passing identical input/output manifest path as a string raises ValueError
+        # Also verify passing identical input/output manifest path as a list raises ValueError
         with self.assertRaises(ValueError):
             run_dupe_copy(
                 read_from_path=[dir2],
-                manifests_in_paths=input_manifest,
+                manifests_in_paths=[input_manifest],
                 manifest_out_path=input_manifest,
             )
 
