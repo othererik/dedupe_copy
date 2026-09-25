@@ -7,12 +7,37 @@ and what files have been read.
 import logging
 import os
 import random
+import shutil
+import sqlite3
 import threading
 from typing import Any, Iterable, Iterator, List, Optional, Set, Tuple, Union
 
 from .disk_cache_dict import DefaultCacheDict, PersistentSet
 
 logger = logging.getLogger(__name__)
+
+
+def _stage_sqlite_file(src_path: str, dst_path: str) -> None:
+    """Stages a SQLite database file to dst_path so src_path is not mutated in place."""
+    if not os.path.exists(src_path):
+        return
+    dst_dir = os.path.dirname(dst_path)
+    if dst_dir:
+        os.makedirs(dst_dir, exist_ok=True)
+    if os.path.getsize(src_path) == 0:
+        shutil.copy2(src_path, dst_path)
+        return
+    try:
+        src_conn = sqlite3.connect(src_path, timeout=10)
+        dst_conn = sqlite3.connect(dst_path, timeout=10)
+        try:
+            with dst_conn:
+                src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+            src_conn.close()
+    except sqlite3.Error:
+        shutil.copy2(src_path, dst_path)
 
 
 class Manifest:
@@ -158,15 +183,25 @@ class Manifest:
         """Loads a manifest from disk.
 
         This method closes any existing manifest data and loads new data from
-        the specified path.
+        the specified path. When a temporary directory is configured, the input
+        manifest files are staged into temporary working files so the original
+        input manifest on disk is never modified in place.
 
         Args:
             path: The path to the manifest file to load. If None, the default
                   path is used.
         """
-        path = path or self.path
+        target_path = path or self.path
         self.close()
-        self.md5_data, self.read_sources = self._load_manifest(path=path)
+        work_path = target_path
+        if self.temp_directory:
+            work_path = os.path.join(
+                self.temp_directory,
+                f"working_manifest_{random.getrandbits(32)}.dict",
+            )
+            _stage_sqlite_file(target_path, work_path)
+            _stage_sqlite_file(f"{target_path}.read", f"{work_path}.read")
+        self.md5_data, self.read_sources = self._load_manifest(path=work_path)
 
     def items(self) -> Any:
         """Return items view of manifest data."""
@@ -213,8 +248,11 @@ class Manifest:
                     pass
 
         # Update read_sources separately for efficiency
-        for path in files_to_remove_set:
-            self.read_sources.discard(path)
+        if hasattr(self.read_sources, "discard_batch"):
+            self.read_sources.discard_batch(files_to_remove_set)
+        else:
+            for path in files_to_remove_set:
+                self.read_sources.discard(path)
 
     def update_paths(self, moved_files: List[Tuple[str, str]]) -> None:
         """Updates file paths in the manifest after a move operation.
@@ -235,6 +273,9 @@ class Manifest:
             if any(file_info[0] in path_map for file_info in file_list):
                 hashes_to_modify[hash_val] = file_list
 
+        old_paths_to_discard = []
+        new_paths_to_add = []
+
         # Update the paths for the affected hashes
         for hash_val, file_list in hashes_to_modify.items():
             new_file_list = []
@@ -243,12 +284,24 @@ class Manifest:
                 if old_path in path_map:
                     new_path = path_map[old_path]
                     new_file_list.append([new_path] + list(file_info[1:]))
-                    # Update read_sources as well
-                    self.read_sources.discard(old_path)
-                    self.read_sources.add(new_path)
+                    old_paths_to_discard.append(old_path)
+                    new_paths_to_add.append(new_path)
                 else:
                     new_file_list.append(file_info)
             self.md5_data[hash_val] = new_file_list
+
+        if old_paths_to_discard:
+            if hasattr(self.read_sources, "discard_batch"):
+                self.read_sources.discard_batch(old_paths_to_discard)
+            else:
+                for old_path in old_paths_to_discard:
+                    self.read_sources.discard(old_path)
+        if new_paths_to_add:
+            if hasattr(self.read_sources, "update"):
+                self.read_sources.update(new_paths_to_add)
+            else:
+                for new_path in new_paths_to_add:
+                    self.read_sources.add(new_path)
 
     def _populate_read_sources(self) -> None:
         """Populate the read_sources list from the md5_data."""
@@ -404,8 +457,10 @@ class Manifest:
         )
         for key in self.read_sources:
             new_sources.add(key.replace(paths_from, paths_to, 1))
+        if hasattr(self.read_sources, "close"):
+            self.read_sources.close()
         del self.read_sources
-        new_sources.save(db_file=db_file)
+        new_sources.save(db_file=db_file, remove_old_db=True)
         self.read_sources = new_sources
         self.md5_data.save()
         self.read_sources.save()

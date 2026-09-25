@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.2.3] - 2026-09-25
+- **Correctness & Data Safety**:
+  - Fix `--delete-on-copy` so failed file copies never delete the source file or corrupt the manifest path, and clean up any partially written destination file
+  - Prevent silent overwrites when different-content files map to the same destination path; skip and report collision errors by default, or disambiguate filenames (`file_1.ext`, `file_2.ext`, ...) with the new `--rename-on-collision` flag
+  - Prevent overlapping `--read-path` arguments or duplicate manifest entries from causing `--delete` to delete the sole physical copy of a file on disk
+  - Fix path prefix stripping in `CopyThread` and `no_change` path rule to strip on strict path-component boundaries (`os.path.normpath`) using longest-match ordering for nested read paths
+  - Fix cross-process `PYTHONHASHSEED` lookup failures in `SqliteBackend` and `SqliteSetBackend` by querying `WHERE key=?` on the primary key index instead of `WHERE hash=?`
+  - Stage input manifests (`-i`) into temporary storage on load so input manifest files on disk are never mutated in place
+  - Fix `CacheDict` / `DefaultCacheDict` cache-DB disjointness during batch updates, fix missing `return` in `__setitem__` under recursive eviction, raise `KeyError` on missing key deletion in `SqliteBackend`, and isolate `copy()` / `fromkeys()` backends
+  - Fix `ExtensionMatcher` when initialized with un-normalized extensions and respect `dedupe_empty=False` when rebuilding collisions with `--no-walk`
+- **Performance**:
+  - Track SQLite row presence (`_has_db_rows`) in `SqliteBackend` and `SqliteSetBackend` to avoid unnecessary SQLite queries while datasets fit in the in-memory cache
+  - Batch `PersistentSet` removals (`discard_batch`) and updates in `Manifest.remove_files` and `Manifest.update_paths`
+  - Fix queue throttling (`_throttle_puts`) to only sleep when `current_size >= MAX_TARGET_QUEUE_SIZE`
+
 ## [1.2.2] - 2026-02-17
 - Test coverage improvements (disk_cache_dict, utils)
 - Code quality improvements (formatting, linting, type hinting)

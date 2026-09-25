@@ -72,6 +72,8 @@ def _walk_fs(
     if walk_queue is None:
         walk_queue = queue.Queue()
     walk_done = threading.Event()
+    seen_paths: set[str] = set()
+    seen_lock = threading.Lock()
     walkers = []
     if progress_queue:
         progress_queue.put(
@@ -86,6 +88,8 @@ def _walk_fs(
             already_processed=already_processed,
             progress_queue=progress_queue,
             save_event=save_event,
+            seen_paths=seen_paths,
+            seen_lock=seen_lock,
         )
         walkers.append(w)
         w.start()
@@ -581,7 +585,13 @@ def delete_files(
         if not file_list:
             continue
 
-        sorted_file_list = sorted(file_list, key=lambda x: x[0])
+        unique_by_path = {}
+        for file_info in file_list:
+            norm_p = os.path.normcase(os.path.abspath(file_info[0]))
+            if norm_p not in unique_by_path:
+                unique_by_path[norm_p] = file_info
+
+        sorted_file_list = sorted(unique_by_path.values(), key=lambda x: x[0])
         files_to_process = []
 
         if _hash in hashes_to_delete_all:
@@ -779,6 +789,7 @@ def run_dupe_copy(
     min_delete_size: int = 0,
     verify_manifest: bool = False,
     use_ui: bool = True,
+    rename_on_collision: bool = False,
 ) -> None:
     """Main entry point for the deduplication and copy functionality.
 
@@ -808,12 +819,13 @@ def run_dupe_copy(
         compare_manifests: Manifests to compare against for filtering copies.
         preserve_stat: If True, preserves file stats during copy.
         delete_duplicates: If True, deletes duplicate files.
-        dry_run: If True, simulates deletion without actual file removal.
-        min_delete_size: Minimum size for a file to be considered for deletion.
+        delete_on_copy: If True, delete source files after a successful copy.
         dry_run: If True, simulates deletion without actual file removal.
         min_delete_size: Minimum size for a file to be considered for deletion.
         verify_manifest: If True, verifies the integrity of the manifest.
         use_ui: If True, uses the rich console UI.
+        rename_on_collision: If True, rename colliding destination files instead
+                             of skipping with an error.
     """
     # Ensure logging is configured for programmatic calls
     ensure_logging_configured()
@@ -824,10 +836,14 @@ def run_dupe_copy(
 
     # Argument validation
     if manifests_in_paths and manifest_out_path:
+        in_list = (
+            manifests_in_paths
+            if isinstance(manifests_in_paths, list)
+            else [manifests_in_paths]
+        )
         # Check if any of the input manifests are the same as the output manifest
-        if any(
-            os.path.abspath(p) == os.path.abspath(manifest_out_path)
-            for p in manifests_in_paths
+        if isinstance(manifests_in_paths, list) and any(
+            os.path.abspath(p) == os.path.abspath(manifest_out_path) for p in in_list
         ):
             raise ValueError(
                 "Input manifest path cannot be the same as the output manifest path."
@@ -967,7 +983,7 @@ def run_dupe_copy(
         if manifest and not ignore_old_collisions:
             # rebuild collision list
             for md5, info in manifest.items():
-                if len(info) > 1:
+                if len(info) > 1 and (dedupe_empty or info[0][1] > 0):
                     collisions[md5] = info
         walk_config = WalkConfig(
             extensions=extensions,
@@ -984,12 +1000,13 @@ def run_dupe_copy(
                     "Not walking file system. Using stored manifests",
                 )
             )
-            # Rebuild collision list from the manifest
+            # Rebuild collision list from the manifest if not already built above
             if manifest:
                 logger.info("Manifest loaded with %d items.", len(manifest))
-                for md5, info in manifest.items():
-                    if len(info) > 1:
-                        collisions[md5] = info
+                if ignore_old_collisions:
+                    for md5, info in manifest.items():
+                        if len(info) > 1 and (dedupe_empty or info[0][1] > 0):
+                            collisions[md5] = info
                 logger.info("Found %d collisions in manifest.", len(collisions))
             dupes = collisions
             all_data = manifest
@@ -1098,6 +1115,7 @@ def run_dupe_copy(
                 preserve_stat=preserve_stat,
                 delete_on_copy=delete_on_copy,
                 dry_run=dry_run,
+                rename_on_collision=rename_on_collision,
             )
             copy_job = CopyJob(
                 copy_config=copy_config,
@@ -1107,6 +1125,7 @@ def run_dupe_copy(
                 copy_threads=copy_threads,
                 delete_on_copy=delete_on_copy,
                 dry_run=dry_run,
+                rename_on_collision=rename_on_collision,
             )
             deleted_files, moved_files = copy_data(
                 all_data,

@@ -202,6 +202,14 @@ def _create_parser():
         default=False,
         action="store_true",
     )
+    parser.add_argument(
+        "--rename-on-collision",
+        help="When copying, rename files that collide at the same destination "
+        "path (e.g. file_1.ext) instead of skipping them.",
+        required=False,
+        default=False,
+        action="store_true",
+    )
 
     performance = parser.add_argument_group("Performance Related")
     performance.add_argument(
@@ -344,6 +352,7 @@ def _handle_arguments(args):
         "min_delete_size": args.min_delete_size,
         "verify_manifest": args.verify,
         "use_ui": args.use_ui,
+        "rename_on_collision": args.rename_on_collision,
     }
 
 

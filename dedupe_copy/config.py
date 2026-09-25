@@ -3,8 +3,9 @@
 import fnmatch
 import os
 import re
+import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dedupe_copy.utils import ExtensionMatcher
 
@@ -55,6 +56,8 @@ class CopyConfig:
         preserve_stat: If True, file metadata (like timestamps) is preserved.
         delete_on_copy: If True, delete source files after a successful copy.
         dry_run: If True, simulate operations without making changes.
+        rename_on_collision: If True, rename colliding destination files instead
+                             of skipping with an error.
         extension_matcher: A compiled matcher for efficient extension checking.
     """
 
@@ -65,7 +68,14 @@ class CopyConfig:
     preserve_stat: bool = False
     delete_on_copy: bool = False
     dry_run: bool = False
+    rename_on_collision: bool = False
     extension_matcher: Optional[ExtensionMatcher] = field(default=None, init=False)
+    _claimed_destinations: Dict[str, str] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _dest_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         """Initialize extension matcher."""
@@ -84,6 +94,8 @@ class CopyJob:
         copy_threads: The number of concurrent threads to use for copying.
         delete_on_copy: If True, delete source files after a successful copy.
         dry_run: If True, simulate operations without making changes.
+        rename_on_collision: If True, rename colliding destination files instead
+                             of skipping with an error.
     """
 
     copy_config: CopyConfig
@@ -93,6 +105,7 @@ class CopyJob:
     copy_threads: int = 8
     delete_on_copy: bool = False
     dry_run: bool = False
+    rename_on_collision: bool = False
 
 
 @dataclass

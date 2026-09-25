@@ -15,6 +15,39 @@ PATH_RULES = {
 }
 
 
+def strip_read_path_prefix(
+    path: str, read_paths: Optional[List[str]]
+) -> Tuple[str, bool]:
+    """Strips the best-matching read_path prefix from path on a path boundary.
+
+    Args:
+        path: The path or directory string to strip a root prefix from.
+        read_paths: Optional list of root read paths.
+
+    Returns:
+        A tuple of (relative_path, matched), where relative_path has any
+        leading path separator stripped.
+    """
+    if not read_paths:
+        return path.lstrip(os.sep), False
+
+    norm_p = os.path.normpath(path)
+    sorted_roots = sorted(
+        read_paths, key=lambda r: len(os.path.normpath(r)), reverse=True
+    )
+    for root in sorted_roots:
+        norm_root = os.path.normpath(root)
+        if norm_p == norm_root:
+            return "", True
+        if norm_root == os.sep:
+            if norm_p.startswith(os.sep):
+                return norm_p.lstrip(os.sep), True
+        elif norm_p.startswith(norm_root + os.sep):
+            return norm_p[len(norm_root) + len(os.sep) :].lstrip(os.sep), True
+
+    return path.lstrip(os.sep), False
+
+
 def path_rules_parser(
     rules: Dict[str, List[str]],
     dest_dir: str,
@@ -60,12 +93,9 @@ def path_rules_parser(
         elif rule == "no_change":
             # remove the path up to our source_dirs from src so we don't
             # preserve the structure "below" where our copy is from
-            for p in read_paths:
-                if source_dirs.startswith(p):
-                    source_dirs = source_dirs.replace(p, "", 1)
-            if source_dirs.startswith(os.sep):
-                source_dirs = source_dirs[1:]
-            dest_dir = os.path.join(dest_dir, source_dirs)
+            rel_dirs, _ = strip_read_path_prefix(source_dirs, read_paths)
+            if rel_dirs:
+                dest_dir = os.path.join(dest_dir, rel_dirs)
     if dest is None:
         dest = os.path.join(dest_dir, src)
     return dest, dest_dir

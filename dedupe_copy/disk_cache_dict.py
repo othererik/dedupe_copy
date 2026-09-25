@@ -11,6 +11,7 @@ backend, managed by the `SqliteBackend` class.
 import collections.abc
 import os
 import pickle
+import random
 import sqlite3
 import sys
 import threading
@@ -108,13 +109,14 @@ class SqliteBackend:
                            path will be deleted.
         """
         if db_file is None:
-            db_file = f"db_file_{int(time.time())}.dict"
+            db_file = f"db_file_{int(time.time())}_{random.getrandbits(32)}.dict"
         if unlink_old_db and os.path.exists(db_file):
             os.unlink(db_file)
         self._db_file = db_file
         self.table = db_table
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
+        self._has_db_rows = False
         self._init_conn()
         self._commit_needed = False
         self._write_batch: Dict[Any, Any] = {}
@@ -168,6 +170,10 @@ class SqliteBackend:
                 )
 
                 self._conn.commit()
+                row = self._conn.execute(
+                    "SELECT count FROM _meta_info WHERE tablename = ?;", (self.table,)
+                ).fetchone()
+                self._has_db_rows = bool(row and row[0] > 0)
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -179,9 +185,11 @@ class SqliteBackend:
     def _get_key_id(self, key: Any) -> Any:
         """Get the database ID for a given key, or raise KeyError if not found."""
         with self._lock:
+            if not self._has_db_rows and not self._write_batch:
+                raise KeyError(key)
             self._commit_batch()
             cursor = self.conn.execute(
-                f"select key from {self.table} where hash=?;", (hash(key),)
+                f"select key from {self.table} where key=?;", (self._dump(key),)
             )
             for row in cursor:
                 if self._load(row[0]) == key:
@@ -191,13 +199,15 @@ class SqliteBackend:
     def __getitem__(self, key: Any) -> Any:
         """Get item from the dictionary."""
         with self._lock:
+            if not self._has_db_rows and not self._write_batch:
+                raise KeyError(key)
             self._commit_batch()
             cursor = self.conn.execute(
-                f"select key,value from {self.table} where hash=?;", (hash(key),)
+                f"select value from {self.table} where key=?;", (self._dump(key),)
             )
-            for k, v in cursor:
-                if self._load(k) == key:
-                    return self._load(v)
+            row = cursor.fetchone()
+            if row is not None:
+                return self._load(row[0])
             raise KeyError(key)
 
     def __setitem__(self, key: Any, value: Any) -> None:
@@ -211,10 +221,14 @@ class SqliteBackend:
     def __delitem__(self, key: Any) -> None:
         """Delete item from the dictionary."""
         with self._lock:
+            if not self._has_db_rows and not self._write_batch:
+                raise KeyError(key)
             self._commit_batch()
-            self.conn.execute(
+            cursor = self.conn.execute(
                 f"delete from {self.table} where key=?;", (self._dump(key),)
             )
+            if cursor.rowcount == 0:
+                raise KeyError(key)
             self._commit_needed = True
             self._write_count += 1
             if self._write_count >= self._batch_size:
@@ -232,6 +246,8 @@ class SqliteBackend:
     def __len__(self) -> int:
         """Return the number of items in the dictionary."""
         with self._lock:
+            if not self._has_db_rows and not self._write_batch:
+                return 0
             self._commit_batch()
             return self.conn.execute(
                 "select count from _meta_info where tablename = ?;", (self.table,)
@@ -240,6 +256,8 @@ class SqliteBackend:
     def __contains__(self, key: Any) -> bool:
         """Check if key exists in the dictionary."""
         with self._lock:
+            if not self._has_db_rows and not self._write_batch:
+                return False
             self._commit_batch()
             try:
                 self._get_key_id(key)
@@ -263,12 +281,15 @@ class SqliteBackend:
             f"INSERT OR REPLACE INTO {self.table} (key, hash, value) VALUES (?, ?, ?);",
             (self._dump(key), hash(key), self._dump(value)),
         )
+        self._has_db_rows = True
 
     def pop(self, key: Any) -> Any:
         """Remove specified key and return the corresponding value.
         Raises KeyError if key is not found.
         """
         with self._lock:
+            if not self._has_db_rows and not self._write_batch:
+                raise KeyError(key)
             self._commit_batch()
             value = self[key]
             del self[key]
@@ -318,6 +339,10 @@ class SqliteBackend:
 
         with self._lock:
             try:
+                if self._write_batch:
+                    for key in data:
+                        self._write_batch.pop(key, None)
+
                 # Prepare data for executemany
                 batch_data = [
                     (self._dump(key), hash(key), self._dump(value))
@@ -330,6 +355,7 @@ class SqliteBackend:
                     batch_data,
                 )
                 self.conn.commit()
+                self._has_db_rows = True
             except sqlite3.Error as e:
                 self.conn.rollback()
                 raise e
@@ -350,6 +376,7 @@ class SqliteBackend:
                     batch_data,
                 )
                 self.conn.commit()
+                self._has_db_rows = True
                 self._write_batch.clear()
                 self._write_count = 0
             except sqlite3.Error as e:
@@ -385,6 +412,7 @@ class SqliteBackend:
             self._write_count = 0
             self.conn.execute(f"delete from {self.table};")
             self.conn.commit()
+            self._has_db_rows = False
 
     def close(self) -> None:
         """Closes the database connection, committing any pending changes first."""
@@ -457,13 +485,14 @@ class SqliteSetBackend:
     ) -> None:
         """Initializes the backend."""
         if db_file is None:
-            db_file = f"db_set_{int(time.time())}.db"
+            db_file = f"db_set_{int(time.time())}_{random.getrandbits(32)}.db"
         if unlink_old_db and os.path.exists(db_file):
             os.unlink(db_file)
         self._db_file = db_file
         self.table = db_table
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
+        self._has_db_rows = False
         self._init_conn()
         self._commit_needed = False
         self._write_batch: set = set()
@@ -532,6 +561,10 @@ class SqliteSetBackend:
                 )
 
                 self._conn.commit()
+                row = self._conn.execute(
+                    "SELECT count FROM _meta_info WHERE tablename = ?;", (self.table,)
+                ).fetchone()
+                self._has_db_rows = bool(row and row[0] > 0)
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -543,9 +576,11 @@ class SqliteSetBackend:
     def _get_key_id(self, key: Any) -> Any:
         """Get ID for key."""
         with self._lock:
+            if not self._has_db_rows and not self._write_batch:
+                raise KeyError(key)
             self._commit_batch()
             cursor = self.conn.execute(
-                f"select key from {self.table} where hash=?;", (hash(key),)
+                f"select key from {self.table} where key=?;", (self._dump(key),)
             )
             for row in cursor:
                 if self._load(row[0]) == key:
@@ -563,6 +598,10 @@ class SqliteSetBackend:
     def remove(self, key: Any) -> None:
         """Remove item."""
         with self._lock:
+            if key in self._write_batch:
+                self._write_batch.discard(key)
+            if not self._has_db_rows and not self._write_batch:
+                return
             self._commit_batch()
             self.conn.execute(
                 f"delete from {self.table} where key=?;", (self._dump(key),)
@@ -572,21 +611,39 @@ class SqliteSetBackend:
             if self._write_count >= self._batch_size:
                 self.commit()
 
+    def remove_batch(self, keys: Iterable[Any]) -> None:
+        """Batch remove items."""
+        key_list = list(keys)
+        if not key_list:
+            return
+        with self._lock:
+            if self._write_batch:
+                self._write_batch.difference_update(key_list)
+            if not self._has_db_rows and not self._write_batch:
+                return
+            self._commit_batch()
+            try:
+                batch_data = [(self._dump(key),) for key in key_list]
+                self.conn.executemany(
+                    f"DELETE FROM {self.table} WHERE key=?;",
+                    batch_data,
+                )
+                self.conn.commit()
+            except sqlite3.Error as e:
+                self.conn.rollback()
+                raise e
+
     def __contains__(self, key: Any) -> bool:
         """Check existence."""
         with self._lock:
             if key in self._write_batch:
                 return True
-            try:
-                cursor = self.conn.execute(
-                    f"select key from {self.table} where hash=?;", (hash(key),)
-                )
-                for row in cursor:
-                    if self._load(row[0]) == key:
-                        return True
+            if not self._has_db_rows:
                 return False
-            except KeyError:
-                return False
+            cursor = self.conn.execute(
+                f"select 1 from {self.table} where key=?;", (self._dump(key),)
+            )
+            return cursor.fetchone() is not None
 
     def __iter__(self) -> Iterator[Any]:
         """Iterate keys."""
@@ -601,6 +658,8 @@ class SqliteSetBackend:
     def __len__(self) -> int:
         """Return size."""
         with self._lock:
+            if not self._has_db_rows and not self._write_batch:
+                return 0
             self._commit_batch()
             return self.conn.execute(
                 "select count from _meta_info where tablename = ?;", (self.table,)
@@ -622,12 +681,15 @@ class SqliteSetBackend:
             return
         with self._lock:
             try:
+                if self._write_batch:
+                    self._write_batch.difference_update(keys)
                 batch_data = [(self._dump(key), hash(key)) for key in keys]
                 self.conn.executemany(
                     f"INSERT OR REPLACE INTO {self.table} (key, hash) VALUES (?, ?)",
                     batch_data,
                 )
                 self.conn.commit()
+                self._has_db_rows = True
             except sqlite3.Error as e:
                 self.conn.rollback()
                 raise e
@@ -644,6 +706,7 @@ class SqliteSetBackend:
                     batch_data,
                 )
                 self.conn.commit()
+                self._has_db_rows = True
                 self._write_batch.clear()
                 self._write_count = 0
             except sqlite3.Error as e:
@@ -670,6 +733,7 @@ class SqliteSetBackend:
             self._write_count = 0
             self.conn.execute(f"delete from {self.table};")
             self.conn.commit()
+            self._has_db_rows = False
 
     def close(self) -> None:
         """Close connection."""
@@ -779,6 +843,10 @@ class CacheDict(collections.abc.MutableMapping):
 
     def _update_cache_batch(self, data: Dict[Any, Any]) -> None:
         """Helper to update cache with a batch of items."""
+        if len(self._db) > 0:
+            for key in data:
+                if key not in self._cache and key in self._db:
+                    del self._db[key]
         self._cache.update(data)
         if self.lru and self._key_order is not None:
             for key in data:
@@ -917,11 +985,9 @@ class CacheDict(collections.abc.MutableMapping):
             if key not in self._cache:
                 if self._evict_lock_held:
                     self._db[key] = value
-                else:
-                    self._evict()
+                    return
+                self._evict()
             self._cache[key] = value
-            if self._evict_lock_held:
-                return
             if self.lru and self._key_order is not None:
                 # O(1) operation - add if new, or move to end if exists
                 if key in self._key_order:
@@ -982,22 +1048,16 @@ class CacheDict(collections.abc.MutableMapping):
     def copy(self, db_file: Optional[str] = None) -> "CacheDict":
         """Returns a dictionary as a shallow from the cache dict"""
         with self._lock:
-            newcd = CacheDict(
-                max_size=self.max_size, backend=self._db, lru=self.lru, db_file=db_file
-            )
+            newcd = CacheDict(max_size=self.max_size, lru=self.lru, db_file=db_file)
             newcd.update(self)
             return newcd
 
     def fromkeys(
-        self, keys: Iterator[Any], default: Any = None, db_file: Optional[str] = None
+        self, keys: Iterable[Any], default: Any = None, db_file: Optional[str] = None
     ) -> "CacheDict":
         """Create a new CacheDict with keys from iterable and values set to default."""
-        # This is a class method in dict, but instance method here?
-        # Assuming it creates a new instance.
         with self._lock:
-            newcd = CacheDict(
-                max_size=self.max_size, backend=self._db, lru=self.lru, db_file=db_file
-            )
+            newcd = CacheDict(max_size=self.max_size, lru=self.lru, db_file=db_file)
             for key in keys:
                 newcd[key] = default
             return newcd
@@ -1104,18 +1164,20 @@ class DefaultCacheDict(CacheDict):
         """Returns a dictionary as a shallow from the cache dict"""
         new_kwargs: Dict[str, Any] = {}
         for key, value in self._kwargs.items():
-            new_kwargs[key] = value
+            if key != "backend":
+                new_kwargs[key] = value
         new_kwargs["db_file"] = db_file
         newcd = DefaultCacheDict(default_factory=self.default_factory, **new_kwargs)
         newcd.update(self)
         return newcd
 
     def fromkeys(
-        self, keys: Iterator[Any], default: Any = None, db_file: Optional[str] = None
+        self, keys: Iterable[Any], default: Any = None, db_file: Optional[str] = None
     ) -> "DefaultCacheDict":
         new_kwargs: Dict[str, Any] = {}
         for origkey, origvalue in self._kwargs.items():
-            new_kwargs[origkey] = origvalue
+            if origkey != "backend":
+                new_kwargs[origkey] = origvalue
         new_kwargs["db_file"] = db_file
         newcd = DefaultCacheDict(default_factory=self.default_factory, **new_kwargs)
         for key in keys:
@@ -1177,8 +1239,24 @@ class PersistentSet(collections.abc.MutableSet):
         with self._lock:
             if value in self._cache:
                 self._cache.remove(value)
-            if value in self._db:
+            else:
                 self._db.remove(value)
+
+    def discard_batch(self, values: Iterable[Any]) -> None:
+        """Remove multiple elements efficiently."""
+        with self._lock:
+            db_remove = []
+            for value in values:
+                if value in self._cache:
+                    self._cache.remove(value)
+                else:
+                    db_remove.append(value)
+            if db_remove:
+                if hasattr(self._db, "remove_batch"):
+                    self._db.remove_batch(db_remove)
+                else:
+                    for value in db_remove:
+                        self._db.remove(value)
 
     def _evict(self) -> None:
         """Evict item from cache to db."""
