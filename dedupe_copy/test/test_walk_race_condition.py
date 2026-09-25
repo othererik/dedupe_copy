@@ -5,6 +5,7 @@ import queue
 import shutil
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -58,6 +59,8 @@ class TestWalkRaceCondition(unittest.TestCase):
             thread_work_map.setdefault(thread_id, 0)
             thread_work_map[thread_id] += 1
             original_distribute(src, config)
+            # Yield briefly so sibling walk threads can pick up enqueued subdirectories
+            time.sleep(0.01)
 
         with patch(
             "dedupe_copy.threads.distribute_work", side_effect=tracking_distribute_work

@@ -857,7 +857,7 @@ def run_dupe_copy(
             else [manifests_in_paths]
         )
         # Check if any of the input manifests are the same as the output manifest
-        if isinstance(manifests_in_paths, list) and any(
+        if any(
             os.path.abspath(p) == os.path.abspath(manifest_out_path) for p in in_list
         ):
             raise ValueError(

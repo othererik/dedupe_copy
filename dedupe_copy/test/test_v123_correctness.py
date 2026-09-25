@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from dedupe_copy.bin.dedupecopy_cli import run_cli
-from dedupe_copy.config import CopyConfig, DeleteJob
+from dedupe_copy.config import CopyConfig, DeleteJob, WalkConfig
 from dedupe_copy.core import delete_files, run_dupe_copy
 from dedupe_copy.disk_cache_dict import (
     CacheDict,
@@ -24,21 +24,22 @@ from dedupe_copy.manifest import Manifest, _stage_sqlite_file
 from dedupe_copy.path_rules import strip_read_path_prefix
 from dedupe_copy.threads import (
     CopyThread,
+    DistributeWorkConfig,
+    WalkThread,
     _copy_file,
     _is_file_processing_required,
     _mark_path_seen,
+    distribute_work,
 )
-from dedupe_copy.utils import (
-    ExtensionMatcher,
-    MAX_TARGET_QUEUE_SIZE,
-    _throttle_puts,
-)
+from dedupe_copy.utils import ExtensionMatcher, MAX_TARGET_QUEUE_SIZE, _throttle_puts
 
 
 class TestV123Correctness(unittest.TestCase):
     """Comprehensive tests for v1.2.3 fixes."""
 
     def setUp(self):
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
         self.temp_dir = tempfile.mkdtemp(prefix="dedupe_v123_test_")
 
     def tearDown(self):
@@ -437,6 +438,7 @@ s.close()
             with self.assertRaises(KeyError):
                 sb._get_key_id("missing_empty")
             sb.remove_batch([])
+            sb.update_batch([])
             sb.add("buffered_1")
             sb.remove_batch(["buffered_1"])
             self.assertNotIn("buffered_1", sb)
@@ -524,7 +526,8 @@ s.close()
             )
         )
 
-        # _mark_path_seen without lock
+        # _mark_path_seen with None and without lock
+        self.assertTrue(_mark_path_seen(f_a, None, None))
         seen: set = set()
         self.assertTrue(_mark_path_seen(f_a, seen, None))
         self.assertFalse(_mark_path_seen(f_a, seen, None))
@@ -568,6 +571,51 @@ s.close()
         ct._handle_delete_on_copy(f_a, f_a)
         self.assertTrue(os.path.exists(f_a))
 
+    def test_walk_and_distribute_work_edge_cases(self):
+        """Cover seen-file skip in distribute_work, CopyThread fallback, and WalkThread."""
+        # pylint: disable=protected-access
+        f_seen = self._create_file("seen_dir/file.txt", b"data")
+        work_q: "queue.Queue[str]" = queue.Queue()
+        walk_q: "queue.Queue[str]" = queue.Queue()
+        seen = {os.path.normcase(os.path.abspath(f_seen))}
+        cfg = DistributeWorkConfig(
+            already_processed=set(),
+            walk_config=WalkConfig(),
+            progress_queue=None,
+            work_queue=work_q,
+            walk_queue=walk_q,
+            seen_paths=seen,
+            seen_lock=threading.Lock(),
+        )
+        distribute_work(os.path.dirname(f_seen), cfg)
+        self.assertTrue(work_q.empty())
+
+        # CopyThread._process_copy_task when extension_matcher is None
+        copy_cfg = CopyConfig(
+            target_path=self.temp_dir,
+            read_paths=[self.temp_dir],
+            extensions=["*.jpg"],
+        )
+        copy_cfg.extension_matcher = None  # type: ignore[assignment]
+        ct = CopyThread(queue.Queue(), threading.Event(), copy_config=copy_cfg)
+        ct._process_copy_task(f_seen, "2026_01", 4)
+
+        # WalkThread receiving a file path instead of a directory path
+        pq: "queue.PriorityQueue" = queue.PriorityQueue()
+        stop_ev = threading.Event()
+        stop_ev.set()
+        walk_q.put(f_seen)
+        wt = WalkThread(
+            walk_q,
+            stop_ev,
+            walk_config=WalkConfig(),
+            work_queue=work_q,
+            already_processed=set(),
+            progress_queue=pq,
+        )
+        wt.run()
+        self.assertFalse(pq.empty())
+
     def test_cli_rename_on_collision_argument_parsing(self):
         """CLI parser accepts --rename-on-collision and passes it to run_dupe_copy."""
         with (
@@ -582,6 +630,7 @@ s.close()
                     "--rename-on-collision",
                 ],
             ),
+            patch("dedupe_copy.bin.dedupecopy_cli.setup_logging"),
             patch("dedupe_copy.bin.dedupecopy_cli.run_dupe_copy") as mock_run,
         ):
             run_cli()
@@ -639,6 +688,14 @@ s.close()
         finally:
             m_out.close()
 
+        # Also verify passing identical input/output manifest path as a string raises ValueError
+        with self.assertRaises(ValueError):
+            run_dupe_copy(
+                read_from_path=[dir2],
+                manifests_in_paths=input_manifest,
+                manifest_out_path=input_manifest,
+            )
+
     def test_extension_matcher_normalizes_extensions_and_no_walk_empty_files(self):
         """ExtensionMatcher normalizes raw extensions and --no-walk respects dedupe_empty=False."""
         matcher = ExtensionMatcher(["jpg", ".PNG", "*.gif"])
@@ -670,13 +727,10 @@ s.close()
         self.assertTrue(os.path.exists(empty1))
         self.assertTrue(os.path.exists(empty2))
 
-    def test_throttle_puts_only_sleeps_above_threshold(self):
-        """_throttle_puts must not sleep when queue size is below MAX_TARGET_QUEUE_SIZE."""
         with patch("dedupe_copy.utils.time.sleep") as mock_sleep:
             _throttle_puts(0)
-            _throttle_puts(100)
             _throttle_puts(MAX_TARGET_QUEUE_SIZE - 1)
             mock_sleep.assert_not_called()
-
             _throttle_puts(MAX_TARGET_QUEUE_SIZE)
             mock_sleep.assert_called_once()
+

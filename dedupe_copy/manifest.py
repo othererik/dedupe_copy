@@ -242,10 +242,7 @@ class Manifest:
                 self.md5_data[hash_val] = new_file_list
             else:
                 # If no files are left for this hash, remove the hash key entirely
-                try:
-                    del self.md5_data[hash_val]
-                except KeyError:
-                    pass
+                self.md5_data.pop(hash_val, None)
 
         # Update read_sources separately for efficiency
         self._discard_from_read_sources(files_to_remove_set)

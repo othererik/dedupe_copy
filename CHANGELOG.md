@@ -12,8 +12,8 @@
   - Fix `ExtensionMatcher` when initialized with un-normalized extensions and respect `dedupe_empty=False` when rebuilding collisions with `--no-walk`
 - **Performance**:
   - Track SQLite row presence (`_has_db_rows`) in `SqliteBackend` and `SqliteSetBackend` to avoid unnecessary SQLite queries while datasets fit in the in-memory cache
-  - Batch `PersistentSet` removals (`discard_batch`) and updates in `Manifest.remove_files` and `Manifest.update_paths`
-  - Fix queue throttling (`_throttle_puts`) to only sleep when `current_size >= MAX_TARGET_QUEUE_SIZE`
+  - Fix queue throttling condition in `_throttle_puts` so queues below `MAX_TARGET_QUEUE_SIZE` no longer sleep on every put
+  - Batch `PersistentSet` removals (`discard_batch`) and updates in `Manifest.remove_files` and `Manifest.update_paths`, and avoid `memoryview` wrapper allocations in SQLite serialization
 
 ## [1.2.2] - 2026-02-17
 - Test coverage improvements (disk_cache_dict, utils)

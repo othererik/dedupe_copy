@@ -26,7 +26,7 @@ Examples:
       Note: Directory structure is preserved by default. Use -R for custom organization.
 
   Resume an interrupted run (assuming "-m manifest" used in prior run):
-    dedupecopy -p /Users/ -r dupes_2.csv -i manifest -m manifest
+    dedupecopy -p /Users/ -r dupes_2.csv -i manifest -m manifest_new
 
   Verify that files in a manifest exist and sizes match:
     dedupecopy --no-walk --verify --manifest-read-path my_manifest
@@ -47,7 +47,8 @@ Examples:
             --compare source1_manifest --compare target_manifest --no-walk
 
   Delete duplicates from a manifest, skipping files smaller than 1MB:
-    dedupecopy --no-walk --delete --manifest-read-path my_manifest.db --min-delete-size 1048576
+    dedupecopy --no-walk --delete -i my_manifest.db -m my_manifest_clean.db \
+        --min-delete-size 1048576
 """
 
 
