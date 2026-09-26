@@ -387,7 +387,10 @@ def run_cli():
 
     processed_args = _handle_arguments(args)
     try:
-        return run_dupe_copy(**processed_args)
+        ret = run_dupe_copy(**processed_args)
+        if ret:
+            sys.exit(ret)
+        return ret
     except ValueError as e:
         parser.error(str(e))
         sys.exit(1)

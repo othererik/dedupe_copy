@@ -804,7 +804,7 @@ def run_dupe_copy(
     verify_manifest: bool = False,
     use_ui: bool = True,
     rename_on_collision: bool = False,
-) -> None:
+) -> int:
     """Main entry point for the deduplication and copy functionality.
 
     This function serves as the primary interface for external callers,
@@ -944,8 +944,7 @@ def run_dupe_copy(
             ui.start()
 
         if verify_manifest:
-            verify_manifest_fs(manifest, ui=ui)
-            return
+            return 0 if verify_manifest_fs(manifest, ui=ui) else 1
 
         if no_copy:
             for item in no_copy:
@@ -1165,6 +1164,7 @@ def run_dupe_copy(
         all_stop.set()
         while progress_thread.is_alive():
             progress_thread.join(5)
+        return 0
     finally:
         if ui:
             ui.stop()

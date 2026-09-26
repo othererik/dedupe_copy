@@ -8,6 +8,7 @@
   - Remove blocking `_throttle_puts` sleeps from hot queue loops and reduce worker thread shutdown poll timeouts from `0.5s`/`0.1s` to `0.01s`
   - Check `_write_batch` in memory before querying SQLite in `SqliteBackend` and `SqliteSetBackend` instead of flushing pending write batches on every read/membership check, and batch `read_sources` updates in `ResultProcessor`
 - **Bug Fixes**:
+  - Return a non-zero exit code (`1`) when `--verify` fails instead of exiting with `0`
   - Ensure `ConsoleUI` and `Manifest` are always stopped/closed via `try...finally` in `run_dupe_copy` and validate `--no-walk` arguments before starting background UI threads
   - Prevent exponential `colorama` `StreamWrapper` nesting on `sys.stdout` and `sys.stderr` across repeated `setup_logging()` calls
 - **Packaging**:

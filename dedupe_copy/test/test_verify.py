@@ -4,7 +4,7 @@ import os
 import unittest
 
 from dedupe_copy.test import utils
-from dedupe_copy.core import verify_manifest_fs
+from dedupe_copy.core import run_dupe_copy, verify_manifest_fs
 from dedupe_copy.manifest import Manifest
 
 
@@ -83,3 +83,28 @@ class TestVerify(unittest.TestCase):
                     for s in cm.output
                 )
             )
+
+    def test_run_dupe_copy_verify_return_code(self):
+        """Test that run_dupe_copy returns 0 on verify success and 1 on failure."""
+        self.assertEqual(
+            run_dupe_copy(
+                manifests_in_paths=self.manifest_path,
+                no_walk=True,
+                verify_manifest=True,
+                use_ui=False,
+            ),
+            0,
+        )
+
+        file_to_remove, _, _ = self.file_list[0]
+        os.remove(file_to_remove)
+
+        self.assertEqual(
+            run_dupe_copy(
+                manifests_in_paths=self.manifest_path,
+                no_walk=True,
+                verify_manifest=True,
+                use_ui=False,
+            ),
+            1,
+        )

@@ -726,6 +726,11 @@ class TestCliIntegration(unittest.TestCase):
             text=True,
             check=False,  # Expect a non-zero exit code
         )
+        self.assertEqual(
+            verify_fail_result.returncode,
+            1,
+            "Expected non-zero exit code when verification fails.",
+        )
         self.assertIn(
             "Manifest verification failed.",
             verify_fail_result.stdout,
