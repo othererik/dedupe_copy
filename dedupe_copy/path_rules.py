@@ -43,7 +43,8 @@ def strip_read_path_prefix(
             if norm_p.startswith(os.sep):
                 return norm_p.lstrip(os.sep), True
         elif norm_p.startswith(norm_root + os.sep):
-            return norm_p[len(norm_root) + len(os.sep) :].lstrip(os.sep), True
+            prefix_len = len(norm_root) + len(os.sep)
+            return norm_p[prefix_len:].lstrip(os.sep), True
 
     return path.lstrip(os.sep), False
 

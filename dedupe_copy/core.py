@@ -12,7 +12,6 @@ import threading
 from collections import Counter
 from typing import (
     Any,
-    Callable,
     Iterator,
     List,
     Literal,
@@ -232,7 +231,6 @@ def _start_read_threads_and_process_results(
     return result_processor, work_threads, work_stop_event, result_stop_event
 
 
-# pylint: disable=too-many-branches
 def find_duplicates(
     read_paths: List[str],
     work_queue: "queue.Queue[str]",
@@ -367,6 +365,75 @@ def _drain_queue(q: queue.Queue) -> list:
     return items
 
 
+def _run_delete_only_workers(
+    delete_only_queue: "queue.Queue[str]",
+    copy_job: "CopyJob",
+    progress_queue: Optional["queue.PriorityQueue[Any]"],
+) -> List[str]:
+    """Runs DeleteThread workers for duplicate source files skipped due to --compare."""
+    if delete_only_queue.empty():
+        return []
+    delete_stop_event = threading.Event()
+    delete_workers = []
+    deleted_dupes_queue: "queue.Queue[str]" = queue.Queue()
+    if progress_queue:
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
+                "message",
+                f"Starting deletion of {delete_only_queue.qsize()} source files "
+                "that are duplicates of the compare manifest.",
+            )
+        )
+    for _ in range(copy_job.copy_threads):
+        d = DeleteThread(
+            delete_only_queue,
+            delete_stop_event,
+            progress_queue=progress_queue,
+            deleted_queue=deleted_dupes_queue,
+            dry_run=copy_job.dry_run,
+        )
+        delete_workers.append(d)
+        d.start()
+
+    delete_only_queue.join()
+    delete_stop_event.set()
+    for d in delete_workers:
+        d.join()
+
+    return _drain_queue(deleted_dupes_queue)
+
+
+def _classify_files_for_copy(
+    all_data: Any,
+    hashes_to_skip: set,
+    ignore_regex: Optional[re.Pattern],
+    copy_job: "CopyJob",
+    delete_only_queue: "queue.Queue[str]",
+    progress_queue: Optional["queue.PriorityQueue[Any]"],
+) -> List[Tuple[str, Any, int]]:
+    """Partitions files from all_data into files_to_copy and delete_only_queue."""
+    files_to_copy: List[Tuple[str, Any, int]] = []
+    for md5, path, mtime, size in info_parser(all_data):
+        if md5 not in hashes_to_skip:
+            action_required = not (
+                ignore_regex and ignore_regex.match(os.path.normcase(path))
+            )
+            if action_required:
+                files_to_copy.append((path, mtime, size))
+                if not (size == 0 and not copy_job.dedupe_empty):
+                    hashes_to_skip.add(md5)
+            elif progress_queue:
+                progress_queue.put((LOW_PRIORITY, "not_copied", path))
+        elif copy_job.delete_on_copy and delete_only_queue is not None:
+            delete_only_queue.put(path)
+            if progress_queue:
+                progress_queue.put((LOW_PRIORITY, "queued_for_delete", path))
+        elif progress_queue:
+            progress_queue.put((LOW_PRIORITY, "not_copied", path))
+    return files_to_copy
+
+
 def copy_data(
     all_data: Any,
     progress_queue: Optional["queue.PriorityQueue[Any]"],
@@ -388,29 +455,17 @@ def copy_data(
         A tuple containing a list of all deleted source paths and a list
         of (source, destination) path tuples for moved files.
     """
-    # pylint: disable=too-many-statements
     copy_stop_event = threading.Event()
     copy_queue: "queue.Queue[Tuple[str, str, int]]" = queue.Queue()
-    # This queue holds (source, dest) tuples of files deleted by CopyThreads
     deleted_after_copy_queue: "queue.Queue[Tuple[str, str]]" = queue.Queue()
-    # This queue holds source paths to be deleted because they are dupes of --compare
     delete_only_queue: "queue.Queue[str]" = queue.Queue()
     copy_workers = []
 
-    # Create a set of hashes that should not be copied.
-    # This includes hashes from the compare manifest and hashes we've already
-    # decided to copy in this run. This set is modified in this function.
-    no_copy_hashes = None
-    if copy_job.no_copy:
-        no_copy_hashes = copy_job.no_copy.hash_set()
-    hashes_to_skip = set()
-    if no_copy_hashes:
-        hashes_to_skip.update(no_copy_hashes)
+    no_copy_hashes = copy_job.no_copy.hash_set() if copy_job.no_copy else None
+    hashes_to_skip = set(no_copy_hashes) if no_copy_hashes else set()
 
-    # Pre-compile ignore patterns for performance
     ignore_regex = None
     if copy_job.ignore:
-        # Normalize patterns to match fnmatch behavior (handles case and slashes)
         norm_patterns = [os.path.normcase(p) for p in copy_job.ignore]
         regexes = [fnmatch.translate(p) for p in norm_patterns]
         ignore_regex = re.compile("|".join(regexes))
@@ -433,33 +488,16 @@ def copy_data(
         )
         copy_workers.append(c)
         c.start()
-    # In a single pass, determine which files to copy and which to delete.
-    # This avoids iterating over `all_data` twice (once for a count, once for the work).
-    files_to_copy = []
-    for md5, path, mtime, size in info_parser(all_data):
-        if md5 not in hashes_to_skip:
-            action_required = True
-            if ignore_regex and ignore_regex.match(os.path.normcase(path)):
-                action_required = False
 
-            if action_required:
-                files_to_copy.append((path, mtime, size))
-                if not (size == 0 and not copy_job.dedupe_empty):
-                    # Add hash to skip set so other files with same hash are not copied
-                    hashes_to_skip.add(md5)
-            elif progress_queue:
-                progress_queue.put((LOW_PRIORITY, "not_copied", path))
-        elif copy_job.delete_on_copy and delete_only_queue is not None:
-            # If a file's hash is in our skip set (from compare manifest or a
-            # file we've already queued for copying), and we are in "move"
-            # mode, delete this duplicate from the source.
-            delete_only_queue.put(path)
-            if progress_queue:
-                progress_queue.put((LOW_PRIORITY, "queued_for_delete", path))
-        elif progress_queue:
-            progress_queue.put((LOW_PRIORITY, "not_copied", path))
+    files_to_copy = _classify_files_for_copy(
+        all_data,
+        hashes_to_skip,
+        ignore_regex,
+        copy_job,
+        delete_only_queue,
+        progress_queue,
+    )
 
-    # Now that we have the final list, set up the progress bar and queue the work.
     if progress_queue:
         progress_queue.put(
             (
@@ -480,58 +518,21 @@ def copy_data(
     for path, mtime, size in files_to_copy:
         copy_queue.put((path, mtime, size))
 
-    # Wait for all tasks to be processed by the workers
     copy_queue.join()
-
-    # Signal copy threads to stop and wait for them to terminate
     copy_stop_event.set()
     for c in copy_workers:
         c.join()
 
-    # Now, handle the deletion of files that were duplicates of the compare manifest
     all_deleted_files = []
     moved_files = []
 
-    # Drain the queue of files that were part of a "move" (copy + delete)
-    moved_results = _drain_queue(deleted_after_copy_queue)
-    for src, dest in moved_results:
+    for src, dest in _drain_queue(deleted_after_copy_queue):
         all_deleted_files.append(src)
         moved_files.append((src, dest))
 
-    # Check if there are any files that were marked for deletion only
-    # (i.e., they were duplicates of the --compare manifest).
-    if not delete_only_queue.empty():
-        delete_stop_event = threading.Event()
-        delete_workers = []
-        # This queue holds files deleted by DeleteThreads
-        deleted_dupes_queue: "queue.Queue[str]" = queue.Queue()
-        if progress_queue:
-            progress_queue.put(
-                (
-                    HIGH_PRIORITY,
-                    "message",
-                    f"Starting deletion of {delete_only_queue.qsize()} source files "
-                    "that are duplicates of the compare manifest.",
-                )
-            )
-        for _ in range(copy_job.copy_threads):  # Re-use copy_threads for deletion
-            d = DeleteThread(
-                delete_only_queue,
-                delete_stop_event,
-                progress_queue=progress_queue,
-                deleted_queue=deleted_dupes_queue,
-                dry_run=copy_job.dry_run,
-            )
-            delete_workers.append(d)
-            d.start()
-
-        delete_only_queue.join()
-        delete_stop_event.set()
-        for d in delete_workers:
-            d.join()
-
-        # Drain the queue of files that were deleted-only
-        all_deleted_files.extend(_drain_queue(deleted_dupes_queue))
+    all_deleted_files.extend(
+        _run_delete_only_workers(delete_only_queue, copy_job, progress_queue)
+    )
 
     if progress_queue:
         progress_queue.put(
@@ -561,6 +562,44 @@ def _select_files_for_deletion(file_list: List[Any], delete_all: bool) -> List[A
     if len(sorted_file_list) > 1:
         return sorted_file_list[1:]
     return []
+
+
+def _collect_files_to_delete(
+    duplicates: Any,
+    delete_job: "DeleteJob",
+    hashes_to_delete_all: set,
+    progress_queue: Optional["queue.PriorityQueue[Any]"],
+) -> List[str]:
+    """Filters candidate duplicate files into the final list of paths to delete."""
+    files_to_delete: List[str] = []
+    for _hash, file_list in duplicates.items():
+        if not file_list:
+            continue
+
+        files_to_process = _select_files_for_deletion(
+            file_list, _hash in hashes_to_delete_all
+        )
+
+        for file_info in files_to_process:
+            path_to_delete, size, _ = file_info
+            if size == 0 and not delete_job.dedupe_empty:
+                if progress_queue:
+                    message = (
+                        f"Skipping deletion of empty file {path_to_delete} "
+                        "because --dedupe-empty is not set."
+                    )
+                    progress_queue.put((LOW_PRIORITY, "message", message))
+                continue
+
+            if size >= delete_job.min_delete_size_bytes:
+                files_to_delete.append(path_to_delete)
+            elif progress_queue:
+                message = (
+                    f"Skipping deletion of {path_to_delete} with size {size} bytes "
+                    f"(smaller than threshold {delete_job.min_delete_size_bytes})."
+                )
+                progress_queue.put((LOW_PRIORITY, "message", message))
+    return files_to_delete
 
 
 def delete_files(
@@ -593,51 +632,13 @@ def delete_files(
     delete_queue: "queue.Queue[str]" = queue.Queue()
     deleted_queue: "queue.Queue[str]" = queue.Queue()
     workers = []
-    files_to_delete_count = 0
-    files_to_delete = []
     if hashes_to_delete_all is None:
         hashes_to_delete_all = set()
 
-    for _hash, file_list in duplicates.items():
-        if not file_list:
-            continue
-
-        files_to_process = _select_files_for_deletion(
-            file_list, _hash in hashes_to_delete_all
-        )
-
-        for file_info in files_to_process:
-            path_to_delete, size, _ = file_info
-            if size == 0 and not delete_job.dedupe_empty:
-                if progress_queue:
-                    message = (
-                        f"Skipping deletion of empty file {path_to_delete} "
-                        "because --dedupe-empty is not set."
-                    )
-                    progress_queue.put(
-                        (
-                            LOW_PRIORITY,
-                            "message",
-                            message,
-                        )
-                    )
-                continue
-
-            if size >= delete_job.min_delete_size_bytes:
-                files_to_delete.append(path_to_delete)
-                files_to_delete_count += 1
-            elif progress_queue:
-                message = (
-                    f"Skipping deletion of {path_to_delete} with size {size} bytes "
-                    f"(smaller than threshold {delete_job.min_delete_size_bytes})."
-                )
-                progress_queue.put(
-                    (
-                        LOW_PRIORITY,
-                        "message",
-                        message,
-                    )
-                )
+    files_to_delete = _collect_files_to_delete(
+        duplicates, delete_job, hashes_to_delete_all, progress_queue
+    )
+    files_to_delete_count = len(files_to_delete)
 
     if progress_queue:
         if delete_job.dry_run:
@@ -774,7 +775,333 @@ def _populate_collisions_from_manifest(
             collisions[md5] = info
 
 
-# pylint: disable=too-many-statements
+def _validate_run_args(
+    manifests_in_paths: Optional[Union[str, List[str]]],
+    compare_manifests: Optional[Union[str, List[str]]],
+    manifest_out_path: Optional[str],
+    no_walk: bool,
+) -> None:
+    """Validates manifest and walk arguments for run_dupe_copy."""
+    if isinstance(manifests_in_paths, list) and manifest_out_path:
+        if any(
+            os.path.abspath(p) == os.path.abspath(manifest_out_path)
+            for p in manifests_in_paths
+        ):
+            raise ValueError(
+                "Input manifest path cannot be the same as the output manifest path."
+            )
+
+    if compare_manifests and manifest_out_path:
+        if any(
+            os.path.abspath(p) == os.path.abspath(manifest_out_path)
+            for p in compare_manifests
+        ):
+            raise ValueError(
+                "Compare manifest path cannot be the same as the output manifest path."
+            )
+
+    if no_walk and not manifests_in_paths:
+        raise ValueError("If --no-walk is specified, a manifest must be supplied.")
+
+
+def _log_path_list(header: str, items: Union[str, List[str]]) -> None:
+    """Logs a header and list of paths."""
+    item_list = items if isinstance(items, list) else [items]
+    logger.info(header, len(item_list))
+    for p in item_list:
+        logger.info("  - %s", p)
+
+
+def _log_operation_summary(
+    read_from_path: Optional[Union[str, List[str]]],
+    copy_to_path: Optional[str],
+    manifests_in_paths: Optional[Union[str, List[str]]],
+    manifest_out_path: Optional[str],
+    extensions: Optional[List[str]],
+    ignored_patterns: Optional[List[str]],
+    path_rules: Optional[List[str]],
+    walk_threads: int,
+    read_threads: int,
+    copy_threads: int,
+    dedupe_empty: bool,
+    preserve_stat: bool,
+    no_walk: bool,
+    compare_manifests: Optional[Union[str, List[str]]],
+) -> None:
+    """Logs the pre-flight operation summary."""
+    logger.info("=" * 70)
+    logger.info("DEDUPE COPY - Operation Summary")
+    logger.info("=" * 70)
+    if read_from_path:
+        _log_path_list("Source path(s): %d path(s)", read_from_path)
+    if copy_to_path:
+        logger.info("Destination: %s", copy_to_path)
+    if manifests_in_paths:
+        _log_path_list("Input manifest(s): %d manifest(s)", manifests_in_paths)
+    if manifest_out_path:
+        logger.info("Output manifest: %s", manifest_out_path)
+    if extensions:
+        logger.info("Extension filter: %s", ", ".join(extensions))
+    if ignored_patterns:
+        logger.info("Ignored patterns: %s", ", ".join(ignored_patterns))
+    if path_rules:
+        logger.info("Path rules: %s", ", ".join(path_rules))
+    logger.info(
+        "Threads: walk=%d, read=%d, copy=%d", walk_threads, read_threads, copy_threads
+    )
+    logger.info(
+        "Options: dedupe_empty=%s, preserve_stat=%s, no_walk=%s",
+        dedupe_empty,
+        preserve_stat,
+        no_walk,
+    )
+    if compare_manifests:
+        _log_path_list("Compare manifests: %d manifest(s)", compare_manifests)
+    logger.info("=" * 70)
+    logger.info("")
+
+
+def _resolve_effective_read_paths(
+    read_from_path: Optional[Union[str, List[str]]],
+    no_walk: bool,
+    manifest: Optional[Manifest],
+) -> List[str]:
+    """Determines effective source root paths for copy operations."""
+    effective_read_paths = read_from_path or []
+    if not isinstance(effective_read_paths, list):
+        effective_read_paths = [effective_read_paths]
+
+    if no_walk and not effective_read_paths and manifest:
+        manifest_paths = list(manifest.read_sources)
+        if manifest_paths:
+            common_base = os.path.commonpath(manifest_paths)
+            if common_base and not os.path.isdir(common_base):
+                common_base = os.path.dirname(common_base)
+
+            if common_base:
+                logger.info(
+                    "No source path provided with --no-walk; using common base path "
+                    "from manifest to preserve structure: %s",
+                    common_base,
+                )
+                effective_read_paths = [common_base]
+    return effective_read_paths
+
+
+def _update_manifest_after_copy(
+    all_data: Manifest,
+    moved_files: List[Tuple[str, str]],
+    deleted_files: List[str],
+) -> None:
+    """Updates manifest paths after copy/delete-on-copy operations."""
+    if not moved_files and not deleted_files:
+        return
+    if moved_files:
+        all_data.update_paths(moved_files)
+
+    moved_source_paths = {src for src, _ in moved_files}
+    all_deleted_paths = set(deleted_files)
+    files_to_remove_only = list(all_deleted_paths - moved_source_paths)
+    if files_to_remove_only:
+        all_data.remove_files(files_to_remove_only)
+
+
+def _cleanup_run_resources(
+    ui: Optional[ConsoleUI],
+    manifest: Optional[Manifest],
+    compare: Optional[Manifest],
+    collisions: Optional[DefaultCacheDict],
+    temp_directory: str,
+) -> None:
+    """Stops UI, closes manifests/caches, and removes the temporary directory."""
+    if ui:
+        ui.stop()
+    if manifest:
+        manifest.close()
+    if compare:
+        compare.close()
+    if collisions:
+        collisions.close()
+    try:
+        shutil.rmtree(temp_directory)
+    except OSError as err:
+        logger.warning(
+            "Failed to cleanup the temp_directory: %s with err: %s",
+            temp_directory,
+            err,
+        )
+
+
+def _perform_delete_action(
+    all_data: Manifest,
+    dupes: Any,
+    compare: Optional[Manifest],
+    progress_queue: "queue.PriorityQueue[Any]",
+    copy_threads: int,
+    dry_run: bool,
+    min_delete_size: int,
+    dedupe_empty: bool,
+    manifest_out_path: Optional[str],
+) -> None:
+    """Executes the duplicate deletion workflow and saves the updated manifest."""
+    delete_job = DeleteJob(
+        delete_threads=copy_threads,
+        dry_run=dry_run,
+        min_delete_size_bytes=min_delete_size,
+        dedupe_empty=dedupe_empty,
+    )
+    hashes_to_delete_all = set(compare.md5_data) if compare else None
+    data_to_scan_for_deletes = all_data if compare else dupes
+    deleted_files = delete_files(
+        data_to_scan_for_deletes,
+        progress_queue,
+        delete_job=delete_job,
+        hashes_to_delete_all=hashes_to_delete_all,
+    )
+    if manifest_out_path and not dry_run:
+        if deleted_files:
+            all_data.remove_files(deleted_files)
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
+                "message",
+                "Saving updated manifest after deletion",
+            )
+        )
+        all_data.save(path=manifest_out_path, no_walk=True)
+
+
+def _perform_copy_action(
+    all_data: Manifest,
+    manifest: Optional[Manifest],
+    compare: Optional[Manifest],
+    progress_queue: "queue.PriorityQueue[Any]",
+    copy_to_path: str,
+    read_from_path: Optional[Union[str, List[str]]],
+    no_walk: bool,
+    extensions: Optional[List[str]],
+    path_rules_func: Any,
+    preserve_stat: bool,
+    delete_on_copy: bool,
+    dry_run: bool,
+    rename_on_collision: bool,
+    ignored_patterns: Optional[List[str]],
+    dedupe_empty: bool,
+    copy_threads: int,
+    manifest_out_path: Optional[str],
+) -> None:
+    """Executes the file copy/move workflow and saves the updated manifest."""
+    progress_queue.put(
+        (HIGH_PRIORITY, "message", f"Running copy to {repr(copy_to_path)}")
+    )
+    effective_read_paths = _resolve_effective_read_paths(
+        read_from_path, no_walk, manifest
+    )
+    copy_config = CopyConfig(
+        target_path=copy_to_path,
+        read_paths=effective_read_paths,
+        extensions=extensions,
+        path_rules=path_rules_func,
+        preserve_stat=preserve_stat,
+        delete_on_copy=delete_on_copy,
+        dry_run=dry_run,
+        rename_on_collision=rename_on_collision,
+    )
+    copy_job = CopyJob(
+        copy_config=copy_config,
+        ignore=ignored_patterns,
+        no_copy=compare,
+        dedupe_empty=dedupe_empty,
+        copy_threads=copy_threads,
+        delete_on_copy=delete_on_copy,
+        dry_run=dry_run,
+        rename_on_collision=rename_on_collision,
+    )
+    deleted_files, moved_files = copy_data(
+        all_data,
+        progress_queue,
+        copy_job=copy_job,
+    )
+    _update_manifest_after_copy(all_data, moved_files, deleted_files)
+
+    if manifest_out_path and not dry_run:
+        progress_queue.put(
+            (HIGH_PRIORITY, "message", "Saving complete manifest after copy")
+        )
+        all_data.save(path=manifest_out_path, no_walk=True)
+
+
+def _collect_duplicates_and_data(
+    no_walk: bool,
+    read_from_path: Optional[List[str]],
+    manifest: Manifest,
+    collisions: DefaultCacheDict,
+    ignore_old_collisions: bool,
+    dedupe_empty: bool,
+    walk_config: WalkConfig,
+    work_queue: "queue.Queue[Any]",
+    result_queue: "queue.Queue[Tuple[str, int, float, str]]",
+    progress_queue: "queue.PriorityQueue[Any]",
+    walk_threads: int,
+    read_threads: int,
+    save_event: threading.Event,
+    walk_queue: "queue.Queue[str]",
+    csv_report_path: Optional[str],
+    hash_algo: str,
+) -> Tuple[Any, Manifest]:
+    """Runs the duplicate search (or loads from manifest if no_walk) and generates reports."""
+    if not ignore_old_collisions:
+        _populate_collisions_from_manifest(manifest, collisions, dedupe_empty)
+
+    if no_walk:
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
+                "message",
+                "Not walking file system. Using stored manifests",
+            )
+        )
+        logger.info("Manifest loaded with %d items.", len(manifest))
+        if ignore_old_collisions:
+            _populate_collisions_from_manifest(manifest, collisions, dedupe_empty)
+        logger.info("Found %d collisions in manifest.", len(collisions))
+        dupes: Any = collisions
+        all_data: Manifest = manifest
+    else:
+        progress_queue.put(
+            (
+                HIGH_PRIORITY,
+                "message",
+                "Running the duplicate search, generating reports",
+            )
+        )
+        dupes, all_data = find_duplicates(
+            read_from_path or [],
+            work_queue,
+            result_queue,
+            manifest,
+            collisions,
+            walk_config=walk_config,
+            progress_queue=progress_queue,
+            walk_threads=walk_threads,
+            read_threads=read_threads,
+            save_event=save_event,
+            walk_queue=walk_queue,
+        )
+    work_queue.join()
+    result_queue.join()
+    total_size = _extension_report(all_data)
+    logger.info("Total Size of accepted: %s bytes", total_size)
+    if csv_report_path:
+        generate_report(
+            csv_report_path=csv_report_path,
+            collisions=dupes,
+            read_paths=read_from_path,
+            hash_algo=hash_algo,
+        )
+    return dupes, all_data
+
+
 def run_dupe_copy(
     read_from_path: Optional[Union[str, List[str]]] = None,
     extensions: Optional[List[str]] = None,
@@ -804,7 +1131,7 @@ def run_dupe_copy(
     verify_manifest: bool = False,
     use_ui: bool = True,
     rename_on_collision: bool = False,
-) -> None:
+) -> int:
     """Main entry point for the deduplication and copy functionality.
 
     This function serves as the primary interface for external callers,
@@ -841,85 +1168,30 @@ def run_dupe_copy(
         rename_on_collision: If True, rename colliding destination files instead
                              of skipping with an error.
     """
-    # Ensure logging is configured for programmatic calls
     ensure_logging_configured()
 
-    # On a dry run, we never want to create or modify a manifest on disk.
     if dry_run:
         manifest_out_path = None
 
-    # Argument validation
-    if isinstance(manifests_in_paths, list) and manifest_out_path:
-        # Check if any of the input manifests are the same as the output manifest
-        if any(
-            os.path.abspath(p) == os.path.abspath(manifest_out_path)
-            for p in manifests_in_paths
-        ):
-            raise ValueError(
-                "Input manifest path cannot be the same as the output manifest path."
-            )
-
-    if compare_manifests and manifest_out_path:
-        # Check if any of the compare manifests are the same as the output manifest
-        if any(
-            os.path.abspath(p) == os.path.abspath(manifest_out_path)
-            for p in compare_manifests
-        ):
-            raise ValueError(
-                "Compare manifest path cannot be the same as the output manifest path."
-            )
-
-    if no_walk and not manifests_in_paths:
-        raise ValueError("If --no-walk is specified, a manifest must be supplied.")
-
-    # Display pre-flight summary
-    logger.info("=" * 70)
-    logger.info("DEDUPE COPY - Operation Summary")
-    logger.info("=" * 70)
-    if read_from_path:
-        paths = read_from_path if isinstance(read_from_path, list) else [read_from_path]
-        logger.info("Source path(s): %d path(s)", len(paths))
-        for p in paths:
-            logger.info("  - %s", p)
-    if copy_to_path:
-        logger.info("Destination: %s", copy_to_path)
-    if manifests_in_paths:
-        manifests = (
-            manifests_in_paths
-            if isinstance(manifests_in_paths, list)
-            else [manifests_in_paths]
-        )
-        logger.info("Input manifest(s): %d manifest(s)", len(manifests))
-        for p in manifests:
-            logger.info("  - %s", p)
-    if manifest_out_path:
-        logger.info("Output manifest: %s", manifest_out_path)
-    if extensions:
-        logger.info("Extension filter: %s", ", ".join(extensions))
-    if ignored_patterns:
-        logger.info("Ignored patterns: %s", ", ".join(ignored_patterns))
-    if path_rules:
-        logger.info("Path rules: %s", ", ".join(path_rules))
-    logger.info(
-        "Threads: walk=%d, read=%d, copy=%d", walk_threads, read_threads, copy_threads
+    _validate_run_args(
+        manifests_in_paths, compare_manifests, manifest_out_path, no_walk
     )
-    logger.info(
-        "Options: dedupe_empty=%s, preserve_stat=%s, no_walk=%s",
+    _log_operation_summary(
+        read_from_path,
+        copy_to_path,
+        manifests_in_paths,
+        manifest_out_path,
+        extensions,
+        ignored_patterns,
+        path_rules,
+        walk_threads,
+        read_threads,
+        copy_threads,
         dedupe_empty,
         preserve_stat,
         no_walk,
+        compare_manifests,
     )
-    if compare_manifests:
-        comp_list = (
-            compare_manifests
-            if isinstance(compare_manifests, list)
-            else [compare_manifests]
-        )
-        logger.info("Compare manifests: %d manifest(s)", len(comp_list))
-        for p in comp_list:
-            logger.info("  - %s", p)
-    logger.info("=" * 70)
-    logger.info("")
 
     temp_directory = tempfile.mkdtemp(suffix="dedupe_copy")
     manifest: Optional[Manifest] = None
@@ -944,18 +1216,17 @@ def run_dupe_copy(
             ui.start()
 
         if verify_manifest:
-            verify_manifest_fs(manifest, ui=ui)
-            return
+            return 0 if verify_manifest_fs(manifest, ui=ui) else 1
 
-        if no_copy:
-            for item in no_copy:
-                compare[item] = None
+        for item in no_copy or []:
+            compare[item] = None
 
-        if read_from_path and not isinstance(read_from_path, list):
-            read_from_path = [read_from_path]
-        path_rules_func: Optional[Callable[..., Tuple[str, str]]] = None
-        if path_rules:
-            path_rules_func = build_path_rules(path_rules)
+        read_paths_list = (
+            [read_from_path]
+            if isinstance(read_from_path, str)
+            else read_from_path
+        )
+        path_rules_func = build_path_rules(path_rules) if path_rules else None
         all_stop = threading.Event()
         work_queue: "queue.Queue[Any]" = queue.Queue()
         result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
@@ -972,16 +1243,13 @@ def run_dupe_copy(
             ui=ui,
         )
         progress_thread.start()
-        if manifest and (convert_manifest_paths_to or convert_manifest_paths_from):
+        if convert_manifest_paths_to or convert_manifest_paths_from:
             manifest.convert_manifest_paths(
                 convert_manifest_paths_from, convert_manifest_paths_to
             )
 
-        # storage for hash collisions
         collisions_file = os.path.join(temp_directory, "collisions.db")
         collisions = DefaultCacheDict(list, db_file=collisions_file, max_size=10000)
-        if manifest and not ignore_old_collisions:
-            _populate_collisions_from_manifest(manifest, collisions, dedupe_empty)
         walk_config = WalkConfig(
             extensions=extensions,
             ignore=ignored_patterns,
@@ -989,196 +1257,68 @@ def run_dupe_copy(
             dedupe_empty=dedupe_empty,
         )
 
-        if no_walk:
-            progress_queue.put(
-                (
-                    HIGH_PRIORITY,
-                    "message",
-                    "Not walking file system. Using stored manifests",
-                )
-            )
-            # Rebuild collision list from the manifest if not already built above
-            if manifest:
-                logger.info("Manifest loaded with %d items.", len(manifest))
-                if ignore_old_collisions:
-                    _populate_collisions_from_manifest(
-                        manifest, collisions, dedupe_empty
-                    )
-                logger.info("Found %d collisions in manifest.", len(collisions))
-            dupes = collisions
-            all_data = manifest
-        else:
-            progress_queue.put(
-                (
-                    HIGH_PRIORITY,
-                    "message",
-                    "Running the duplicate search, generating reports",
-                )
-            )
-            dupes, all_data = find_duplicates(
-                read_from_path or [],
-                work_queue,
-                result_queue,
-                manifest,
-                collisions,
-                walk_config=walk_config,
-                progress_queue=progress_queue,
-                walk_threads=walk_threads,
-                read_threads=read_threads,
-                save_event=save_event,
-                walk_queue=walk_queue,
-            )
-        work_queue.join()
-        result_queue.join()
-        total_size = _extension_report(all_data)
-        logger.info("Total Size of accepted: %s bytes", total_size)
-        if csv_report_path:
-            generate_report(
-                csv_report_path=csv_report_path,
-                collisions=dupes,
-                read_paths=read_from_path,
-                hash_algo=hash_algo,
-            )
+        dupes, all_data = _collect_duplicates_and_data(
+            no_walk=no_walk,
+            read_from_path=read_paths_list,
+            manifest=manifest,
+            collisions=collisions,
+            ignore_old_collisions=ignore_old_collisions,
+            dedupe_empty=dedupe_empty,
+            walk_config=walk_config,
+            work_queue=work_queue,
+            result_queue=result_queue,
+            progress_queue=progress_queue,
+            walk_threads=walk_threads,
+            read_threads=read_threads,
+            save_event=save_event,
+            walk_queue=walk_queue,
+            csv_report_path=csv_report_path,
+            hash_algo=hash_algo,
+        )
+
         if delete_duplicates:
             if copy_to_path:
                 logger.error("Cannot use --delete and --copy-path at the same time.")
             else:
-                delete_job = DeleteJob(
-                    delete_threads=copy_threads,
-                    dry_run=dry_run,
-                    min_delete_size_bytes=min_delete_size,
-                    dedupe_empty=dedupe_empty,
-                )
-
-                # If comparing, we want to delete ALL files that match the
-                # compare manifest's hashes.
-                hashes_to_delete_all = set(compare.md5_data) if compare else None
-
-                # When using --compare with --delete, we need to consider all files,
-                # not just those with internal duplicates, for deletion.
-                data_to_scan_for_deletes = all_data if compare else dupes
-
-                deleted_files = delete_files(
-                    data_to_scan_for_deletes,
+                _perform_delete_action(
+                    all_data,
+                    dupes,
+                    compare,
                     progress_queue,
-                    delete_job=delete_job,
-                    hashes_to_delete_all=hashes_to_delete_all,
+                    copy_threads,
+                    dry_run,
+                    min_delete_size,
+                    dedupe_empty,
+                    manifest_out_path,
                 )
-                # Update the manifest with the deleted files
-                if manifest_out_path and not dry_run:
-                    # Update the manifest with the deleted files
-                    if deleted_files:
-                        all_data.remove_files(deleted_files)
-                    progress_queue.put(
-                        (
-                            HIGH_PRIORITY,
-                            "message",
-                            "Saving updated manifest after deletion",
-                        )
-                    )
-                    all_data.save(path=manifest_out_path, no_walk=True)
         elif copy_to_path is not None:
-            # copy the duplicate files first and then ignore them for the full pass
-            progress_queue.put(
-                (HIGH_PRIORITY, "message", f"Running copy to {repr(copy_to_path)}")
-            )
-
-            effective_read_paths = read_from_path or []
-            if not isinstance(effective_read_paths, list):
-                effective_read_paths = [effective_read_paths]
-
-            if no_walk and not effective_read_paths and manifest:
-                manifest_paths = list(manifest.read_sources)
-                if manifest_paths:
-                    # Use commonpath to determine the most likely source root.
-                    common_base = os.path.commonpath(manifest_paths)
-                    # If commonpath returns a file (e.g., only one file in manifest), get its dir.
-                    if common_base and not os.path.isdir(common_base):
-                        common_base = os.path.dirname(common_base)
-
-                    if common_base:
-                        logger.info(
-                            "No source path provided with --no-walk; using common base path "
-                            "from manifest to preserve structure: %s",
-                            common_base,
-                        )
-                        effective_read_paths = [common_base]
-
-            copy_config = CopyConfig(
-                target_path=copy_to_path,
-                read_paths=effective_read_paths,
-                extensions=extensions,
-                path_rules=path_rules_func,
-                preserve_stat=preserve_stat,
-                delete_on_copy=delete_on_copy,
-                dry_run=dry_run,
-                rename_on_collision=rename_on_collision,
-            )
-            copy_job = CopyJob(
-                copy_config=copy_config,
-                ignore=ignored_patterns,
-                no_copy=compare,
-                dedupe_empty=dedupe_empty,
-                copy_threads=copy_threads,
-                delete_on_copy=delete_on_copy,
-                dry_run=dry_run,
-                rename_on_collision=rename_on_collision,
-            )
-            deleted_files, moved_files = copy_data(
+            _perform_copy_action(
                 all_data,
+                manifest,
+                compare,
                 progress_queue,
-                copy_job=copy_job,
+                copy_to_path,
+                read_paths_list,
+                no_walk,
+                extensions,
+                path_rules_func,
+                preserve_stat,
+                delete_on_copy,
+                dry_run,
+                rename_on_collision,
+                ignored_patterns,
+                dedupe_empty,
+                copy_threads,
+                manifest_out_path,
             )
-
-            # This logic handles manifest updates for both moved files (delete-on-copy)
-            # and files that were only deleted (due to --compare).
-            if moved_files or deleted_files:
-                # First, handle the path updates for files that were moved.
-                # This operation removes the old source path and adds the new destination path.
-                if moved_files:
-                    all_data.update_paths(moved_files)
-
-                # Next, handle the removal of files that were deleted but not moved.
-                # These are files that were duplicates of the --compare manifest.
-                # We must not try to re-process files that were already handled by update_paths.
-                # Convert to sets for robust duplicate handling and efficient subtraction.
-                moved_source_paths = {src for src, _ in moved_files}
-                all_deleted_paths = set(deleted_files)
-
-                files_to_remove_only = list(all_deleted_paths - moved_source_paths)
-
-                if files_to_remove_only:
-                    all_data.remove_files(files_to_remove_only)
-
-            if manifest_out_path and not dry_run:
-                progress_queue.put(
-                    (HIGH_PRIORITY, "message", "Saving complete manifest after copy")
-                )
-                all_data.save(path=manifest_out_path, no_walk=True)
-        else:
-            # If not deleting or copying, save the manifest if a path is provided
-            if manifest_out_path and not dry_run:
-                progress_queue.put(
-                    (HIGH_PRIORITY, "message", "Saving complete manifest from search")
-                )
-                all_data.save(path=manifest_out_path, no_walk=no_walk)
+        elif manifest_out_path and not dry_run:
+            progress_queue.put(
+                (HIGH_PRIORITY, "message", "Saving complete manifest from search")
+            )
+            all_data.save(path=manifest_out_path, no_walk=no_walk)
         all_stop.set()
         while progress_thread.is_alive():
             progress_thread.join(5)
+        return 0
     finally:
-        if ui:
-            ui.stop()
-        if manifest:
-            manifest.close()
-        if compare:
-            compare.close()
-        if collisions:
-            collisions.close()
-        try:
-            shutil.rmtree(temp_directory)
-        except OSError as err:
-            logger.warning(
-                "Failed to cleanup the temp_directory: %s with err: %s",
-                temp_directory,
-                err,
-            )
+        _cleanup_run_resources(ui, manifest, compare, collisions, temp_directory)
