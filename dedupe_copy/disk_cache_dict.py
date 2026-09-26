@@ -180,7 +180,8 @@ class SqliteBackend:
         """Return the shared SQLite connection."""
         if self._conn is None:
             self._init_conn()
-        return self._conn  # type: ignore
+        assert self._conn is not None
+        return self._conn
 
     def _get_key_id(self, key: Any) -> Any:
         """Get the database ID for a given key, or raise KeyError if not found."""
@@ -444,7 +445,7 @@ class SqliteBackend:
         """Destructor to ensure the database connection is closed."""
         try:
             self.close()
-        except Exception:  # pylint: disable=W0718
+        except sqlite3.Error, OSError, TypeError, AttributeError:
             pass
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
@@ -586,7 +587,8 @@ class SqliteSetBackend:
         """Return connection."""
         if self._conn is None:
             self._init_conn()
-        return self._conn  # type: ignore
+        assert self._conn is not None
+        return self._conn
 
     def _get_key_id(self, key: Any) -> Any:
         """Get ID for key."""
@@ -760,6 +762,13 @@ class SqliteSetBackend:
                 except sqlite3.OperationalError, sqlite3.ProgrammingError:
                     pass
             self._conn = None
+
+    def __del__(self) -> None:
+        """Destructor to ensure the database connection is closed."""
+        try:
+            self.close()
+        except sqlite3.Error, OSError, TypeError, AttributeError:
+            pass
 
     def save(self, db_file: Optional[str] = None, remove_old_db: bool = False) -> None:
         """Save to new file."""

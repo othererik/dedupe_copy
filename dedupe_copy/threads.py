@@ -9,7 +9,7 @@ import threading
 import time
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from .progress_worker import ProgressThread
 
@@ -35,9 +35,6 @@ from .utils import (
     read_file,
 )
 
-if TYPE_CHECKING:
-    from rich.progress import TaskID
-    from .ui import ConsoleUI
 HIGH_PRIORITY = 1
 MEDIUM_PRIORITY = 5
 LOW_PRIORITY = 10
@@ -341,8 +338,7 @@ class CopyThread(threading.Thread):
 
     def _resolve_destination_path(self, src: str, dest: str) -> Optional[str]:
         """Resolves destination path collisions safely across worker threads."""
-        # pylint: disable=protected-access
-        with self.config._dest_lock:
+        with self.config.dest_lock:
             norm_src = os.path.normcase(os.path.abspath(src))
             norm_dest = os.path.normcase(os.path.abspath(dest))
 
@@ -366,7 +362,7 @@ class CopyThread(threading.Thread):
             except OSError:
                 pass
 
-            claimed_by = self.config._claimed_destinations.get(norm_dest)
+            claimed_by = self.config.claimed_destinations.get(norm_dest)
             is_collision = False
             if claimed_by is not None and claimed_by != norm_src:
                 is_collision = True
@@ -385,7 +381,7 @@ class CopyThread(threading.Thread):
                     is_collision = True
 
             if not is_collision:
-                self.config._claimed_destinations[norm_dest] = norm_src
+                self.config.claimed_destinations[norm_dest] = norm_src
                 return dest
 
             if not self.config.rename_on_collision:
@@ -408,10 +404,10 @@ class CopyThread(threading.Thread):
                 candidate = f"{base}_{counter}{ext}"
                 norm_cand = os.path.normcase(os.path.abspath(candidate))
                 if (
-                    norm_cand not in self.config._claimed_destinations
+                    norm_cand not in self.config.claimed_destinations
                     and not os.path.exists(candidate)
                 ):
-                    self.config._claimed_destinations[norm_cand] = norm_src
+                    self.config.claimed_destinations[norm_cand] = norm_src
                     return candidate
                 counter += 1
 
@@ -834,42 +830,45 @@ class DeleteThread(threading.Thread):
         self.dry_run = dry_run
         self.daemon = True
 
+    def _delete_single_file(self, src: str) -> None:
+        """Deletes a single file or logs dry-run message."""
+        if self.dry_run:
+            if self.progress_queue:
+                self.progress_queue.put(
+                    (
+                        HIGH_PRIORITY,
+                        "message",
+                        f"[DRY RUN] Would delete {src}",
+                    )
+                )
+            return
+
+        try:
+            os.remove(src)
+            if self.progress_queue:
+                self.progress_queue.put((LOW_PRIORITY, "deleted", src))
+            if self.deleted_queue:
+                self.deleted_queue.put(src)
+        except OSError as e:
+            if self.progress_queue:
+                self.progress_queue.put((MEDIUM_PRIORITY, "error", src, e))
+
     def run(self) -> None:
         """The main execution loop for the thread.
 
         This method continuously fetches file paths from the work queue and
         deletes them, until the stop event is set and the queue is empty.
         """
-        # pylint: disable=R1702
         while not self.stop_event.is_set() or not self.work.empty():
             try:
                 src = self.work.get(True, 0.01)
-                try:
-                    if self.dry_run:
-                        if self.progress_queue:
-                            self.progress_queue.put(
-                                (
-                                    HIGH_PRIORITY,
-                                    "message",
-                                    f"[DRY RUN] Would delete {src}",
-                                )
-                            )
-                    else:
-                        try:
-                            os.remove(src)
-                            if self.progress_queue:
-                                self.progress_queue.put((LOW_PRIORITY, "deleted", src))
-                            if self.deleted_queue:
-                                self.deleted_queue.put(src)
-                        except OSError as e:
-                            if self.progress_queue:
-                                self.progress_queue.put(
-                                    (MEDIUM_PRIORITY, "error", src, e)
-                                )
-                finally:
-                    self.work.task_done()
             except queue.Empty:
-                pass
+                continue
+
+            try:
+                self._delete_single_file(src)
+            finally:
+                self.work.task_done()
 
 
 class WalkThread(threading.Thread):

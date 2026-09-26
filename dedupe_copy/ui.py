@@ -29,7 +29,7 @@ custom_theme = Theme(
 class ConsoleUI:
     """Manages the rich console and progress display."""
 
-    def __init__(self, console: Optional[Console] = None):
+    def __init__(self, console: Optional[Console] = None) -> None:
         self.console = console or Console(theme=custom_theme)
         self.progress = Progress(
             SpinnerColumn(),
@@ -43,7 +43,7 @@ class ConsoleUI:
         self.tasks: dict[str, TaskID] = {}
         self._setup_logging()
 
-    def _setup_logging(self):
+    def _setup_logging(self) -> None:
         """Configure logging to work with rich."""
         # Remove existing handlers to avoid duplicate logs
         root_logger = logging.getLogger()
@@ -62,11 +62,11 @@ class ConsoleUI:
         root_logger.addHandler(handler)
         root_logger.setLevel(logging.INFO)
 
-    def start(self):
+    def start(self) -> None:
         """Start the progress display."""
         self.progress.start()
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the progress display."""
         self.progress.stop()
 
@@ -84,7 +84,7 @@ class ConsoleUI:
         advance: float = 1,
         description: Optional[str] = None,
         total: Optional[float] = None,
-    ):
+    ) -> None:
         """Update a task's progress."""
         if name in self.tasks:
             self.progress.update(
@@ -94,7 +94,7 @@ class ConsoleUI:
                 total=total,
             )
 
-    def log(self, message: str, level: str = "info"):
+    def log(self, message: str, level: str = "info") -> None:
         """Log a message to the console."""
         if level == "info":
             self.console.print(f"[info]{message}[/info]")

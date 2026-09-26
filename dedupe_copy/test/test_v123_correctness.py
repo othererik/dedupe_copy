@@ -631,7 +631,9 @@ s.close()
                 ],
             ),
             patch("dedupe_copy.bin.dedupecopy_cli.setup_logging"),
-            patch("dedupe_copy.bin.dedupecopy_cli.run_dupe_copy") as mock_run,
+            patch(
+                "dedupe_copy.bin.dedupecopy_cli.run_dupe_copy", return_value=0
+            ) as mock_run,
         ):
             run_cli()
             mock_run.assert_called_once()

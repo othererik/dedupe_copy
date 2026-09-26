@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # Optional import of xxhash for faster hashing if available
 xxhash: Optional[Any] = None
 try:
-    import xxhash  # type: ignore
+    import xxhash  # type: ignore[no-redef]  # Optional C-extension; fallback is None
 except ImportError:
     logger.warning(
         "xxhash module not found. Please install with 'pip install xxhash',"
@@ -169,8 +169,6 @@ class ExtensionMatcher:
     faster matching than iterating through the list.
     """
 
-    # pylint: disable=too-few-public-methods
-
     def __init__(self, extensions: Optional[List[str]]):
         self.match_all = False
         if not extensions:
@@ -208,6 +206,10 @@ class ExtensionMatcher:
 
         return False
 
+    def __call__(self, fn: str) -> bool:
+        """Callable alias for match()."""
+        return self.match(fn)
+
 
 def match_extension(
     extensions: Union[Optional[List[str]], "ExtensionMatcher"], fn: str
@@ -226,8 +228,11 @@ def match_extension(
     Returns:
         True if the filename matches any of the patterns, False otherwise.
     """
-    if hasattr(extensions, "match"):
-        return extensions.match(fn)  # type: ignore[union-attr]
+    if isinstance(extensions, ExtensionMatcher):
+        return extensions.match(fn)
+    match_fn = getattr(extensions, "match", None)
+    if callable(match_fn):
+        return bool(match_fn(fn))
 
     if not extensions:
         return True

@@ -70,10 +70,10 @@ class CopyConfig:
     dry_run: bool = False
     rename_on_collision: bool = False
     extension_matcher: Optional[ExtensionMatcher] = field(default=None, init=False)
-    _claimed_destinations: Dict[str, str] = field(
+    claimed_destinations: Dict[str, str] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
-    _dest_lock: threading.Lock = field(
+    dest_lock: threading.Lock = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
 

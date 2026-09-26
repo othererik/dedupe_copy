@@ -11,6 +11,11 @@
   - Return a non-zero exit code (`1`) when `--verify` fails instead of exiting with `0`
   - Ensure `ConsoleUI` and `Manifest` are always stopped/closed via `try...finally` in `run_dupe_copy` and validate `--no-walk` arguments before starting background UI threads
   - Prevent exponential `colorama` `StreamWrapper` nesting on `sys.stdout` and `sys.stderr` across repeated `setup_logging()` calls
+  - Ensure `SqliteSetBackend` closes its SQLite connection in `__del__` to prevent `ResourceWarning: unclosed database` during garbage collection
+- **Code Quality & CI**:
+  - Add complete type annotations across CLI (`dedupecopy_cli`, `manifest_explorer_cli`) and UI (`ConsoleUI`) modules and enforce `disallow_untyped_defs = true` for production code in `mypy` and CI
+  - Refactor `core.py` (`find_duplicates`, `copy_data`, `delete_files`, `run_dupe_copy`) and `threads.py` (`DeleteThread`) into smaller helpers to reduce cyclomatic/branch complexity and eliminate linter suppressions
+  - Tighten CI (`flake-and-tests.yml`) to fail on any `flake8` style or complexity issue (removing `--exit-zero`)
 - **Packaging**:
   - Drop support for Python versions earlier than 3.14 (`requires-python = ">=3.14"`)
 

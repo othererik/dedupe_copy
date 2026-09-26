@@ -3,12 +3,8 @@
 import cmd
 import logging
 import os
-import sys
 import tempfile
-
-# pylint: disable=wrong-import-position
-# Add the project root to the Python path to allow importing from dedupe_copy
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from typing import Optional
 
 from dedupe_copy.manifest import Manifest
 
@@ -21,14 +17,16 @@ class ManifestExplorer(cmd.Cmd):
     intro = "Welcome to the Manifest Explorer. Type help or ? to list commands.\\n"
     prompt = "(manifest_explorer) "
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.manifest = None
+        self.manifest: Optional[Manifest] = None
+        # Temporary directory lives across the interactive REPL session and is
+        # cleaned up in do_exit(), so a context manager block cannot be used here.
         self.temp_dir = (
             tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
         )
 
-    def do_load(self, arg):
+    def do_load(self, arg: str) -> None:
         """Load a manifest file. Usage: load <path_to_manifest>"""
         if not arg:
             print("Please provide the path to the manifest file.")
@@ -43,12 +41,13 @@ class ManifestExplorer(cmd.Cmd):
                 manifest_paths=arg, temp_directory=self.temp_dir.name
             )
             print(f"Manifest '{arg}' loaded successfully.")
-        # pylint: disable=broad-except
-        except Exception as e:
+        # Catch all exceptions in the interactive REPL command handler so a
+        # corrupt or incompatible manifest file does not crash the user's shell.
+        except Exception as e:  # pylint: disable=broad-except
             print(f"An error occurred while loading the manifest: {e}")
             self.manifest = None
 
-    def do_info(self, _arg):
+    def do_info(self, _arg: str) -> None:
         """Display information about the loaded manifest."""
         if not self.manifest:
             print("No manifest loaded. Use 'load <path>' to load a manifest.")
@@ -56,7 +55,7 @@ class ManifestExplorer(cmd.Cmd):
         print(f"  Hashes: {len(self.manifest.md5_data)}")
         print(f"  Files: {len(self.manifest.read_sources)}")
 
-    def do_list(self, arg):
+    def do_list(self, arg: str) -> None:
         """List contents of the manifest. Usage: list [limit]"""
         if not self.manifest:
             print("No manifest loaded. Use 'load <path>' to load a manifest.")
@@ -76,7 +75,7 @@ class ManifestExplorer(cmd.Cmd):
                 print(f"  - {file_info[0]}")
             count += 1
 
-    def do_find(self, arg):
+    def do_find(self, arg: str) -> None:
         """Find a file path or hash in the manifest. Usage: find <query>"""
         if not self.manifest:
             print("No manifest loaded. Use 'load <path>' to load a manifest.")
@@ -103,7 +102,7 @@ class ManifestExplorer(cmd.Cmd):
         if not found:
             print("No matching hash or file found.")
 
-    def do_exit(self, _arg):
+    def do_exit(self, _arg: str) -> bool:
         """Exit the manifest explorer."""
         if self.manifest:
             self.manifest.close()
@@ -111,7 +110,7 @@ class ManifestExplorer(cmd.Cmd):
         return True
 
 
-def main():
+def main() -> None:
     """Main function to run the Manifest Explorer."""
     try:
         ManifestExplorer().cmdloop()

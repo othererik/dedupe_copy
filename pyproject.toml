@@ -76,3 +76,14 @@ disable = ["R0913", "R0914", "R0902", "R0801", "R0917"]
 
 [tool.pylint.MASTER]
 ignore = ["build"]
+
+[tool.mypy]
+disallow_untyped_defs = true
+
+# Test modules contain ~400 unittest/pytest methods and mock callbacks that do
+# not benefit from explicit `-> None` annotations; type-checking inside test
+# bodies still runs when functions are annotated, while production modules
+# strictly enforce `disallow_untyped_defs = true`.
+[[tool.mypy.overrides]]
+module = "dedupe_copy.test.*"
+disallow_untyped_defs = false

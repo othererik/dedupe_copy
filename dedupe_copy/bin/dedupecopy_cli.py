@@ -3,6 +3,7 @@
 import argparse
 import logging
 import sys
+from typing import Any, Dict
 
 from dedupe_copy.utils import clean_extensions
 from dedupe_copy.core import run_dupe_copy
@@ -22,7 +23,7 @@ Examples:
 
   Copy all files from two drives to a single target (preserving structure):
       dedupecopy -p C:\ -p D:\ -c X:\ -m X:\manifest
-      
+
       Note: Directory structure is preserved by default. Use -R for custom organization.
 
   Resume an interrupted run (assuming "-m manifest" used in prior run):
@@ -52,7 +53,7 @@ Examples:
 """
 
 
-def _create_parser():
+def _create_parser() -> argparse.ArgumentParser:
     """Creates and returns the argparse parser."""
     parser = argparse.ArgumentParser(
         description=DESCRIPTION,
@@ -310,7 +311,7 @@ def _create_parser():
     return parser
 
 
-def _handle_arguments(args):
+def _handle_arguments(args: argparse.Namespace) -> Dict[str, Any]:
     """Take the cli args and process them in prep for calling run_dedupe_copy"""
     logger = logging.getLogger(__name__)
 
@@ -357,7 +358,7 @@ def _handle_arguments(args):
     }
 
 
-def run_cli():
+def run_cli() -> int:
     """Main entry point for the command-line interface."""
     parser = _create_parser()
     args = parser.parse_args()
@@ -388,7 +389,7 @@ def run_cli():
     processed_args = _handle_arguments(args)
     try:
         ret = run_dupe_copy(**processed_args)
-        if ret:
+        if isinstance(ret, int) and ret != 0:
             sys.exit(ret)
         return ret
     except ValueError as e:
