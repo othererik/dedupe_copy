@@ -3,7 +3,7 @@
 A multi-threaded command-line tool for finding duplicate files and copying/restructuring file layouts while eliminating duplicates.
 
 [![License](https://img.shields.io/badge/license-BSD-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 
 ## Table of Contents
 
@@ -213,7 +213,7 @@ pip install -e .[color]
 
 ### Requirements
 
-- Python 3.11 or later
+- Python 3.14 or later
 - Sufficient disk space for manifest files (typically small, but can grow for very large file sets)
 - Optional: colorama for colored console output (installed with `[color]` extra)
 

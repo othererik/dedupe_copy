@@ -9,7 +9,6 @@ import sys
 import time
 from typing import Any, List, Optional, Tuple, Union
 
-
 logger = logging.getLogger(__name__)
 
 # Optional import of xxhash for faster hashing if available
@@ -85,7 +84,7 @@ def format_error_message(path: str, error: Union[str, Exception]) -> str:
 def _throttle_puts(current_size: int) -> None:
     """Delay for some factor to avoid overloading queues"""
     if current_size >= MAX_TARGET_QUEUE_SIZE:
-        time.sleep(min((current_size * 2) / float(MAX_TARGET_QUEUE_SIZE), 60))
+        time.sleep(min((current_size * 0.001) / float(MAX_TARGET_QUEUE_SIZE), 0.05))
 
 
 def lower_extension(src: str) -> str:
@@ -157,10 +156,9 @@ def read_file(src: str, hash_algo: str = "md5") -> Tuple[str, int, float, str]:
         A tuple containing the file's hash, size, modification time, and
         the original file path.
     """
-    size = os.path.getsize(src)
-    mtime = os.path.getmtime(src)
+    st = os.stat(src)
     file_hash = hash_file(src, hash_algo=hash_algo)
-    return (file_hash, size, mtime, src)
+    return (file_hash, st.st_size, st.st_mtime, src)
 
 
 class ExtensionMatcher:

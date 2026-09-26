@@ -37,7 +37,7 @@ from .threads import (
     WalkThread,
 )
 from .ui import ConsoleUI
-from .utils import _throttle_puts, ensure_logging_configured, lower_extension
+from .utils import ensure_logging_configured, lower_extension
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,6 @@ def _walk_fs(
         walkers.append(w)
         w.start()
     for src in read_paths:
-        _throttle_puts(walk_queue.qsize())
         walk_queue.put(src)
     walk_queue.join()
     walk_done.set()
@@ -270,6 +269,11 @@ def find_duplicates(
     Returns:
         A tuple containing the dictionary of collisions and the final manifest.
     """
+    initial_processed: set[str] = (
+        set(manifest.read_sources)
+        if manifest is not None and getattr(manifest, "read_sources", None)
+        else set()
+    )
     (
         result_processor,
         work_threads,
@@ -291,7 +295,7 @@ def find_duplicates(
         walk_config,
         work_queue=work_queue,
         walk_queue=walk_queue,
-        already_processed=manifest.read_sources,
+        already_processed=initial_processed,
         progress_queue=progress_queue,
         walk_threads=walk_threads,
         save_event=save_event,
@@ -449,7 +453,6 @@ def copy_data(
             # If a file's hash is in our skip set (from compare manifest or a
             # file we've already queued for copying), and we are in "move"
             # mode, delete this duplicate from the source.
-            _throttle_puts(delete_only_queue.qsize())
             delete_only_queue.put(path)
             if progress_queue:
                 progress_queue.put((LOW_PRIORITY, "queued_for_delete", path))
@@ -475,7 +478,6 @@ def copy_data(
         )
 
     for path, mtime, size in files_to_copy:
-        _throttle_puts(copy_queue.qsize())
         copy_queue.put((path, mtime, size))
 
     # Wait for all tasks to be processed by the workers
@@ -546,9 +548,7 @@ def copy_data(
     return all_deleted_files, moved_files
 
 
-def _select_files_for_deletion(
-    file_list: List[Any], delete_all: bool
-) -> List[Any]:
+def _select_files_for_deletion(file_list: List[Any], delete_all: bool) -> List[Any]:
     """Deduplicates file_list by normalized path and selects files to delete."""
     unique_by_path = {}
     for file_info in file_list:
@@ -685,7 +685,6 @@ def delete_files(
         d.start()
 
     for path_to_delete in files_to_delete:
-        _throttle_puts(delete_queue.qsize())
         delete_queue.put(path_to_delete)
 
     delete_queue.join()
@@ -870,6 +869,9 @@ def run_dupe_copy(
                 "Compare manifest path cannot be the same as the output manifest path."
             )
 
+    if no_walk and not manifests_in_paths:
+        raise ValueError("If --no-walk is specified, a manifest must be supplied.")
+
     # Display pre-flight summary
     logger.info("=" * 70)
     logger.info("DEDUPE COPY - Operation Summary")
@@ -920,58 +922,46 @@ def run_dupe_copy(
     logger.info("")
 
     temp_directory = tempfile.mkdtemp(suffix="dedupe_copy")
-
-    save_event = threading.Event()
-    manifest = Manifest(
-        manifests_in_paths,
-        save_path=manifest_out_path,
-        temp_directory=temp_directory,
-        save_event=save_event,
-    )
-    compare = Manifest(compare_manifests, save_path=None, temp_directory=temp_directory)
-
+    manifest: Optional[Manifest] = None
+    compare: Optional[Manifest] = None
     ui: Optional[ConsoleUI] = None
-    if use_ui:
-        ui = ConsoleUI()
-        ui.start()
-
-    if verify_manifest:
-        verify_manifest_fs(manifest, ui=ui)
-        if ui:
-            ui.stop()
-        manifest.close()
-        try:
-            shutil.rmtree(temp_directory)
-        except OSError as err:
-            logger.warning(
-                "Failed to cleanup the temp_directory: %s with err: %s",
-                temp_directory,
-                err,
-            )
-        return
-
-    if no_copy:
-        for item in no_copy:
-            compare[item] = None
-
-    if no_walk:
-        if not manifests_in_paths:
-            raise ValueError("If --no-walk is specified, a manifest must be supplied.")
-
-    if read_from_path and not isinstance(read_from_path, list):
-        read_from_path = [read_from_path]
-    path_rules_func: Optional[Callable[..., Tuple[str, str]]] = None
-    if path_rules:
-        path_rules_func = build_path_rules(path_rules)
-    all_stop = threading.Event()
-    work_queue: "queue.Queue[str]" = queue.Queue()
-    result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
-    progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
-    walk_queue: "queue.Queue[str]" = queue.Queue()
-
-    # ui initialized above
+    collisions: Optional[DefaultCacheDict] = None
 
     try:
+        save_event = threading.Event()
+        manifest = Manifest(
+            manifests_in_paths,
+            save_path=manifest_out_path,
+            temp_directory=temp_directory,
+            save_event=save_event,
+        )
+        compare = Manifest(
+            compare_manifests, save_path=None, temp_directory=temp_directory
+        )
+
+        if use_ui:
+            ui = ConsoleUI()
+            ui.start()
+
+        if verify_manifest:
+            verify_manifest_fs(manifest, ui=ui)
+            return
+
+        if no_copy:
+            for item in no_copy:
+                compare[item] = None
+
+        if read_from_path and not isinstance(read_from_path, list):
+            read_from_path = [read_from_path]
+        path_rules_func: Optional[Callable[..., Tuple[str, str]]] = None
+        if path_rules:
+            path_rules_func = build_path_rules(path_rules)
+        all_stop = threading.Event()
+        work_queue: "queue.Queue[Any]" = queue.Queue()
+        result_queue: "queue.Queue[Tuple[str, int, float, str]]" = queue.Queue()
+        progress_queue: "queue.PriorityQueue[Any]" = queue.PriorityQueue()
+        walk_queue: "queue.Queue[str]" = queue.Queue()
+
         progress_thread = ProgressThread(
             work_queue,
             result_queue,
@@ -982,7 +972,6 @@ def run_dupe_copy(
             ui=ui,
         )
         progress_thread.start()
-        collisions = None
         if manifest and (convert_manifest_paths_to or convert_manifest_paths_from):
             manifest.convert_manifest_paths(
                 convert_manifest_paths_from, convert_manifest_paths_to

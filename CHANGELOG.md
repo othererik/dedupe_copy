@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.4] - 2026-09-26
+- **Performance**:
+  - Eliminate SQLite lock and query contention during directory walking by snapshotting `manifest.read_sources` into an in-memory `set` prior to launching `WalkThread` workers and fast-pathing empty sets in `_is_file_processing_required`
+  - Replace `os.listdir()` + `os.path.isdir()` in `distribute_work()` with `os.scandir()` (`DirEntry.is_dir()`), consolidate `os.stat()` calls in `read_file()`, and avoid redundant `os.path.exists()` checks in `WalkThread.run()`
+  - Batch per-file and per-directory progress events (`"dir"`, `"file"`, `"accepted"`) into a single `"walk_batch"` `PriorityQueue` event per directory in `distribute_work()` and `ProgressThread`
+  - Remove blocking `_throttle_puts` sleeps from hot queue loops and reduce worker thread shutdown poll timeouts from `0.5s`/`0.1s` to `0.01s`
+  - Check `_write_batch` in memory before querying SQLite in `SqliteBackend` and `SqliteSetBackend` instead of flushing pending write batches on every read/membership check, and batch `read_sources` updates in `ResultProcessor`
+- **Bug Fixes**:
+  - Ensure `ConsoleUI` and `Manifest` are always stopped/closed via `try...finally` in `run_dupe_copy` and validate `--no-walk` arguments before starting background UI threads
+  - Prevent exponential `colorama` `StreamWrapper` nesting on `sys.stdout` and `sys.stderr` across repeated `setup_logging()` calls
+- **Packaging**:
+  - Drop support for Python versions earlier than 3.14 (`requires-python = ">=3.14"`)
+
 ## [1.2.3] - 2026-09-25
 - **Correctness & Data Safety**:
   - Fix `--delete-on-copy` so failed file copies never delete the source file or corrupt the manifest path, and clean up any partially written destination file
