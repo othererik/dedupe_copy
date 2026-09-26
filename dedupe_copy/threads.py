@@ -1,5 +1,4 @@
-"""Thread workers for walking, hashing, copying, and progress reporting
-"""
+"""Thread workers for walking, hashing, copying, and progress reporting"""
 
 import fnmatch
 import logging
@@ -26,10 +25,10 @@ __all__ = [
 ]
 
 from .config import CopyConfig, WalkConfig
+from .disk_cache_dict import CacheDict, PersistentSet
 from .manifest import Manifest
 from .path_rules import strip_read_path_prefix
 from .utils import (
-    _throttle_puts,
     hash_file,
     lower_extension,
     match_extension,
@@ -115,11 +114,12 @@ def _is_file_processing_required(
     Returns:
         True if the file should be processed, False otherwise.
     """
-    if filepath in already_processed:
-        return False
-    abs_filepath = os.path.abspath(filepath)
-    if abs_filepath != filepath and abs_filepath in already_processed:
-        return False
+    if already_processed:
+        if filepath in already_processed:
+            return False
+        abs_filepath = os.path.abspath(filepath)
+        if abs_filepath != filepath and abs_filepath in already_processed:
+            return False
 
     if _check_is_ignored(filepath, ignore, ignore_regex, progress_queue):
         return False
@@ -174,38 +174,59 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
         return
 
     try:
-        items = os.listdir(src)
+        scandir_it = os.scandir(src)
     except OSError as e:
         if config.progress_queue:
             config.progress_queue.put((MEDIUM_PRIORITY, "error", src, e))
         return
 
-    for item in items:
-        fn = os.path.join(src, item)
-        if os.path.isdir(fn):
-            if config.progress_queue:
-                config.progress_queue.put((LOW_PRIORITY, "dir", fn))
-            _throttle_puts(config.walk_queue.qsize())
-            config.walk_queue.put(fn)
-            continue
-        if config.progress_queue:
-            config.progress_queue.put((LOW_PRIORITY, "file", fn))
+    dir_count = 0
+    file_count = 0
+    accepted_count = 0
+    last_file: Optional[str] = None
+    last_accepted: Optional[str] = None
 
-        if _is_file_processing_required(
-            fn,
-            config.already_processed,
-            config.walk_config.ignore,
-            config.walk_config.extensions,
-            config.progress_queue,
-            config.walk_config.ignore_regex,
-            extension_matcher=config.walk_config.extension_matcher,
-        ):
-            if not _mark_path_seen(fn, config.seen_paths, config.seen_lock):
+    with scandir_it as entries:
+        for entry in entries:
+            fn = entry.path
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                is_dir = False
+            if is_dir:
+                dir_count += 1
+                config.walk_queue.put(fn)
                 continue
-            _throttle_puts(config.work_queue.qsize())
-            config.work_queue.put(fn)
-            if config.progress_queue:
-                config.progress_queue.put((HIGH_PRIORITY, "accepted", fn))
+            file_count += 1
+            last_file = fn
+
+            if _is_file_processing_required(
+                fn,
+                config.already_processed,
+                config.walk_config.ignore,
+                config.walk_config.extensions,
+                config.progress_queue,
+                config.walk_config.ignore_regex,
+                extension_matcher=config.walk_config.extension_matcher,
+            ):
+                if not _mark_path_seen(fn, config.seen_paths, config.seen_lock):
+                    continue
+                config.work_queue.put(fn)
+                accepted_count += 1
+                last_accepted = fn
+
+    if config.progress_queue and (dir_count or file_count or accepted_count):
+        config.progress_queue.put(
+            (
+                LOW_PRIORITY,
+                "walk_batch",
+                dir_count,
+                file_count,
+                accepted_count,
+                last_file,
+                last_accepted,
+            )
+        )
 
 
 def _copy_file(
@@ -409,7 +430,9 @@ class CopyThread(threading.Thread):
 
         copied: Optional[bool] = True
         if not self.config.dry_run:
-            copied = _copy_file(src, dest, self.config.preserve_stat, self.progress_queue)
+            copied = _copy_file(
+                src, dest, self.config.preserve_stat, self.progress_queue
+            )
         elif self.progress_queue:
             self.progress_queue.put((LOW_PRIORITY, "copied", src, dest))
 
@@ -456,7 +479,7 @@ class CopyThread(threading.Thread):
         """
         while not self.stop_event.is_set() or not self.work.empty():
             try:
-                src, mtime, size = self.work.get(True, 0.1)
+                src, mtime, size = self.work.get(True, 0.01)
             except queue.Empty:
                 continue
 
@@ -527,10 +550,16 @@ class ResultProcessor(threading.Thread):
         self._batch_count = 0
 
     def _merge_files_for_hash(
-        self, md5: str, new_files: list[tuple[str, int, float]]
+        self,
+        md5: str,
+        new_files: list[tuple[str, int, float]],
+        already_existed: bool = True,
     ) -> tuple[list[tuple[str, int, float]], int]:
         """Merges new file entries for a hash while deduplicating by normalized path."""
-        current_files = list(self.md5_data[md5])
+        if not already_existed and isinstance(self.md5_data, CacheDict):
+            current_files = []
+        else:
+            current_files = list(self.md5_data[md5])
         index_by_norm_path = {
             os.path.normcase(os.path.abspath(f[0])): idx
             for idx, f in enumerate(current_files)
@@ -546,6 +575,16 @@ class ResultProcessor(threading.Thread):
                 added_distinct += 1
         return current_files, added_distinct
 
+    def _record_read_sources(self, new_read_sources: list[str]) -> None:
+        """Records processed file paths into manifest.read_sources."""
+        if not new_read_sources or not isinstance(self.manifest, Manifest):
+            return
+        if isinstance(self.manifest.read_sources, PersistentSet):
+            self.manifest.read_sources.update(new_read_sources)
+        else:
+            for src in new_read_sources:
+                self.manifest.read_sources.add(src)
+
     def _commit_batch(self) -> None:
         """Commits the local cache to the main manifest."""
         if not self._local_cache:
@@ -560,18 +599,19 @@ class ResultProcessor(threading.Thread):
                 )
             )
 
+        is_manifest = isinstance(self.manifest, Manifest)
+        new_read_sources: list[str] = []
+
         for md5, new_files in self._local_cache.items():
             try:
                 already_existed = md5 in self.md5_data
                 current_files, added_distinct = self._merge_files_for_hash(
-                    md5, new_files
+                    md5, new_files, already_existed=already_existed
                 )
                 self.md5_data[md5] = current_files
 
-                # Add the new file paths to read_sources as well
-                if isinstance(self.manifest, Manifest):
-                    for file_info in new_files:
-                        self.manifest.read_sources.add(file_info[0])
+                if is_manifest:
+                    new_read_sources.extend(file_info[0] for file_info in new_files)
 
                 is_collision = len(current_files) > 1 or (
                     already_existed and not current_files and added_distinct > 0
@@ -581,7 +621,7 @@ class ResultProcessor(threading.Thread):
                     is_collision = False
 
                 if is_collision:
-                    self.collisions[md5] = self.md5_data[md5]
+                    self.collisions[md5] = current_files
             except (KeyError, ValueError, TypeError) as err:
                 if self.progress_queue:
                     # In case of an error, we might have multiple files for one hash
@@ -596,6 +636,7 @@ class ResultProcessor(threading.Thread):
                             )
                         )
 
+        self._record_read_sources(new_read_sources)
         self._local_cache.clear()
         self._batch_count = 0
 
@@ -638,7 +679,7 @@ class ResultProcessor(threading.Thread):
                 continue
             src = ""
             try:
-                md5, size, mtime, src = self.results.get(True, 0.1)
+                md5, size, mtime, src = self.results.get(True, 0.01)
                 self._process_single_result(md5, size, mtime, src)
                 processed += 1
                 self.results.task_done()
@@ -735,9 +776,8 @@ class ReadThread(threading.Thread):
                 continue
             src = ""
             try:
-                src = self.work.get(True, 0.1)
+                src = self.work.get(True, 0.01)
                 try:
-                    _throttle_puts(self.results.qsize())
                     self.results.put(
                         read_file(src, hash_algo=self.walk_config.hash_algo)
                     )
@@ -803,7 +843,7 @@ class DeleteThread(threading.Thread):
         # pylint: disable=R1702
         while not self.stop_event.is_set() or not self.work.empty():
             try:
-                src = self.work.get(True, 0.1)
+                src = self.work.get(True, 0.01)
                 try:
                     if self.dry_run:
                         if self.progress_queue:
@@ -900,15 +940,13 @@ class WalkThread(threading.Thread):
                 continue
             src = None
             try:
-                src = self.walk_queue.get(True, 0.5)
+                src = self.walk_queue.get(True, 0.01)
                 try:
-                    if not os.path.exists(src):
-                        time.sleep(3)
+                    if not os.path.isdir(src):
                         if not os.path.exists(src):
                             raise RuntimeError(
                                 f"Directory disappeared during walk: {src!r}"
                             )
-                    if not os.path.isdir(src):
                         raise ValueError(f"Unexpected file in work queue: {src!r}")
                     if not _mark_path_seen(
                         src,

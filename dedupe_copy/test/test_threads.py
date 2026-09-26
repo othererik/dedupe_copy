@@ -76,6 +76,20 @@ class TestIsFileProcessingRequired(unittest.TestCase):
         self.assertEqual(item[1], "ignored")
         self.assertEqual(item[3], "*.txt")  # Should identify the specific pattern
 
+    @patch("dedupe_copy.threads.os.path.abspath")
+    def test_already_processed_fast_path_and_abspath(self, mock_abspath):
+        """Test _is_file_processing_required skips abspath when already_processed is empty."""
+        result = _is_file_processing_required("rel/file.txt", set(), None, None, None)
+        self.assertTrue(result)
+        mock_abspath.assert_not_called()
+
+        mock_abspath.return_value = "/abs/rel/file.txt"
+        result_cached = _is_file_processing_required(
+            "rel/file.txt", {"/abs/rel/file.txt"}, None, None, None
+        )
+        self.assertFalse(result_cached)
+        mock_abspath.assert_called_once_with("rel/file.txt")
+
 
 class TestDistributeWork(unittest.TestCase):
     """Test cases for the distribute_work function."""
@@ -88,9 +102,9 @@ class TestDistributeWork(unittest.TestCase):
         self.walk_queue = queue.Queue()
         self.already_processed = set()
 
-    @patch("dedupe_copy.threads.os.listdir")
+    @patch("dedupe_copy.threads.os.scandir")
     @patch("dedupe_copy.threads._check_is_ignored")
-    def test_distribute_work_ignored_directory(self, mock_check_ignored, mock_listdir):
+    def test_distribute_work_ignored_directory(self, mock_check_ignored, mock_scandir):
         """Test distribute_work returns early if directory is ignored (line 129 coverage)."""
         mock_check_ignored.return_value = True
 
@@ -109,15 +123,15 @@ class TestDistributeWork(unittest.TestCase):
 
         distribute_work(self.src, config)
 
-        # Verify os.listdir was NOT called
-        mock_listdir.assert_not_called()
+        # Verify os.scandir was NOT called
+        mock_scandir.assert_not_called()
 
-    @patch("dedupe_copy.threads.os.listdir")
+    @patch("dedupe_copy.threads.os.scandir")
     @patch("dedupe_copy.threads._check_is_ignored")
-    def test_distribute_work_listdir_oserror(self, mock_check_ignored, mock_listdir):
-        """Test distribute_work handles OSError from listdir (lines 133-136 coverage)."""
+    def test_distribute_work_listdir_oserror(self, mock_check_ignored, mock_scandir):
+        """Test distribute_work handles OSError from scandir (lines 133-136 coverage)."""
         mock_check_ignored.return_value = False
-        mock_listdir.side_effect = OSError("Access denied")
+        mock_scandir.side_effect = OSError("Access denied")
 
         # Create a mock config
         walk_config = MagicMock()
@@ -137,6 +151,32 @@ class TestDistributeWork(unittest.TestCase):
         self.assertEqual(type_, "error")
         self.assertEqual(path, self.src)
         self.assertIsInstance(error, OSError)
+
+    @patch("dedupe_copy.threads.os.scandir")
+    @patch("dedupe_copy.threads._check_is_ignored")
+    def test_distribute_work_entry_is_dir_oserror(
+        self, mock_check_ignored, mock_scandir
+    ):
+        """Test distribute_work handles OSError on entry.is_dir() (e.g. broken symlink)."""
+        mock_check_ignored.return_value = False
+        broken_entry = MagicMock()
+        broken_entry.path = "/tmp/test/broken_link"
+        broken_entry.is_dir.side_effect = OSError("Broken symlink")
+        mock_scandir.return_value.__enter__.return_value = [broken_entry]
+
+        walk_config = WalkConfig()
+        config = DistributeWorkConfig(
+            already_processed=self.already_processed,
+            walk_config=walk_config,
+            progress_queue=self.progress_queue,
+            work_queue=self.work_queue,
+            walk_queue=self.walk_queue,
+        )
+
+        distribute_work(self.src, config)
+
+        self.assertTrue(self.walk_queue.empty())
+        self.assertEqual(self.work_queue.get_nowait(), "/tmp/test/broken_link")
 
 
 class TestResultProcessor(unittest.TestCase):
@@ -523,3 +563,48 @@ class TestProgressThread(unittest.TestCase):
         progresser.join(timeout=2)
 
         self.assertFalse(progresser.is_alive())
+
+    def test_progress_thread_walk_batch_and_legacy_methods(self):
+        """Test ProgressThread handles walk_batch as well as individual dir/file/accepted events."""
+        stop_event = threading.Event()
+        work_queue = queue.Queue()
+        result_queue = queue.Queue()
+        progress_queue = queue.PriorityQueue()
+        walk_queue = queue.Queue()
+        mock_ui = MagicMock()
+        mock_ui.add_task.return_value = 1
+
+        progresser = ProgressThread(
+            work_queue,
+            result_queue,
+            progress_queue,
+            walk_queue=walk_queue,
+            stop_event=stop_event,
+            ui=mock_ui,
+        )
+        progresser.file_count_log_interval = 10
+
+        # First batch triggers initial progress report (prev_count == 0)
+        progresser.do_log_walk_batch(2, 5, 4, "/tmp/f5.txt", "/tmp/f4.txt")
+        self.assertEqual(progresser.directory_count, 2)
+        self.assertEqual(progresser.file_count, 5)
+        self.assertEqual(progresser.accepted_count, 4)
+        self.assertEqual(progresser.last_accepted, "/tmp/f4.txt")
+        mock_ui.update_task.assert_called_once()
+
+        # Second batch crosses interval boundary (5 -> 12 crosses 10)
+        mock_ui.update_task.reset_mock()
+        progresser.do_log_walk_batch(1, 7, 6, "/tmp/f12.txt", "/tmp/f11.txt")
+        self.assertEqual(progresser.directory_count, 3)
+        self.assertEqual(progresser.file_count, 12)
+        self.assertEqual(progresser.accepted_count, 10)
+        self.assertEqual(progresser.last_accepted, "/tmp/f11.txt")
+        mock_ui.update_task.assert_called_once()
+
+        # Individual legacy methods still work
+        progresser.do_log_dir("/tmp/sub")
+        progresser.do_log_accepted("/tmp/f13.txt")
+        progresser.do_log_file("/tmp/f13.txt")
+        self.assertEqual(progresser.directory_count, 4)
+        self.assertEqual(progresser.accepted_count, 11)
+        self.assertEqual(progresser.file_count, 13)

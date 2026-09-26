@@ -199,9 +199,10 @@ class SqliteBackend:
     def __getitem__(self, key: Any) -> Any:
         """Get item from the dictionary."""
         with self._lock:
-            if not self._has_db_rows and not self._write_batch:
+            if key in self._write_batch:
+                return self._load(self._dump(self._write_batch[key]))
+            if not self._has_db_rows:
                 raise KeyError(key)
-            self._commit_batch()
             cursor = self.conn.execute(
                 f"select value from {self.table} where key=?;", (self._dump(key),)
             )
@@ -221,9 +222,16 @@ class SqliteBackend:
     def __delitem__(self, key: Any) -> None:
         """Delete item from the dictionary."""
         with self._lock:
-            if not self._has_db_rows and not self._write_batch:
+            if key in self._write_batch:
+                del self._write_batch[key]
+                if self._has_db_rows:
+                    self.conn.execute(
+                        f"delete from {self.table} where key=?;", (self._dump(key),)
+                    )
+                    self._commit_needed = True
+                return
+            if not self._has_db_rows:
                 raise KeyError(key)
-            self._commit_batch()
             cursor = self.conn.execute(
                 f"delete from {self.table} where key=?;", (self._dump(key),)
             )
@@ -256,14 +264,14 @@ class SqliteBackend:
     def __contains__(self, key: Any) -> bool:
         """Check if key exists in the dictionary."""
         with self._lock:
-            if not self._has_db_rows and not self._write_batch:
-                return False
-            self._commit_batch()
-            try:
-                self._get_key_id(key)
+            if key in self._write_batch:
                 return True
-            except KeyError:
+            if not self._has_db_rows:
                 return False
+            cursor = self.conn.execute(
+                f"select 1 from {self.table} where key=? limit 1;", (self._dump(key),)
+            )
+            return cursor.fetchone() is not None
 
     @staticmethod
     def _dump(value: Any, version: int = -1) -> bytes:
@@ -288,9 +296,16 @@ class SqliteBackend:
         Raises KeyError if key is not found.
         """
         with self._lock:
-            if not self._has_db_rows and not self._write_batch:
+            if key in self._write_batch:
+                value = self._load(self._dump(self._write_batch.pop(key)))
+                if self._has_db_rows:
+                    self.conn.execute(
+                        f"delete from {self.table} where key=?;", (self._dump(key),)
+                    )
+                    self._commit_needed = True
+                return value
+            if not self._has_db_rows:
                 raise KeyError(key)
-            self._commit_batch()
             value = self[key]
             del self[key]
             return value
@@ -421,7 +436,7 @@ class SqliteBackend:
                 try:
                     self.commit(force=True)
                     self._conn.close()
-                except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                except sqlite3.OperationalError, sqlite3.ProgrammingError:
                     pass
             self._conn = None
 
@@ -640,11 +655,10 @@ class SqliteSetBackend:
                 return True
             if not self._has_db_rows:
                 return False
-            try:
-                self._get_key_id(key)
-                return True
-            except KeyError:
-                return False
+            cursor = self.conn.execute(
+                f"select 1 from {self.table} where key=? limit 1;", (self._dump(key),)
+            )
+            return cursor.fetchone() is not None
 
     def __iter__(self) -> Iterator[Any]:
         """Iterate keys."""
@@ -743,7 +757,7 @@ class SqliteSetBackend:
                 try:
                     self.commit(force=True)
                     self._conn.close()
-                except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                except sqlite3.OperationalError, sqlite3.ProgrammingError:
                     pass
             self._conn = None
 
@@ -1280,8 +1294,16 @@ class PersistentSet(collections.abc.MutableSet):
             # Only add keys that are not already in the cache.
             # This preserves the disjoint property (key in cache OR db).
             keys_to_add = [k for k in keys if k not in self._cache]
-            if keys_to_add:
-                self._db.update_batch(keys_to_add)
+            if not keys_to_add:
+                return
+            if (
+                not getattr(self._db, "_has_db_rows", True)
+                and not getattr(self._db, "_write_batch", True)
+                and len(self._cache) + len(keys_to_add) <= self.max_size
+            ):
+                self._cache.update(keys_to_add)
+                return
+            self._db.update_batch(keys_to_add)
 
     def db_file_path(self) -> str:
         """Return DB path."""

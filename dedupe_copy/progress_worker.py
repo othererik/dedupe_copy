@@ -94,6 +94,27 @@ class ProgressThread(threading.Thread):
         if self.ui:
             self.walk_task_id = self.ui.add_task("Walking filesystem...", total=None)
 
+    def _report_walk_progress(self, path: str) -> None:
+        """Emit a progress update for filesystem walk discovery."""
+        elapsed = time.time() - self.start_time
+        files_per_sec = self.file_count / elapsed if elapsed > 0 else 0
+        message = (
+            f"Discovered {self.file_count} files (dirs: {self.directory_count}), "
+            f"accepted {self.accepted_count}. Rate: {files_per_sec:.1f} files/sec\n"
+            f"Work queue has {self.work.qsize()} items. "
+            f"Progress queue has {self.progress_queue.qsize()} items. "
+            f"Walk queue has {self.walk_queue.qsize()} items.\n"
+            f"Current file: {repr(path)} (last accepted: {repr(self.last_accepted)})"
+        )
+        if self.ui and self.walk_task_id is not None:
+            self.ui.update_task(
+                "Walking filesystem...",
+                description=f"Discovered {self.file_count} files "
+                f"(dirs: {self.directory_count})",
+            )
+        else:
+            logger.info(message)
+
     def do_log_dir(self, _path: str) -> None:
         """Log directory processing."""
         self.directory_count += 1
@@ -102,24 +123,29 @@ class ProgressThread(threading.Thread):
         """Log file discovery and progress."""
         self.file_count += 1
         if self.file_count % self.file_count_log_interval == 0 or self.file_count == 1:
-            elapsed = time.time() - self.start_time
-            files_per_sec = self.file_count / elapsed if elapsed > 0 else 0
-            message = (
-                f"Discovered {self.file_count} files (dirs: {self.directory_count}), "
-                f"accepted {self.accepted_count}. Rate: {files_per_sec:.1f} files/sec\n"
-                f"Work queue has {self.work.qsize()} items. "
-                f"Progress queue has {self.progress_queue.qsize()} items. "
-                f"Walk queue has {self.walk_queue.qsize()} items.\n"
-                f"Current file: {repr(path)} (last accepted: {repr(self.last_accepted)})"
-            )
-            if self.ui and self.walk_task_id is not None:
-                self.ui.update_task(
-                    "Walking filesystem...",
-                    description=f"Discovered {self.file_count} files "
-                    f"(dirs: {self.directory_count})",
-                )
-            else:
-                logger.info(message)
+            self._report_walk_progress(path)
+
+    def do_log_walk_batch(
+        self,
+        dir_count: int,
+        file_count: int,
+        accepted_count: int,
+        last_file: Optional[str],
+        last_accepted: Optional[str],
+    ) -> None:
+        """Log a batch of directory, file, and accepted counts from a single directory scan."""
+        self.directory_count += dir_count
+        if accepted_count:
+            self.accepted_count += accepted_count
+            self.last_accepted = last_accepted
+        if file_count:
+            prev_count = self.file_count
+            self.file_count += file_count
+            interval = self.file_count_log_interval
+            if prev_count == 0 or (self.file_count // interval) > (
+                prev_count // interval
+            ):
+                self._report_walk_progress(last_file or "")
 
     def do_log_copied(self, src: str, dest: str) -> None:
         """Log successful file copy operations."""
@@ -244,7 +270,7 @@ class ProgressThread(threading.Thread):
         last_update = time.time()
         while not self.stop_event.is_set() or not self.progress_queue.empty():
             try:
-                item = self.progress_queue.get(True, 0.1)[1:]
+                item = self.progress_queue.get(True, 0.01)[1:]
                 method_name = f"do_log_{item[0]}"
                 method = getattr(self, method_name)
                 method(*item[1:])

@@ -66,8 +66,13 @@ def setup_logging(verbosity: str = "normal", use_colors: bool = True) -> None:
         use_colors: If True, enables colored output in the terminal, provided
                     the `colorama` library is installed.
     """
-    # Initialize colorama if available
+    # Initialize colorama if available, unwrapping any existing StreamWrapper
+    # to prevent exponential O(2^N) write amplification across repeated calls.
     if HAS_COLORAMA and use_colors:
+        while hasattr(sys.stdout, "_StreamWrapper__wrapped"):
+            sys.stdout = getattr(sys.stdout, "_StreamWrapper__wrapped")
+        while hasattr(sys.stderr, "_StreamWrapper__wrapped"):
+            sys.stderr = getattr(sys.stderr, "_StreamWrapper__wrapped")
         colorama_init(autoreset=True)
 
     # Map verbosity to log level
