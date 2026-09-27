@@ -19,6 +19,7 @@ A multi-threaded command-line tool for finding duplicate files and copying/restr
 - [Performance Tips](#performance-tips)
 - [Troubleshooting](#troubleshooting)
 - [Safety and Best Practices](#safety-and-best-practices)
+- [Development and Extended Testing](#development-and-extended-testing)
 
 > [!WARNING]
 > **Security Notice**: DedupeCopy uses Python's `pickle` module for serializing manifest files. **Do not load manifest files from untrusted sources**, as this could lead to arbitrary code execution. Only use manifests that you have generated yourself or obtained from a trusted source.
@@ -149,7 +150,7 @@ DedupeCopy uses a multi-threaded pipeline architecture to maximize performance w
 #### Manifest
 - **Storage**: Disk-backed dictionary (SQLite + cache layer)
 - **Format**: `hash → [(filepath, size, mtime), ...]`
-- **Cache**: In-memory LRU cache (10,000 items default)
+- **Cache**: In-memory cache (50,000 items default)
 - **Persistence**: Auto-saved during operation and on completion
 
 #### Disk Cache Dictionary
@@ -1007,6 +1008,65 @@ Binary database files (not human-readable):
 - `manifest.db.read` - List of processed file paths
 
 These enable resuming and incremental operations.
+
+## Development and Extended Testing
+
+### Installing Test and Development Dependencies
+
+You can install test and development dependencies using the `test` or `dev` extras defined in `pyproject.toml`, or via `requirements-full.txt`:
+
+```bash
+# Install test dependencies (pytest, pytest-xdist, hypothesis, coverage)
+pip install -e ".[test]"
+
+# Or install the full development environment (linters, type checkers, optional extras, and test tools)
+pip install -e ".[dev]"
+# Equivalent using requirements-full.txt:
+pip install -r requirements-full.txt
+```
+
+### Standard CI Test Suite
+
+By default, `pytest` runs the fast unit and functional test suite and automatically skips the longer property-based (`hypothesis`) and benchmark (`perf`) suites:
+
+```bash
+pytest -n auto
+```
+
+### Pre-Release Extended Testing (Hypothesis & Performance Regression)
+
+Before cutting a release or after modifying core storage, path-handling, or deduplication logic, run the extended test suites:
+
+```bash
+# Run Hypothesis property-based and stateful tests (CacheDict, PersistentSet, serialization, path rules, deletion safety)
+pytest -m hypothesis
+
+# Run performance regression and algorithmic complexity invariant tests
+pytest -m perf
+
+# Run all tests (standard + Hypothesis + performance regression)
+pytest -m ""
+```
+
+### Recording and Comparing Performance Baselines
+
+The performance regression module (`dedupe_copy.test.test_performance_regression`) can also be executed directly as a CLI tool to save a timing baseline and check for slowdowns across code changes:
+
+```bash
+# Save a baseline before making changes
+python -m dedupe_copy.test.test_performance_regression --save-baseline perf_baseline.json
+
+# Compare current performance against the saved baseline (fails if any benchmark regresses by > 25%)
+python -m dedupe_copy.test.test_performance_regression --compare-baseline perf_baseline.json --threshold 25.0
+```
+
+### Profiling with `cProfile`
+
+To capture a full execution profile for analysis with `pstats`:
+
+```bash
+python -m cProfile -o program.prof -m dedupe_copy.bin.dedupecopy_cli -p /path/to/scan -m manifest.db
+```
 
 ## Contributing
 

@@ -25,59 +25,55 @@ DEBUG = False
 
 def _serialize(value: Any, version: int = -1) -> bytes:
     """Serialize value for storage in the database."""
+    val_type = type(value)
+    if val_type is str:
+        return b"S" + value.encode("utf-8")
+    if val_type is list:
+        return b"P" + pickle.dumps(value, version)
     if value is None:
         return b"N"
 
     match value:
         case str():
-            prefix = b"S"
-            # Encode without pickling
-            content = value.encode("utf-8")
+            result = b"S" + value.encode("utf-8")
         case bool():
-            prefix = b"B"
-            content = b"1" if value else b"0"
+            result = b"B1" if value else b"B0"
         case int():
-            prefix = b"I"
-            content = str(value).encode("utf-8")
+            result = b"I" + str(value).encode("utf-8")
         case float():
-            prefix = b"F"
-            content = str(value).encode("utf-8")
+            result = b"F" + str(value).encode("utf-8")
         case _:
-            prefix = b"P"
-            content = pickle.dumps(value, version)
+            result = b"P" + pickle.dumps(value, version)
 
-    return prefix + content
+    return result
 
 
 def _deserialize(value: bytes) -> Any:
     """Inverse of _serialize."""
-    value_bytes = bytes(value)
-    if not value_bytes:
+    if not value:
         return None
+    if not isinstance(value, bytes):
+        value = bytes(value)
 
-    # Check type marker
-    type_marker = value_bytes[0:1]
-    content = value_bytes[1:]
+    marker = value[0]
+    if marker == 80:  # ord("P")
+        return pickle.loads(memoryview(value)[1:])
+    if marker == 83:  # ord("S")
+        return value[1:].decode("utf-8")
+
     result: Any = None
-
-    match type_marker:
-        case b"S":
-            result = content.decode("utf-8")
+    match value[0:1]:
         case b"I":
-            result = int(content.decode("utf-8"))
-        case b"B":
-            result = content == b"1"
+            result = int(value[1:])
+        case b"B" | b"X":
+            result = value[1:] == b"1"
         case b"F":
-            result = float(content.decode("utf-8"))
-        case b"X":
-            result = content == b"1"
+            result = float(value[1:])
         case b"N":
             result = None
-        case b"P":
-            result = pickle.loads(content)
         case _:
             # Legacy: no type marker, assume pickle
-            result = pickle.loads(value_bytes)
+            result = pickle.loads(value)
 
     return result
 
@@ -117,11 +113,12 @@ class SqliteBackend:
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
         self._has_db_rows = False
+        self._row_count: Optional[int] = 0
         self._init_conn()
         self._commit_needed = False
         self._write_batch: Dict[Any, Any] = {}
         self._write_count = 0
-        self._batch_size = 5000
+        self._batch_size = 10000
 
     def _init_conn(self) -> None:
         """Initializes a single, shared connection."""
@@ -130,7 +127,6 @@ class SqliteBackend:
                 self._conn = sqlite3.connect(
                     self._db_file, check_same_thread=False, timeout=10
                 )
-                self._conn.execute("PRAGMA recursive_triggers = ON;")
                 self._conn.execute("PRAGMA journal_mode=WAL;")
                 self._conn.execute("PRAGMA synchronous=NORMAL;")
                 self._conn.execute("PRAGMA cache_size = -64000;")
@@ -140,40 +136,16 @@ class SqliteBackend:
                     "hash INTEGER, "
                     "value BLOB);"
                 )
-                self._conn.execute(
-                    f"CREATE INDEX IF NOT EXISTS {self.table}_hash_index ON {self.table}(hash);"
-                )
-
-                # Maintain a cached count in a metadata table
-                self._conn.execute(
-                    "CREATE TABLE IF NOT EXISTS _meta_info "
-                    "(tablename TEXT PRIMARY KEY, count INTEGER);"
-                )
-                # Initialize count if missing
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO _meta_info (tablename, count) "
-                    f"SELECT '{self.table}', count(*) FROM {self.table};"
-                )
-
-                # Create triggers to keep count updated
-                self._conn.execute(
-                    f"CREATE TRIGGER IF NOT EXISTS {self.table}_ins_count "
-                    f"AFTER INSERT ON {self.table} "
-                    f"BEGIN UPDATE _meta_info SET count = count + 1 "
-                    f"WHERE tablename = '{self.table}'; END;"
-                )
-                self._conn.execute(
-                    f"CREATE TRIGGER IF NOT EXISTS {self.table}_del_count "
-                    f"AFTER DELETE ON {self.table} "
-                    f"BEGIN UPDATE _meta_info SET count = count - 1 "
-                    f"WHERE tablename = '{self.table}'; END;"
-                )
-
+                # Drop legacy count triggers and unused secondary hash index if present
+                self._conn.execute(f"DROP TRIGGER IF EXISTS {self.table}_ins_count;")
+                self._conn.execute(f"DROP TRIGGER IF EXISTS {self.table}_del_count;")
+                self._conn.execute(f"DROP INDEX IF EXISTS {self.table}_hash_index;")
                 self._conn.commit()
                 row = self._conn.execute(
-                    "SELECT count FROM _meta_info WHERE tablename = ?;", (self.table,)
+                    f"SELECT 1 FROM {self.table} LIMIT 1;"
                 ).fetchone()
-                self._has_db_rows = bool(row and row[0] > 0)
+                self._has_db_rows = row is not None
+                self._row_count = None if self._has_db_rows else 0
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -220,15 +192,24 @@ class SqliteBackend:
             if self._write_count >= self._batch_size:
                 self._commit_batch()
 
+    def _decrement_row_count(self, removed: int) -> None:
+        """Updates cached row count after deleting rows from the table."""
+        if removed > 0 and self._row_count is not None:
+            self._row_count -= removed
+            if self._row_count <= 0:
+                self._row_count = 0
+                self._has_db_rows = False
+
     def __delitem__(self, key: Any) -> None:
         """Delete item from the dictionary."""
         with self._lock:
             if key in self._write_batch:
                 del self._write_batch[key]
                 if self._has_db_rows:
-                    self.conn.execute(
+                    cursor = self.conn.execute(
                         f"delete from {self.table} where key=?;", (self._dump(key),)
                     )
+                    self._decrement_row_count(cursor.rowcount)
                     self._commit_needed = True
                 return
             if not self._has_db_rows:
@@ -238,6 +219,7 @@ class SqliteBackend:
             )
             if cursor.rowcount == 0:
                 raise KeyError(key)
+            self._decrement_row_count(cursor.rowcount)
             self._commit_needed = True
             self._write_count += 1
             if self._write_count >= self._batch_size:
@@ -258,9 +240,12 @@ class SqliteBackend:
             if not self._has_db_rows and not self._write_batch:
                 return 0
             self._commit_batch()
-            return self.conn.execute(
-                "select count from _meta_info where tablename = ?;", (self.table,)
-            ).fetchone()[0]
+            if self._row_count is None:
+                self._row_count = self.conn.execute(
+                    f"SELECT count(*) FROM {self.table};"
+                ).fetchone()[0]
+                self._has_db_rows = self._row_count > 0
+            return self._row_count
 
     def __contains__(self, key: Any) -> bool:
         """Check if key exists in the dictionary."""
@@ -286,30 +271,45 @@ class SqliteBackend:
 
     def _insert(self, key: Any, value: Any) -> None:
         """Assumes lock is held."""
+        was_empty = not self._has_db_rows
         self.conn.execute(
             f"INSERT OR REPLACE INTO {self.table} (key, hash, value) VALUES (?, ?, ?);",
             (self._dump(key), hash(key), self._dump(value)),
         )
         self._has_db_rows = True
+        self._row_count = 1 if was_empty else None
 
     def pop(self, key: Any) -> Any:
         """Remove specified key and return the corresponding value.
         Raises KeyError if key is not found.
         """
         with self._lock:
+            dumped_key = self._dump(key)
             if key in self._write_batch:
                 value = self._load(self._dump(self._write_batch.pop(key)))
                 if self._has_db_rows:
-                    self.conn.execute(
-                        f"delete from {self.table} where key=?;", (self._dump(key),)
+                    cursor = self.conn.execute(
+                        f"delete from {self.table} where key=?;", (dumped_key,)
                     )
+                    self._decrement_row_count(cursor.rowcount)
                     self._commit_needed = True
                 return value
             if not self._has_db_rows:
                 raise KeyError(key)
-            value = self[key]
-            del self[key]
-            return value
+            row = self.conn.execute(
+                f"select value from {self.table} where key=?;", (dumped_key,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(key)
+            cursor = self.conn.execute(
+                f"delete from {self.table} where key=?;", (dumped_key,)
+            )
+            self._decrement_row_count(cursor.rowcount)
+            self._commit_needed = True
+            self._write_count += 1
+            if self._write_count >= self._batch_size:
+                self.commit()
+            return self._load(row[0])
 
     def keys(self) -> Iterator[Any]:
         """Return an iterator over the keys of the dictionary."""
@@ -359,6 +359,7 @@ class SqliteBackend:
                     for key in data:
                         self._write_batch.pop(key, None)
 
+                was_empty = not self._has_db_rows
                 # Prepare data for executemany
                 batch_data = [
                     (self._dump(key), hash(key), self._dump(value))
@@ -372,6 +373,7 @@ class SqliteBackend:
                 )
                 self.conn.commit()
                 self._has_db_rows = True
+                self._row_count = len(batch_data) if was_empty else None
             except sqlite3.Error as e:
                 self.conn.rollback()
                 raise e
@@ -383,6 +385,7 @@ class SqliteBackend:
 
         with self._lock:
             try:
+                was_empty = not self._has_db_rows
                 batch_data = [
                     (self._dump(key), hash(key), self._dump(value))
                     for key, value in self._write_batch.items()
@@ -393,6 +396,7 @@ class SqliteBackend:
                 )
                 self.conn.commit()
                 self._has_db_rows = True
+                self._row_count = len(batch_data) if was_empty else None
                 self._write_batch.clear()
                 self._write_count = 0
             except sqlite3.Error as e:
@@ -429,6 +433,7 @@ class SqliteBackend:
             self.conn.execute(f"delete from {self.table};")
             self.conn.commit()
             self._has_db_rows = False
+            self._row_count = 0
 
     def close(self) -> None:
         """Closes the database connection, committing any pending changes first."""
@@ -509,11 +514,12 @@ class SqliteSetBackend:
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
         self._has_db_rows = False
+        self._row_count: Optional[int] = 0
         self._init_conn()
         self._commit_needed = False
         self._write_batch: set = set()
         self._write_count = 0
-        self._batch_size = 5000
+        self._batch_size = 10000
 
     def _init_conn(self) -> None:
         """Initializes connection and schema."""
@@ -522,7 +528,6 @@ class SqliteSetBackend:
                 self._conn = sqlite3.connect(
                     self._db_file, check_same_thread=False, timeout=10
                 )
-                self._conn.execute("PRAGMA recursive_triggers = ON;")
                 self._conn.execute("PRAGMA journal_mode=WAL;")
                 self._conn.execute("PRAGMA synchronous=NORMAL;")
                 self._conn.execute("PRAGMA cache_size = -64000;")
@@ -531,9 +536,10 @@ class SqliteSetBackend:
                     "key BLOB PRIMARY KEY, "
                     "hash INTEGER);"
                 )
-                self._conn.execute(
-                    f"CREATE INDEX IF NOT EXISTS {self.table}_hash_index ON {self.table}(hash);"
-                )
+                # Drop legacy count triggers and unused secondary hash index if present
+                self._conn.execute(f"DROP TRIGGER IF EXISTS {self.table}_ins_count;")
+                self._conn.execute(f"DROP TRIGGER IF EXISTS {self.table}_del_count;")
+                self._conn.execute(f"DROP INDEX IF EXISTS {self.table}_hash_index;")
 
                 # Check for legacy table and migrate if needed
                 try:
@@ -551,36 +557,12 @@ class SqliteSetBackend:
                 except sqlite3.Error:
                     pass
 
-                # Maintain a cached count in a metadata table
-                self._conn.execute(
-                    "CREATE TABLE IF NOT EXISTS _meta_info "
-                    "(tablename TEXT PRIMARY KEY, count INTEGER);"
-                )
-                # Initialize count if missing
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO _meta_info (tablename, count) "
-                    f"SELECT '{self.table}', count(*) FROM {self.table};"
-                )
-
-                # Create triggers to keep count updated
-                self._conn.execute(
-                    f"CREATE TRIGGER IF NOT EXISTS {self.table}_ins_count "
-                    f"AFTER INSERT ON {self.table} "
-                    f"BEGIN UPDATE _meta_info SET count = count + 1 "
-                    f"WHERE tablename = '{self.table}'; END;"
-                )
-                self._conn.execute(
-                    f"CREATE TRIGGER IF NOT EXISTS {self.table}_del_count "
-                    f"AFTER DELETE ON {self.table} "
-                    f"BEGIN UPDATE _meta_info SET count = count - 1 "
-                    f"WHERE tablename = '{self.table}'; END;"
-                )
-
                 self._conn.commit()
                 row = self._conn.execute(
-                    "SELECT count FROM _meta_info WHERE tablename = ?;", (self.table,)
+                    f"SELECT 1 FROM {self.table} LIMIT 1;"
                 ).fetchone()
-                self._has_db_rows = bool(row and row[0] > 0)
+                self._has_db_rows = row is not None
+                self._row_count = None if self._has_db_rows else 0
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -612,6 +594,14 @@ class SqliteSetBackend:
             if self._write_count >= self._batch_size:
                 self._commit_batch()
 
+    def add_batch(self, keys: Iterable[Any]) -> None:
+        """Add multiple items to the write batch, committing only when full."""
+        with self._lock:
+            self._write_batch.update(keys)
+            self._write_count = len(self._write_batch)
+            if self._write_count >= self._batch_size:
+                self._commit_batch()
+
     def remove(self, key: Any) -> None:
         """Remove item."""
         with self._lock:
@@ -620,9 +610,14 @@ class SqliteSetBackend:
             if not self._has_db_rows and not self._write_batch:
                 return
             self._commit_batch()
-            self.conn.execute(
+            cursor = self.conn.execute(
                 f"delete from {self.table} where key=?;", (self._dump(key),)
             )
+            if cursor.rowcount > 0 and self._row_count is not None:
+                self._row_count -= cursor.rowcount
+                if self._row_count <= 0:
+                    self._row_count = 0
+                    self._has_db_rows = False
             self._commit_needed = True
             self._write_count += 1
             if self._write_count >= self._batch_size:
@@ -646,6 +641,7 @@ class SqliteSetBackend:
                     batch_data,
                 )
                 self.conn.commit()
+                self._row_count = None
             except sqlite3.Error as e:
                 self.conn.rollback()
                 raise e
@@ -678,9 +674,12 @@ class SqliteSetBackend:
             if not self._has_db_rows and not self._write_batch:
                 return 0
             self._commit_batch()
-            return self.conn.execute(
-                "select count from _meta_info where tablename = ?;", (self.table,)
-            ).fetchone()[0]
+            if self._row_count is None:
+                self._row_count = self.conn.execute(
+                    f"SELECT count(*) FROM {self.table};"
+                ).fetchone()[0]
+                self._has_db_rows = self._row_count > 0
+            return self._row_count
 
     @staticmethod
     def _dump(value: Any) -> bytes:
@@ -694,19 +693,22 @@ class SqliteSetBackend:
 
     def update_batch(self, keys: Iterable[Any]) -> None:
         """Batch update."""
-        if not keys:
+        key_set = keys if isinstance(keys, set) else set(keys)
+        if not key_set:
             return
         with self._lock:
             try:
                 if self._write_batch:
-                    self._write_batch.difference_update(keys)
-                batch_data = [(self._dump(key), hash(key)) for key in keys]
+                    self._write_batch.difference_update(key_set)
+                was_empty = not self._has_db_rows
+                batch_data = [(self._dump(key), hash(key)) for key in key_set]
                 self.conn.executemany(
                     f"INSERT OR REPLACE INTO {self.table} (key, hash) VALUES (?, ?)",
                     batch_data,
                 )
                 self.conn.commit()
                 self._has_db_rows = True
+                self._row_count = len(batch_data) if was_empty else None
             except sqlite3.Error as e:
                 self.conn.rollback()
                 raise e
@@ -717,6 +719,7 @@ class SqliteSetBackend:
             return
         with self._lock:
             try:
+                was_empty = not self._has_db_rows
                 batch_data = [(self._dump(key), hash(key)) for key in self._write_batch]
                 self.conn.executemany(
                     f"INSERT OR REPLACE INTO {self.table} (key, hash) VALUES (?, ?)",
@@ -724,6 +727,7 @@ class SqliteSetBackend:
                 )
                 self.conn.commit()
                 self._has_db_rows = True
+                self._row_count = len(batch_data) if was_empty else None
                 self._write_batch.clear()
                 self._write_count = 0
             except sqlite3.Error as e:
@@ -751,6 +755,7 @@ class SqliteSetBackend:
             self.conn.execute(f"delete from {self.table};")
             self.conn.commit()
             self._has_db_rows = False
+            self._row_count = 0
 
     def close(self) -> None:
         """Close connection."""
@@ -1058,12 +1063,33 @@ class CacheDict(collections.abc.MutableMapping):
         # state for the next operation, so we commit the write.
         # self._db.commit(force=True)
 
+    def put_absent(self, key: Any, value: Any) -> None:
+        """Insert a key known to be absent from both _cache and _db."""
+        with self._lock:
+            if self._evict_lock_held:
+                self._db[key] = value
+                return
+            self._evict()
+            self._cache[key] = value
+            if self.lru and self._key_order is not None:
+                self._key_order[key] = None
+
     def get(self, key: Any, default: Any = None) -> Any:
         """Get item or default if not found"""
         with self._lock:
-            if key not in self:
+            try:
+                return CacheDict.__getitem__(self, key)
+            except KeyError:
                 return default
-            return self[key]
+
+    def setdefault(self, key: Any, default: Any = None) -> Any:
+        """Get item if present, otherwise insert key with default and return default."""
+        with self._lock:
+            try:
+                return CacheDict.__getitem__(self, key)
+            except KeyError:
+                self.put_absent(key, default)
+                return default
 
     def has_key(self, key: Any) -> bool:
         """Check if key exists in the dictionary (deprecated method)."""
@@ -1167,22 +1193,21 @@ class DefaultCacheDict(CacheDict):
         self.default_factory = default_factory
 
     def __getitem__(self, key: Any) -> Any:
-        try:
-            return super().__getitem__(key)
-        except KeyError:
-            return self.__missing__(key)
+        with self._lock:
+            try:
+                return super().__getitem__(key)
+            except KeyError:
+                if self.default_factory is None:
+                    return self.__missing__(key)
+                value = self.default_factory()
+                self.put_absent(key, value)
+                return value
 
     def __missing__(self, key: Any) -> Any:
         if self.default_factory is None:
             raise KeyError(key)
         self[key] = value = self.default_factory()
         return value
-
-    def setdefault(self, key: Any, default: Any = None) -> Any:
-        if key not in self:
-            self[key] = default
-            return default
-        return self[key]
 
     def copy(self, db_file: Optional[str] = None) -> "DefaultCacheDict":
         """Returns a dictionary as a shallow from the cache dict"""
@@ -1312,7 +1337,10 @@ class PersistentSet(collections.abc.MutableSet):
             ):
                 self._cache.update(keys_to_add)
                 return
-            self._db.update_batch(keys_to_add)
+            if hasattr(self._db, "add_batch"):
+                self._db.add_batch(keys_to_add)
+            else:
+                self._db.update_batch(keys_to_add)
 
     def db_file_path(self) -> str:
         """Return DB path."""

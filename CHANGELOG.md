@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.6] - 2026-09-27
+- **Performance (Guided by `cProfile` on 724k-file / 112k-directory workload)**:
+  - Remove per-row SQLite `AFTER INSERT`/`AFTER DELETE` count triggers (`_ins_count`, `_del_count`) and unused `{table}_hash_index` secondary index in `SqliteBackend` and `SqliteSetBackend` (and automatically drop legacy triggers/index when opening older databases), replacing them with Python-cached row counts and `O(1)` table-truncate `clear()`
+  - Buffer `PersistentSet.update()` writes via `SqliteSetBackend.add_batch()` into `_write_batch` (`_batch_size = 10,000`) instead of committing a SQLite transaction on every 1,000-file `ResultProcessor` batch
+  - Pass `rebuild_sources=False` on the final `Manifest.save()` in `run_dupe_copy` so `read_sources` is not wiped and rebuilt from scratch after `ResultProcessor` has already populated it
+  - Increase `Manifest.cache_size` and `collisions` cache `max_size` from `10,000` to `50,000` (matching `ResultProcessor.INCREMENTAL_SAVE_SIZE`) to prevent mid-window cache eviction thrashing
+  - Eliminate duplicate SQLite queries on missing and existing keys via `CacheDict._insert_known_absent()`, single-lookup `CacheDict.get()`/`setdefault()`, `DefaultCacheDict.__getitem__()`, and `ResultProcessor._upsert_hash_files()`, and fast-path `_serialize()`/`_deserialize()` for `str` and `list`
+  - Eliminate quadratic `O(K^2)` `os.path.abspath` calls when merging colliding hashes across batches in `ResultProcessor._merge_files_for_hash()`, skip `abspath` on single-file new hashes, and pre-normalize directory prefixes once per directory in `distribute_work()`
+- **Testing & Quality**:
+  - Add Hypothesis property-based and stateful test suite (`dedupe_copy/test/test_hypothesis.py`, `-m hypothesis`)
+  - Add performance regression test suite and baseline comparison CLI (`dedupe_copy/test/test_performance_regression.py`, `-m perf`)
+  - Add `[test]` and `[dev]` optional dependency extras in `pyproject.toml` and document extended testing workflows in `README.md`
+
 ## [1.2.5] - 2026-09-26
 - **Correctness & Bug Fixes**:
   - Normalize `compare_manifests` in `_validate_run_args` so string paths are validated identically to lists rather than iterated character-by-character

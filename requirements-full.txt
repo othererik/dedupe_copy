@@ -7,8 +7,8 @@ pylint
 flake8
 pytest
 pytest-xdist
+hypothesis
 mypy
-colorama
 types-colorama
 pandas-stubs
 matplotlib
