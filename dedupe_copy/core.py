@@ -720,30 +720,31 @@ def verify_manifest_fs(manifest: Manifest, ui: Optional[ConsoleUI] = None) -> bo
 
     task_id: Optional["TaskID"] = None
     if ui:
-        task_id = ui.add_task(
-            "Verifying manifest...", total=sum(len(v) for _, v in manifest.items())
+        read_sources = getattr(manifest, "read_sources", None)
+        total_to_verify = (
+            len(read_sources)
+            if read_sources is not None and len(read_sources) > 0
+            else sum(len(v) for _, v in manifest.items())
         )
-    verified_count = 0
-    error_count = 0
+        task_id = ui.add_task("Verifying manifest...", total=total_to_verify)
 
     for _, file_list in manifest.items():
         for file_path, expected_size, _ in file_list:
             try:
-                if not os.path.exists(file_path):
-                    logger.error("VERIFY FAILED: File not found: %s", file_path)
+                actual_size = os.path.getsize(file_path)
+                if actual_size != expected_size:
+                    logger.error(
+                        "VERIFY FAILED: Size mismatch for %s: expected %d, got %d",
+                        file_path,
+                        expected_size,
+                        actual_size,
+                    )
                     error_count += 1
                 else:
-                    actual_size = os.path.getsize(file_path)
-                    if actual_size != expected_size:
-                        logger.error(
-                            "VERIFY FAILED: Size mismatch for %s: expected %d, got %d",
-                            file_path,
-                            expected_size,
-                            actual_size,
-                        )
-                        error_count += 1
-                    else:
-                        verified_count += 1
+                    verified_count += 1
+            except FileNotFoundError:
+                logger.error("VERIFY FAILED: File not found: %s", file_path)
+                error_count += 1
             except OSError as e:
                 logger.error("VERIFY FAILED: Could not access %s: %s", file_path, e)
                 error_count += 1
@@ -792,9 +793,14 @@ def _validate_run_args(
             )
 
     if compare_manifests and manifest_out_path:
+        compare_list = (
+            compare_manifests
+            if isinstance(compare_manifests, list)
+            else [compare_manifests]
+        )
         if any(
             os.path.abspath(p) == os.path.abspath(manifest_out_path)
-            for p in compare_manifests
+            for p in compare_list
         ):
             raise ValueError(
                 "Compare manifest path cannot be the same as the output manifest path."

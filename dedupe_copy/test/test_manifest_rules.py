@@ -69,6 +69,23 @@ class TestManifestRules(unittest.TestCase):
 
         self.assertTrue(os.path.exists(report_path))
 
+    def test_delete_dry_run_does_not_require_manifest_out(self):
+        """Test that --delete --dry-run does not require -m/--manifest-dump-path."""
+        self.run_cli_with_args(["-p", self.temp_dir, "--delete", "--dry-run"])
+
+    def test_delete_on_copy_dry_run_does_not_require_manifest_out(self):
+        """Test that --delete-on-copy --dry-run does not require -m/--manifest-dump-path."""
+        copy_to = os.path.join(self.temp_dir, "copy_to")
+        self.run_cli_with_args(
+            ["-p", self.temp_dir, "-c", copy_to, "--delete-on-copy", "--dry-run"]
+        )
+
+    def test_version_flag(self):
+        """Test that --version exits with code 0."""
+        with self.assertRaises(SystemExit) as cm:
+            self.run_cli_with_args(["--version"])
+        self.assertEqual(cm.exception.code, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

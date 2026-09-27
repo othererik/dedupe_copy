@@ -150,30 +150,29 @@ class ProgressThread(threading.Thread):
     def do_log_copied(self, src: str, dest: str) -> None:
         """Log successful file copy operations."""
         self.copied_count += 1
-        if (
+        if self.ui:
+            if self.copy_task_id is None:
+                self.copy_task_id = self.ui.add_task("Copying files...", total=None)
+            self.ui.update_task(
+                "Copying files...",
+                advance=1,
+                description=f"Copied {self.copied_count} files",
+            )
+        elif (
             self.copied_count % self.file_count_log_interval == 0
             or self.copied_count == 1
         ):
             elapsed = time.time() - self.start_time
             copy_rate = self.copied_count / elapsed if elapsed > 0 else 0
-            if self.ui:
-                if self.copy_task_id is None:
-                    self.copy_task_id = self.ui.add_task("Copying files...", total=None)
-                self.ui.update_task(
-                    "Copying files...",
-                    advance=1,
-                    description=f"Copied {self.copied_count} files",
-                )
-            else:
-                logger.info(
-                    "Copied %d items. Skipped %d items. Rate: %.1f files/sec\n"
-                    "Last file: %r -> %r",
-                    self.copied_count,
-                    self.not_copied_count,
-                    copy_rate,
-                    src,
-                    dest,
-                )
+            logger.info(
+                "Copied %d items. Skipped %d items. Rate: %.1f files/sec\n"
+                "Last file: %r -> %r",
+                self.copied_count,
+                self.not_copied_count,
+                copy_rate,
+                src,
+                dest,
+            )
         self.last_copied = src
 
     def do_log_not_copied(self, _path: str) -> None:
@@ -187,28 +186,27 @@ class ProgressThread(threading.Thread):
     def do_log_deleted(self, _path: str) -> None:
         """Log successful file deletion."""
         self.deleted_count += 1
-        if (
+        if self.ui:
+            if self.delete_task_id is None:
+                self.delete_task_id = self.ui.add_task(
+                    "Deleting files...", total=None
+                )
+            self.ui.update_task(
+                "Deleting files...",
+                advance=1,
+                description=f"Deleted {self.deleted_count} files",
+            )
+        elif (
             self.deleted_count % self.file_count_log_interval == 0
             or self.deleted_count == 1
         ):
             elapsed = time.time() - self.start_time
             delete_rate = self.deleted_count / elapsed if elapsed > 0 else 0
-            if self.ui:
-                if self.delete_task_id is None:
-                    self.delete_task_id = self.ui.add_task(
-                        "Deleting files...", total=None
-                    )
-                self.ui.update_task(
-                    "Deleting files...",
-                    advance=1,
-                    description=f"Deleted {self.deleted_count} files",
-                )
-            else:
-                logger.info(
-                    "Deleted %d items. Rate: %.1f files/sec",
-                    self.deleted_count,
-                    delete_rate,
-                )
+            logger.info(
+                "Deleted %d items. Rate: %.1f files/sec",
+                self.deleted_count,
+                delete_rate,
+            )
 
     def do_log_not_deleted(self, _path: str) -> None:
         """Log files that were not deleted."""

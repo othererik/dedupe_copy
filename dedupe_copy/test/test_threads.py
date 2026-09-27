@@ -608,3 +608,28 @@ class TestProgressThread(unittest.TestCase):
         self.assertEqual(progresser.directory_count, 4)
         self.assertEqual(progresser.accepted_count, 11)
         self.assertEqual(progresser.file_count, 13)
+
+    def test_progress_thread_ui_advances_every_copy_and_delete(self):
+        """Test ProgressThread updates UI task on every copied and deleted file."""
+        stop_event = threading.Event()
+        mock_ui = MagicMock()
+        mock_ui.add_task.return_value = 1
+
+        progresser = ProgressThread(
+            queue.Queue(),
+            queue.Queue(),
+            queue.PriorityQueue(),
+            walk_queue=queue.Queue(),
+            stop_event=stop_event,
+            ui=mock_ui,
+        )
+        mock_ui.update_task.reset_mock()
+
+        for i in range(3):
+            progresser.do_log_copied(f"/src/{i}", f"/dst/{i}")
+        self.assertEqual(mock_ui.update_task.call_count, 3)
+
+        mock_ui.update_task.reset_mock()
+        for i in range(3):
+            progresser.do_log_deleted(f"/src/{i}")
+        self.assertEqual(mock_ui.update_task.call_count, 3)

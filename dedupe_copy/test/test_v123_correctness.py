@@ -27,6 +27,7 @@ from dedupe_copy.threads import (
     DistributeWorkConfig,
     WalkThread,
     _copy_file,
+    _files_have_same_content,
     _is_file_processing_required,
     _mark_path_seen,
     distribute_work,
@@ -735,3 +736,46 @@ s.close()
             mock_sleep.assert_not_called()
             _throttle_puts(MAX_TARGET_QUEUE_SIZE)
             mock_sleep.assert_called_once()
+
+    def test_v125_refinements(self):
+        """Test _files_have_same_content, string compare_manifests validation, and WAL staging."""
+        f_empty_1 = self._create_file("cmp/e1.bin", b"")
+        f_empty_2 = self._create_file("cmp/e2.bin", b"")
+        f_a1 = self._create_file("cmp/a1.bin", b"hello world")
+        f_a2 = self._create_file("cmp/a2.bin", b"hello world")
+        f_b = self._create_file("cmp/b.bin", b"hello worle")
+        f_c = self._create_file("cmp/c.bin", b"short")
+
+        self.assertTrue(_files_have_same_content(f_empty_1, f_empty_2))
+        self.assertTrue(_files_have_same_content(f_a1, f_a2))
+        self.assertFalse(_files_have_same_content(f_a1, f_b))
+        self.assertFalse(_files_have_same_content(f_a1, f_c))
+
+        # Passing compare_manifests as a string equal to manifest_out_path raises ValueError
+        cmp_manifest = os.path.join(self.temp_dir, "cmp.db")
+        with self.assertRaises(ValueError):
+            run_dupe_copy(
+                read_from_path=[os.path.join(self.temp_dir, "cmp")],
+                compare_manifests=cmp_manifest,
+                manifest_out_path=cmp_manifest,
+                use_ui=False,
+            )
+
+        # _stage_sqlite_file uses sqlite3 backup when a -wal file is present
+        wal_src = os.path.join(self.temp_dir, "wal_src.db")
+        conn = sqlite3.connect(wal_src)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("CREATE TABLE t (x INT);")
+        conn.execute("INSERT INTO t VALUES (42);")
+        conn.commit()
+        try:
+            wal_dst = os.path.join(self.temp_dir, "wal_dst.db")
+            _stage_sqlite_file(wal_src, wal_dst)
+            check_conn = sqlite3.connect(wal_dst)
+            try:
+                rows = check_conn.execute("SELECT x FROM t;").fetchall()
+                self.assertEqual(rows, [(42,)])
+            finally:
+                check_conn.close()
+        finally:
+            conn.close()

@@ -1,6 +1,17 @@
 # Changelog
 
 ## [1.2.5] - 2026-09-26
+- **Correctness & Bug Fixes**:
+  - Normalize `compare_manifests` in `_validate_run_args` so string paths are validated identically to lists rather than iterated character-by-character
+  - Stage multiple input manifests (`-i`) into temporary storage in `Manifest._load_manifest_list` so multi-manifest loads never touch input files on disk
+  - Advance Rich UI progress bars on every copied and deleted file in `ProgressThread` instead of only once per 1,000 files, and preserve the log level configured via `setup_logging` (`--quiet` / `--debug`) when `ConsoleUI` initializes `RichHandler`
+- **Performance**:
+  - Short-circuit destination collision content checks in `CopyThread._resolve_destination_path` via chunked byte comparison (`_files_have_same_content`) instead of computing two full-file MD5 hashes
+  - Consolidate `os.path.exists` + `os.path.getsize` into a single `os.path.getsize` stat call per file in `verify_manifest_fs` and use `len(manifest.read_sources)` for UI total calculation to avoid a second full manifest pass
+  - Fast-path `_stage_sqlite_file` with `shutil.copy2` when no SQLite `-wal` file is present on disk
+- **CLI & UX**:
+  - Add `--version` flag to `dedupecopy` CLI
+  - Allow `--dry-run` with `--delete` and `--delete-on-copy` without requiring `-m`/`--manifest-dump-path`
 - **Packaging & CI**:
   - Enable support and CI testing for Python 3.14 and 3.15
 

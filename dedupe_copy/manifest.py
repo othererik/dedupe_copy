@@ -24,7 +24,7 @@ def _stage_sqlite_file(src_path: str, dst_path: str) -> None:
     dst_dir = os.path.dirname(dst_path)
     if dst_dir:
         os.makedirs(dst_dir, exist_ok=True)
-    if os.path.getsize(src_path) == 0:
+    if os.path.getsize(src_path) == 0 or not os.path.exists(f"{src_path}-wal"):
         shutil.copy2(src_path, dst_path)
         return
     try:
@@ -392,6 +392,23 @@ class Manifest:
                 combined_read.add(key)
         return combined_md5, combined_read
 
+    @staticmethod
+    def _cleanup_staged_manifest(
+        m: Any, r: Any, work_src: str, orig_src: str
+    ) -> None:
+        """Closes temporary manifest structures and removes staged files."""
+        if hasattr(m, "close"):
+            m.close()
+        if hasattr(r, "close"):
+            r.close()
+        if work_src != orig_src:
+            for staged_file in (work_src, f"{work_src}.read"):
+                try:
+                    if os.path.exists(staged_file):
+                        os.unlink(staged_file)
+                except OSError:
+                    pass
+
     def _load_manifest_list(self, manifests: List[str]) -> None:
         if not isinstance(manifests, list):
             raise TypeError("manifests must be a list")
@@ -407,15 +424,19 @@ class Manifest:
         # Define generator to load manifests one by one
         def manifest_generator() -> Iterator[Tuple[Any, Any]]:
             for src in manifests:
-                m, r = self._load_manifest(src)
+                work_src = src
+                if self.temp_directory:
+                    work_src = os.path.join(
+                        self.temp_directory,
+                        f"working_manifest_{random.getrandbits(32)}.dict",
+                    )
+                    _stage_sqlite_file(src, work_src)
+                    _stage_sqlite_file(f"{src}.read", f"{work_src}.read")
+                m, r = self._load_manifest(work_src)
                 try:
                     yield m, r
                 finally:
-                    # Ensure the temporary manifest is closed to release file handles
-                    if hasattr(m, "close"):
-                        m.close()
-                    if hasattr(r, "close"):
-                        r.close()
+                    self._cleanup_staged_manifest(m, r, work_src, src)
 
         # Combine using the generator
         self.md5_data, self.read_sources = self._combine_manifests(
