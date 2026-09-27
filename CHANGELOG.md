@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.2.5] - 2026-09-26
+- **Packaging & CI**:
+  - Enable support and CI testing for Python 3.14 and 3.15
+
 ## [1.2.4] - 2026-09-26
 - **Performance**:
   - Eliminate SQLite lock and query contention during directory walking by snapshotting `manifest.read_sources` into an in-memory `set` prior to launching `WalkThread` workers and fast-pathing empty sets in `_is_file_processing_required`

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "DedupeCopy"
-version = "1.2.4"
+version = "1.2.5"
 description = "Find duplicates / copy and restructure file layout command-line tool"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -35,6 +35,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
     "Topic :: Utilities",
