@@ -5,6 +5,7 @@ import logging
 import sys
 from typing import Any, Dict
 
+from dedupe_copy import __version__
 from dedupe_copy.utils import clean_extensions
 from dedupe_copy.core import run_dupe_copy
 from dedupe_copy.path_rules import PATH_RULES
@@ -59,6 +60,11 @@ def _create_parser() -> argparse.ArgumentParser:
         description=DESCRIPTION,
         epilog=EPILOGUE,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"DedupeCopy {__version__}",
     )
     walk_group = parser.add_mutually_exclusive_group(required=True)
     walk_group.add_argument(
@@ -367,7 +373,7 @@ def run_cli() -> int:
     if args.delete_on_copy and not args.copy_path:
         parser.error("--delete-on-copy requires --copy-path.")
 
-    if (args.delete or args.delete_on_copy) and not args.manifest_out:
+    if (args.delete or args.delete_on_copy) and not args.manifest_out and not args.dry_run:
         parser.error(
             "Operations that modify the manifest (--delete, --delete-on-copy) "
             "require -m/--manifest-dump-path."

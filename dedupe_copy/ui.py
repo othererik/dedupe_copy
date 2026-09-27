@@ -50,8 +50,14 @@ class ConsoleUI:
         for handler in root_logger.handlers[:]:
             root_logger.removeHandler(handler)
 
-        # Also clear dedupe_copy specific logger to ensure we use valid handlers
+        # Also clear dedupe_copy specific logger to ensure we use valid handlers,
+        # while preserving any explicitly configured log level (e.g. --quiet / --debug).
         dedupe_logger = logging.getLogger("dedupe_copy")
+        configured_level = (
+            dedupe_logger.level
+            if dedupe_logger.level != logging.NOTSET
+            else logging.INFO
+        )
         for handler in dedupe_logger.handlers[:]:
             dedupe_logger.removeHandler(handler)
         dedupe_logger.propagate = True
@@ -59,8 +65,9 @@ class ConsoleUI:
         # Add RichHandler
         handler = RichHandler(console=self.console, rich_tracebacks=True, markup=True)
         handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
+        handler.setLevel(configured_level)
         root_logger.addHandler(handler)
-        root_logger.setLevel(logging.INFO)
+        root_logger.setLevel(configured_level)
 
     def start(self) -> None:
         """Start the progress display."""

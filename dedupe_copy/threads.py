@@ -29,7 +29,6 @@ from .disk_cache_dict import CacheDict, PersistentSet
 from .manifest import Manifest
 from .path_rules import strip_read_path_prefix
 from .utils import (
-    hash_file,
     lower_extension,
     match_extension,
     read_file,
@@ -226,6 +225,25 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
         )
 
 
+def _files_have_same_content(src: str, dest: str) -> bool:
+    """Returns True if src and dest exist, have the same size, and identical content."""
+    st_src = os.stat(src)
+    st_dest = os.stat(dest)
+    if st_src.st_size != st_dest.st_size:
+        return False
+    if st_src.st_size == 0:
+        return True
+    chunk_size = 65536
+    with open(src, "rb") as f1, open(dest, "rb") as f2:
+        while True:
+            b1 = f1.read(chunk_size)
+            b2 = f2.read(chunk_size)
+            if b1 != b2:
+                return False
+            if not b1:
+                return True
+
+
 def _copy_file(
     src: str,
     dest: str,
@@ -370,11 +388,7 @@ class CopyThread(threading.Thread):
                 # Destination already exists on disk from prior state.
                 # Check if it already has identical content to src (e.g. resumed manifest run).
                 try:
-                    same_content = (
-                        os.path.exists(src)
-                        and os.path.getsize(dest) == os.path.getsize(src)
-                        and hash_file(dest) == hash_file(src)
-                    )
+                    same_content = _files_have_same_content(src, dest)
                 except OSError:
                     same_content = False
                 if not same_content:

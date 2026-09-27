@@ -10,6 +10,7 @@ from dedupe_copy.logging_config import (
     get_logger,
     HAS_COLORAMA,
 )
+from dedupe_copy.ui import ConsoleUI
 
 
 class TestLoggingConfig(unittest.TestCase):
@@ -73,6 +74,16 @@ class TestLoggingConfig(unittest.TestCase):
         logger_name = "my_test_logger"
         logger = get_logger(logger_name)
         self.assertEqual(logger.name, logger_name)
+
+    def test_console_ui_preserves_configured_log_level(self):
+        """Test that ConsoleUI preserves the log level set by setup_logging."""
+        setup_logging(verbosity="quiet", use_colors=False)
+        ui = ConsoleUI()
+        try:
+            self.assertEqual(logging.getLogger().level, logging.WARNING)
+        finally:
+            ui.stop()
+            setup_logging(verbosity="normal", use_colors=False)
 
 
 class TestColoredFormatter(unittest.TestCase):
