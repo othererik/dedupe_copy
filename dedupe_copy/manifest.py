@@ -55,7 +55,7 @@ class Manifest:
         save_event: An optional event to signal save operations.
     """
 
-    cache_size = 10000
+    cache_size = 50000
 
     def __init__(
         self,

@@ -3,6 +3,7 @@ logs/
 perflog.csv
 manifest
 manifest.db
+*.prof
 
 
 # Byte-compiled / optimized / DLL files

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "DedupeCopy"
-version = "1.2.5"
+version = "1.2.6"
 description = "Find duplicates / copy and restructure file layout command-line tool"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -50,6 +50,27 @@ dependencies = [
 color = ["colorama>=0.4.0"]
 fast_hash = ["xxhash>=3.4.1"]
 plot = ["pandas", "matplotlib"]
+test = [
+    "pytest",
+    "pytest-xdist",
+    "hypothesis>=6.0.0",
+    "coverage",
+]
+dev = [
+    "colorama>=0.4.0",
+    "xxhash>=3.4.1",
+    "pandas",
+    "matplotlib",
+    "pytest",
+    "pytest-xdist",
+    "hypothesis>=6.0.0",
+    "coverage",
+    "pylint",
+    "flake8",
+    "mypy",
+    "types-colorama",
+    "pandas-stubs",
+]
 
 [project.urls]
 Homepage = "https://pypi.python.org/pypi/DedupeCopy/"
@@ -62,14 +83,32 @@ manifest_explorer = "dedupe_copy.bin.manifest_explorer_cli:main"
 [tool.setuptools]
 packages = ["dedupe_copy", "dedupe_copy.bin", "dedupe_copy.test"]
 
+[tool.pytest.ini_options]
+addopts = "-m 'not hypothesis and not perf'"
+markers = [
+    "hypothesis: property-based tests using Hypothesis (run before release with pytest -m hypothesis)",
+    "perf: performance regression benchmarks (run before release with pytest -m perf)",
+]
+
 [tool.coverage.run]
 relative_files = true
-
-[tool.coverage.report]
 omit = [
+    "dedupe_copy/test/conftest.py",
     "dedupe_copy/test/record_disk_cache_dict_performance.py",
     "dedupe_copy/test/record_manifest_save_performance.py",
     "dedupe_copy/test/benchmark_manifest_save.py",
+    "dedupe_copy/test/test_hypothesis.py",
+    "dedupe_copy/test/test_performance_regression.py",
+]
+
+[tool.coverage.report]
+omit = [
+    "dedupe_copy/test/conftest.py",
+    "dedupe_copy/test/record_disk_cache_dict_performance.py",
+    "dedupe_copy/test/record_manifest_save_performance.py",
+    "dedupe_copy/test/benchmark_manifest_save.py",
+    "dedupe_copy/test/test_hypothesis.py",
+    "dedupe_copy/test/test_performance_regression.py",
 ]
 
 [tool.pylint."MESSAGES CONTROL"]

@@ -1,5 +1,7 @@
 """Thread workers for walking, hashing, copying, and progress reporting"""
 
+# pylint: disable=too-many-lines
+
 import fnmatch
 import logging
 import os
@@ -133,11 +135,16 @@ def _mark_path_seen(
     path: str,
     seen_paths: Optional[set],
     seen_lock: Optional[threading.Lock],
+    norm_path: Optional[str] = None,
 ) -> bool:
     """Returns True if path was not previously seen (and records it), False otherwise."""
     if seen_paths is None:
         return True
-    norm_p = os.path.normcase(os.path.abspath(path))
+    norm_p = (
+        norm_path
+        if norm_path is not None
+        else os.path.normcase(os.path.abspath(path))
+    )
     if seen_lock is not None:
         with seen_lock:
             if norm_p in seen_paths:
@@ -181,6 +188,12 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
     accepted_count = 0
     last_file: Optional[str] = None
     last_accepted: Optional[str] = None
+    norm_src_prefix: Optional[str] = None
+    if config.seen_paths is not None:
+        norm_src = os.path.normcase(os.path.abspath(src))
+        norm_src_prefix = (
+            norm_src if norm_src.endswith(os.sep) else norm_src + os.sep
+        )
 
     with scandir_it as entries:
         for entry in entries:
@@ -205,7 +218,12 @@ def distribute_work(src: str, config: DistributeWorkConfig) -> None:
                 config.walk_config.ignore_regex,
                 extension_matcher=config.walk_config.extension_matcher,
             ):
-                if not _mark_path_seen(fn, config.seen_paths, config.seen_lock):
+                norm_fn: Optional[str] = None
+                if norm_src_prefix is not None and isinstance(entry.name, str):
+                    norm_fn = os.path.normcase(norm_src_prefix + entry.name)
+                if not _mark_path_seen(
+                    fn, config.seen_paths, config.seen_lock, norm_path=norm_fn
+                ):
                     continue
                 config.work_queue.put(fn)
                 accepted_count += 1
@@ -557,6 +575,7 @@ class ResultProcessor(threading.Thread):
         self.save_event = save_event
         self.daemon = True
         self._local_cache: dict[str, list[tuple[str, int, float]]] = {}
+        self._norm_path_index: dict[str, dict[str, int]] = {}
         self._batch_count = 0
 
     def _merge_files_for_hash(
@@ -564,16 +583,27 @@ class ResultProcessor(threading.Thread):
         md5: str,
         new_files: list[tuple[str, int, float]],
         already_existed: bool = True,
+        existing_files: Optional[list[tuple[str, int, float]]] = None,
     ) -> tuple[list[tuple[str, int, float]], int]:
         """Merges new file entries for a hash while deduplicating by normalized path."""
-        if not already_existed and isinstance(self.md5_data, CacheDict):
+        if existing_files is not None:
+            current_files = list(existing_files)
+        elif not already_existed and isinstance(self.md5_data, CacheDict):
             current_files = []
         else:
             current_files = list(self.md5_data[md5])
-        index_by_norm_path = {
-            os.path.normcase(os.path.abspath(f[0])): idx
-            for idx, f in enumerate(current_files)
-        }
+
+        if not current_files and len(new_files) == 1:
+            return list(new_files), 1
+
+        index_by_norm_path = self._norm_path_index.get(md5)
+        if index_by_norm_path is None or len(index_by_norm_path) != len(current_files):
+            index_by_norm_path = {
+                os.path.normcase(os.path.abspath(f[0])): idx
+                for idx, f in enumerate(current_files)
+            }
+            self._norm_path_index[md5] = index_by_norm_path
+
         added_distinct = 0
         for file_info in new_files:
             norm_p = os.path.normcase(os.path.abspath(file_info[0]))
@@ -595,6 +625,32 @@ class ResultProcessor(threading.Thread):
             for src in new_read_sources:
                 self.manifest.read_sources.add(src)
 
+    def _upsert_hash_files(
+        self, md5: str, new_files: list[tuple[str, int, float]]
+    ) -> tuple[list[tuple[str, int, float]], int, bool]:
+        """Looks up, merges, and stores file entries for a hash."""
+        if isinstance(self.md5_data, CacheDict):
+            existing_files = self.md5_data.get(md5)
+            already_existed = existing_files is not None
+            current_files, added_distinct = self._merge_files_for_hash(
+                md5,
+                new_files,
+                already_existed=already_existed,
+                existing_files=existing_files if already_existed else [],
+            )
+            if already_existed:
+                self.md5_data[md5] = current_files
+            else:
+                self.md5_data.put_absent(md5, current_files)
+            return current_files, added_distinct, already_existed
+
+        already_existed = md5 in self.md5_data
+        current_files, added_distinct = self._merge_files_for_hash(
+            md5, new_files, already_existed=already_existed
+        )
+        self.md5_data[md5] = current_files
+        return current_files, added_distinct, already_existed
+
     def _commit_batch(self) -> None:
         """Commits the local cache to the main manifest."""
         if not self._local_cache:
@@ -614,11 +670,9 @@ class ResultProcessor(threading.Thread):
 
         for md5, new_files in self._local_cache.items():
             try:
-                already_existed = md5 in self.md5_data
-                current_files, added_distinct = self._merge_files_for_hash(
-                    md5, new_files, already_existed=already_existed
+                current_files, added_distinct, already_existed = (
+                    self._upsert_hash_files(md5, new_files)
                 )
-                self.md5_data[md5] = current_files
 
                 if is_manifest:
                     new_read_sources.extend(file_info[0] for file_info in new_files)

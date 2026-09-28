@@ -1255,7 +1255,7 @@ def run_dupe_copy(
             )
 
         collisions_file = os.path.join(temp_directory, "collisions.db")
-        collisions = DefaultCacheDict(list, db_file=collisions_file, max_size=10000)
+        collisions = DefaultCacheDict(list, db_file=collisions_file, max_size=50000)
         walk_config = WalkConfig(
             extensions=extensions,
             ignore=ignored_patterns,
@@ -1321,7 +1321,9 @@ def run_dupe_copy(
             progress_queue.put(
                 (HIGH_PRIORITY, "message", "Saving complete manifest from search")
             )
-            all_data.save(path=manifest_out_path, no_walk=no_walk)
+            all_data.save(
+                path=manifest_out_path, no_walk=no_walk, rebuild_sources=False
+            )
         all_stop.set()
         while progress_thread.is_alive():
             progress_thread.join(5)
