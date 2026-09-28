@@ -1078,6 +1078,26 @@ class CacheDict(collections.abc.MutableMapping):
                 self.put_absent(key, default)
                 return default
 
+    _POP_DEFAULT_MARKER = object()
+
+    def pop(self, key: Any, default: Any = _POP_DEFAULT_MARKER) -> Any:
+        """Remove specified key and return the corresponding value."""
+        with self._lock:
+            if key in self._cache:
+                value = self._cache.pop(key)
+                if self.lru and self._key_order is not None:
+                    self._key_order.pop(key, None)
+                return value
+            try:
+                value = self._db.pop(key)
+                if self.lru and self._key_order is not None:
+                    self._key_order.pop(key, None)
+                return value
+            except KeyError:
+                if default is self._POP_DEFAULT_MARKER:
+                    raise
+                return default
+
     def has_key(self, key: Any) -> bool:
         """Check if key exists in the dictionary (deprecated method)."""
         return key in self
@@ -1311,7 +1331,7 @@ class PersistentSet(collections.abc.MutableSet):
         with self._lock:
             # Only add keys that are not already in the cache.
             # This preserves the disjoint property (key in cache OR db).
-            keys_to_add = [k for k in keys if k not in self._cache]
+            keys_to_add = {k for k in keys if k not in self._cache}
             if not keys_to_add:
                 return
             if (

@@ -375,21 +375,30 @@ class Manifest:
 
         for m, r in manifests:
             for key, files in m.items():
-                current_files = combined_md5[key]
-                # Use a set for faster lookups
-                existing_files = {tuple(f) for f in current_files}
-                new_files_added = False
+                current_files = combined_md5.get(key)
+                if current_files is None:
+                    combined_md5.put_absent(key, list(files))
+                    continue
+                index_by_norm_path = {
+                    os.path.normcase(os.path.abspath(f[0])): idx
+                    for idx, f in enumerate(current_files)
+                }
+                changed = False
                 for info in files:
-                    info_tuple = tuple(info)
-                    if info_tuple not in existing_files:
+                    norm_p = os.path.normcase(os.path.abspath(info[0]))
+                    if norm_p in index_by_norm_path:
+                        idx = index_by_norm_path[norm_p]
+                        if current_files[idx] != info:
+                            current_files[idx] = info
+                            changed = True
+                    else:
+                        index_by_norm_path[norm_p] = len(current_files)
                         current_files.append(info)
-                        existing_files.add(info_tuple)
-                        new_files_added = True
+                        changed = True
 
-                if new_files_added:
+                if changed:
                     combined_md5[key] = current_files
-            for key in r:
-                combined_read.add(key)
+            combined_read.update(r)
         return combined_md5, combined_read
 
     @staticmethod

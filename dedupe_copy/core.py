@@ -36,7 +36,7 @@ from .threads import (
     WalkThread,
 )
 from .ui import ConsoleUI
-from .utils import ensure_logging_configured, lower_extension
+from .utils import ensure_logging_configured, lower_extension, match_extension
 
 logger = logging.getLogger(__name__)
 
@@ -404,6 +404,22 @@ def _run_delete_only_workers(
     return _drain_queue(deleted_dupes_queue)
 
 
+def _is_copy_candidate_allowed(
+    path: str,
+    ignore_regex: Optional[re.Pattern],
+    copy_job: "CopyJob",
+) -> bool:
+    """Returns True if path passes ignore and extension filters for a copy job."""
+    if ignore_regex and ignore_regex.match(os.path.normcase(path)):
+        return False
+    ext_matcher = copy_job.copy_config.extension_matcher
+    if ext_matcher is not None:
+        return bool(ext_matcher.match(path))
+    if copy_job.copy_config.extensions:
+        return match_extension(copy_job.copy_config.extensions, path)
+    return True
+
+
 def _classify_files_for_copy(
     all_data: Any,
     hashes_to_skip: set,
@@ -414,17 +430,22 @@ def _classify_files_for_copy(
 ) -> List[Tuple[str, Any, int]]:
     """Partitions files from all_data into files_to_copy and delete_only_queue."""
     files_to_copy: List[Tuple[str, Any, int]] = []
+    seen_physical_paths: set[str] = set()
     for md5, path, mtime, size in info_parser(all_data):
-        if md5 not in hashes_to_skip:
-            action_required = not (
-                ignore_regex and ignore_regex.match(os.path.normcase(path))
-            )
-            if action_required:
-                files_to_copy.append((path, mtime, size))
-                if not (size == 0 and not copy_job.dedupe_empty):
-                    hashes_to_skip.add(md5)
-            elif progress_queue:
+        norm_p = os.path.normcase(os.path.abspath(path))
+        if norm_p in seen_physical_paths:
+            continue
+        seen_physical_paths.add(norm_p)
+
+        if not _is_copy_candidate_allowed(path, ignore_regex, copy_job):
+            if progress_queue:
                 progress_queue.put((LOW_PRIORITY, "not_copied", path))
+            continue
+
+        if md5 not in hashes_to_skip:
+            files_to_copy.append((path, mtime, size))
+            if not (size == 0 and not copy_job.dedupe_empty):
+                hashes_to_skip.add(md5)
         elif copy_job.delete_on_copy and delete_only_queue is not None:
             delete_only_queue.put(path)
             if progress_queue:
