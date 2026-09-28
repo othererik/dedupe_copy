@@ -1038,7 +1038,8 @@ pytest -n auto
 Before cutting a release or after modifying core storage, path-handling, or deduplication logic, run the extended test suites:
 
 ```bash
-# Run Hypothesis property-based and stateful tests (CacheDict, PersistentSet, serialization, path rules, deletion safety)
+# Run Hypothesis property-based and stateful tests (CacheDict, PersistentSet, serialization,
+# path rules, nested filesystem structures, and multithreaded Walk/Read/Result/Copy/Delete pipelines)
 pytest -m hypothesis
 
 # Run performance regression and algorithmic complexity invariant tests

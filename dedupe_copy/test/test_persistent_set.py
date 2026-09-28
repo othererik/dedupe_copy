@@ -93,12 +93,29 @@ class TestPersistentSet(unittest.TestCase):
         new_pset.close()
 
     def test_update(self):
-        """Test batch update."""
+        """Test batch update across cache-only fast path and DB overflow."""
+        # 1. Cache-only fast path (within max_size=10)
+        small_items = [f"key_{i}" for i in range(5)]
+        self.pset.update(small_items)
+        self.assertEqual(len(self.pset), 5)
+
+        # 2. No-op update when all items are already cached
+        self.pset.update(small_items)
+        self.assertEqual(len(self.pset), 5)
+
+        # 3. Overflow update delegating to SqliteSetBackend.add_batch
         items = [f"key_{i}" for i in range(20)]
         self.pset.update(items)
         self.assertEqual(len(self.pset), 20)
         for item in items:
             self.assertIn(item, self.pset)
+
+        # 4. Trigger auto-commit in add_batch when batch size is reached
+        # pylint: disable=protected-access
+        self.pset._db._batch_size = 5
+        more_items = [f"extra_{i}" for i in range(6)]
+        self.pset.update(more_items)
+        self.assertEqual(len(self.pset), 26)
 
     def test_migration(self):
         """Test migration from SqliteBackend (CacheDict) table."""

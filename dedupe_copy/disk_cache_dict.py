@@ -34,8 +34,6 @@ def _serialize(value: Any, version: int = -1) -> bytes:
         return b"N"
 
     match value:
-        case str():
-            result = b"S" + value.encode("utf-8")
         case bool():
             result = b"B1" if value else b"B0"
         case int():
@@ -192,25 +190,18 @@ class SqliteBackend:
             if self._write_count >= self._batch_size:
                 self._commit_batch()
 
-    def _decrement_row_count(self, removed: int) -> None:
-        """Updates cached row count after deleting rows from the table."""
-        if removed > 0 and self._row_count is not None:
-            self._row_count -= removed
-            if self._row_count <= 0:
-                self._row_count = 0
-                self._has_db_rows = False
-
     def __delitem__(self, key: Any) -> None:
         """Delete item from the dictionary."""
         with self._lock:
             if key in self._write_batch:
                 del self._write_batch[key]
-                if self._has_db_rows:
-                    cursor = self.conn.execute(
-                        f"delete from {self.table} where key=?;", (self._dump(key),)
-                    )
-                    self._decrement_row_count(cursor.rowcount)
-                    self._commit_needed = True
+                if not self._has_db_rows:
+                    return
+                self.conn.execute(
+                    f"delete from {self.table} where key=?;", (self._dump(key),)
+                )
+                self._row_count = None
+                self._commit_needed = True
                 return
             if not self._has_db_rows:
                 raise KeyError(key)
@@ -219,7 +210,7 @@ class SqliteBackend:
             )
             if cursor.rowcount == 0:
                 raise KeyError(key)
-            self._decrement_row_count(cursor.rowcount)
+            self._row_count = None
             self._commit_needed = True
             self._write_count += 1
             if self._write_count >= self._batch_size:
@@ -288,10 +279,10 @@ class SqliteBackend:
             if key in self._write_batch:
                 value = self._load(self._dump(self._write_batch.pop(key)))
                 if self._has_db_rows:
-                    cursor = self.conn.execute(
+                    self.conn.execute(
                         f"delete from {self.table} where key=?;", (dumped_key,)
                     )
-                    self._decrement_row_count(cursor.rowcount)
+                    self._row_count = None
                     self._commit_needed = True
                 return value
             if not self._has_db_rows:
@@ -301,10 +292,10 @@ class SqliteBackend:
             ).fetchone()
             if row is None:
                 raise KeyError(key)
-            cursor = self.conn.execute(
+            self.conn.execute(
                 f"delete from {self.table} where key=?;", (dumped_key,)
             )
-            self._decrement_row_count(cursor.rowcount)
+            self._row_count = None
             self._commit_needed = True
             self._write_count += 1
             if self._write_count >= self._batch_size:
@@ -610,14 +601,10 @@ class SqliteSetBackend:
             if not self._has_db_rows and not self._write_batch:
                 return
             self._commit_batch()
-            cursor = self.conn.execute(
+            self.conn.execute(
                 f"delete from {self.table} where key=?;", (self._dump(key),)
             )
-            if cursor.rowcount > 0 and self._row_count is not None:
-                self._row_count -= cursor.rowcount
-                if self._row_count <= 0:
-                    self._row_count = 0
-                    self._has_db_rows = False
+            self._row_count = None
             self._commit_needed = True
             self._write_count += 1
             if self._write_count >= self._batch_size:
@@ -1197,16 +1184,13 @@ class DefaultCacheDict(CacheDict):
             try:
                 return super().__getitem__(key)
             except KeyError:
-                if self.default_factory is None:
-                    return self.__missing__(key)
-                value = self.default_factory()
-                self.put_absent(key, value)
-                return value
+                return self.__missing__(key)
 
     def __missing__(self, key: Any) -> Any:
         if self.default_factory is None:
             raise KeyError(key)
-        self[key] = value = self.default_factory()
+        value = self.default_factory()
+        self.put_absent(key, value)
         return value
 
     def copy(self, db_file: Optional[str] = None) -> "DefaultCacheDict":

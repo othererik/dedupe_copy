@@ -9,9 +9,9 @@
   - Eliminate duplicate SQLite queries on missing and existing keys via `CacheDict._insert_known_absent()`, single-lookup `CacheDict.get()`/`setdefault()`, `DefaultCacheDict.__getitem__()`, and `ResultProcessor._upsert_hash_files()`, and fast-path `_serialize()`/`_deserialize()` for `str` and `list`
   - Eliminate quadratic `O(K^2)` `os.path.abspath` calls when merging colliding hashes across batches in `ResultProcessor._merge_files_for_hash()`, skip `abspath` on single-file new hashes, and pre-normalize directory prefixes once per directory in `distribute_work()`
 - **Testing & Quality**:
-  - Add Hypothesis property-based and stateful test suite (`dedupe_copy/test/test_hypothesis.py`, `-m hypothesis`)
+  - Add Hypothesis property-based and stateful test suite (`dedupe_copy/test/test_hypothesis.py`, `-m hypothesis`) covering `CacheDict`/`PersistentSet` state machines, serialization round-trips, path rule composition, nested filesystem structures, and multithreaded `WalkThread`/`ReadThread`/`ResultProcessor`/`CopyThread`/`DeleteThread` concurrency invariants
   - Add performance regression test suite and baseline comparison CLI (`dedupe_copy/test/test_performance_regression.py`, `-m perf`)
-  - Add `[test]` and `[dev]` optional dependency extras in `pyproject.toml` and document extended testing workflows in `README.md`
+  - Add `dedupe_copy/test/conftest.py` and `[test]`/`[dev]` optional dependency extras in `pyproject.toml`, and document extended testing workflows in `README.md`
 
 ## [1.2.5] - 2026-09-26
 - **Correctness & Bug Fixes**:
