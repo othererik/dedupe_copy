@@ -12,10 +12,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from dedupe_copy.bin.dedupecopy_cli import run_cli
-from dedupe_copy.config import CopyConfig, DeleteJob, WalkConfig
-from dedupe_copy.core import delete_files, run_dupe_copy
+from dedupe_copy.config import CopyConfig, CopyJob, DeleteJob, WalkConfig
+from dedupe_copy.core import _classify_files_for_copy, delete_files, run_dupe_copy
 from dedupe_copy.disk_cache_dict import (
     CacheDict,
+    DefaultCacheDict,
     PersistentSet,
     SqliteBackend,
     SqliteSetBackend,
@@ -779,3 +780,102 @@ s.close()
                 check_conn.close()
         finally:
             conn.close()
+
+
+class TestV126Correctness(unittest.TestCase):
+    """Tests for v1.2.6 correctness fixes uncovered via Hypothesis testing."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.mkdtemp(prefix="dedupe_v126_test_")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_v126_correctness(self) -> None:
+        """Test DefaultCacheDict.pop, _combine_manifests dedup, and _classify_files_for_copy."""
+        # 1. DefaultCacheDict.pop must not invoke default_factory on missing keys
+        dcd = DefaultCacheDict(
+            list,
+            max_size=2,
+            lru=True,
+            db_file=os.path.join(self.temp_dir, "dcd_pop.db"),
+        )
+        try:
+            dcd["k1"] = [1]
+            dcd["k2"] = [2]
+            dcd["k3"] = [3]  # Evicts k1 to DB
+            self.assertIsNone(dcd.pop("missing", None))
+            with self.assertRaises(KeyError):
+                dcd.pop("missing")
+            # Pop cached key and DB-evicted key
+            self.assertEqual(dcd.pop("k3"), [3])
+            self.assertEqual(dcd.pop("k1"), [1])
+        finally:
+            dcd.close()
+
+        # 2. Manifest._combine_manifests updates existing physical path when mtime changes
+        m1_path = os.path.join(self.temp_dir, "comb_1.db")
+        m2_path = os.path.join(self.temp_dir, "comb_2.db")
+        m1 = Manifest(None, save_path=m1_path, temp_directory=self.temp_dir)
+        m2 = Manifest(None, save_path=m2_path, temp_directory=self.temp_dir)
+        shared_p = os.path.join(self.temp_dir, "shared.jpg")
+        try:
+            m1.md5_data["h_shared"] = [(shared_p, 100, 1000.0)]
+            m1.read_sources.add(shared_p)
+            m2.md5_data["h_shared"] = [(shared_p, 100, 2000.0)]
+            m2.read_sources.add(shared_p)
+            m1.save(rebuild_sources=False)
+            m2.save(rebuild_sources=False)
+        finally:
+            m1.close()
+            m2.close()
+
+        combined = Manifest(
+            [m1_path, m2_path],
+            save_path=os.path.join(self.temp_dir, "comb_out.db"),
+            temp_directory=self.temp_dir,
+        )
+        try:
+            self.assertEqual(len(combined.md5_data["h_shared"]), 1)
+            self.assertEqual(combined.md5_data["h_shared"][0][2], 2000.0)
+        finally:
+            combined.close()
+
+        # 3. _classify_files_for_copy respects ignore, extensions, and duplicate physical paths
+        all_data = {
+            "h_dup": [
+                ("/src/a.jpg", 50, 1700000000.0),
+                ("/src/./a.jpg", 50, 1700000000.0),
+                ("/src/ignored/b.jpg", 50, 1700000000.0),
+                ("/src/c.txt", 50, 1700000000.0),
+            ]
+        }
+        copy_cfg = CopyConfig(
+            target_path="/dest",
+            read_paths=["/src"],
+            extensions=[".jpg"],
+            delete_on_copy=True,
+        )
+        copy_job = CopyJob(
+            copy_config=copy_cfg,
+            ignore=["*ignored*"],
+            delete_on_copy=True,
+        )
+        ignore_rx = WalkConfig(ignore=["*ignored*"]).ignore_regex
+        del_q: "queue.Queue[str]" = queue.Queue()
+        pq: "queue.PriorityQueue" = queue.PriorityQueue()
+
+        to_copy = _classify_files_for_copy(
+            all_data, set(), ignore_rx, copy_job, del_q, pq
+        )
+        self.assertEqual(len(to_copy), 1)
+        self.assertEqual(to_copy[0][0], "/src/a.jpg")
+        self.assertTrue(del_q.empty())
+
+        # Also test fallback when extension_matcher is None
+        copy_cfg.extension_matcher = None  # type: ignore[assignment]
+        to_copy_fallback = _classify_files_for_copy(
+            all_data, set(), ignore_rx, copy_job, del_q, pq
+        )
+        self.assertEqual(len(to_copy_fallback), 1)
+        self.assertTrue(del_q.empty())

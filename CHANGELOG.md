@@ -1,4 +1,9 @@
 # Changelog
+## [1.2.7] - 2026-09-29
+- **Correctness & Bug Fixes (Uncovered via Hypothesis Stateful & Property Testing)**:
+  - Fix `DefaultCacheDict.pop(key, [default])` and `CacheDict.pop(key, [default])` so missing keys return `default` (or raise `KeyError`) without invoking `__missing__`/`default_factory` or faulting DB-resident entries into `_cache`, and deduplicate within-batch keys in `PersistentSet.update()`
+  - Fix `_classify_files_for_copy` (`copy_data`) so files excluded by `ignore` regex or `copy_config.extensions` are checked prior to `hashes_to_skip` — preventing ignored/non-matching files from being queued for deletion under `--delete-on-copy` or poisoning `hashes_to_skip` for subsequent matching files — and deduplicate entries by canonical physical path (`os.path.normcase(os.path.abspath(path))`)
+  - Fix `Manifest._combine_manifests` (`-i` with multiple manifests) to deduplicate merged file entries by canonical physical path (`os.path.normcase(os.path.abspath(path))`) rather than raw `(path, size, mtime)` tuple so files with updated `mtime` or non-canonical path segments across manifests are not treated as colliding duplicates of themselves
 
 ## [1.2.6] - 2026-09-27
 - **Performance (Guided by `cProfile` on 724k-file / 112k-directory workload)**:
