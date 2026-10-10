@@ -298,7 +298,33 @@ def _create_parser() -> argparse.ArgumentParser:
         action="store_false",
         dest="use_ui",
     )
-    parser.set_defaults(use_ui=sys.stdout.isatty())
+    output_group.add_argument(
+        "--dashboard",
+        help="Enable fixed-window dashboard UI (default when UI is enabled on TTY)",
+        action="store_true",
+        default=None,
+        dest="dashboard",
+    )
+    output_group.add_argument(
+        "--no-dashboard",
+        "--stream-ui",
+        help="Disable fixed dashboard and use scrolling log UI instead",
+        action="store_false",
+        dest="dashboard",
+    )
+    output_group.add_argument(
+        "--log-file",
+        help="Path to write detailed operational log file",
+        required=False,
+        default=None,
+        type=str,
+    )
+    output_group.add_argument(
+        "--no-log-file",
+        help="Disable writing operational log file",
+        action="store_true",
+        default=False,
+    )
 
     group = parser.add_argument_group("Path conversion")
     group.add_argument(
@@ -333,6 +359,18 @@ def _handle_arguments(args: argparse.Namespace) -> Dict[str, Any]:
         copy_path = args.copy_path
     else:
         copy_path = None
+
+    use_ui = args.use_ui
+    dashboard = args.dashboard
+    if use_ui is None:
+        use_ui = True if dashboard is True else sys.stdout.isatty()
+    if dashboard is None:
+        dashboard = use_ui
+
+    log_file = args.log_file
+    if log_file is None and not args.no_log_file and dashboard and use_ui:
+        log_file = "dedupe_copy.log"
+
     return {
         "read_from_path": read_paths,
         "extensions": extensions,
@@ -359,8 +397,10 @@ def _handle_arguments(args: argparse.Namespace) -> Dict[str, Any]:
         "dry_run": args.dry_run,
         "min_delete_size": args.min_delete_size,
         "verify_manifest": args.verify,
-        "use_ui": args.use_ui,
+        "use_ui": use_ui,
         "rename_on_collision": args.rename_on_collision,
+        "dashboard": bool(dashboard),
+        "log_file": log_file,
     }
 
 
@@ -387,7 +427,23 @@ def run_cli() -> int:
         verbosity = "debug"
     elif args.verbose:
         verbosity = "verbose"
-    setup_logging(verbosity=verbosity, use_colors=not args.no_color)
+
+    use_ui = args.use_ui
+    dashboard = args.dashboard
+    if use_ui is None:
+        use_ui = True if dashboard is True else sys.stdout.isatty()
+    if dashboard is None:
+        dashboard = use_ui
+
+    log_file = args.log_file
+    if log_file is None and not args.no_log_file and dashboard and use_ui:
+        log_file = "dedupe_copy.log"
+
+    setup_logging(
+        verbosity=verbosity,
+        use_colors=not args.no_color,
+        log_file=log_file,
+    )
 
     logger = logging.getLogger(__name__)
     logger.debug("Running with arguments: %s", args)

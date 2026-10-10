@@ -94,6 +94,28 @@ class ProgressThread(threading.Thread):
         if self.ui:
             self.walk_task_id = self.ui.add_task("Walking filesystem...", total=None)
 
+    def _sync_ui_stats(self) -> None:
+        """Synchronizes tracked metrics with ConsoleUI's dashboard."""
+        if not self.ui or not hasattr(self.ui, "update_stats"):
+            return
+        elapsed = time.time() - self.start_time
+        rate = self.file_count / elapsed if elapsed > 0 else 0.0
+        self.ui.update_stats(
+            discovered=self.file_count,
+            directories=self.directory_count,
+            accepted=self.accepted_count,
+            ignored=self.ignored_count,
+            errors=self.error_count,
+            copied=self.copied_count,
+            deleted=self.deleted_count,
+            rate=rate,
+            elapsed=elapsed,
+            work_queue=self.work.qsize(),
+            walk_queue=self.walk_queue.qsize(),
+            result_queue=self.result_queue.qsize(),
+            progress_queue=self.progress_queue.qsize(),
+        )
+
     def _report_walk_progress(self, path: str) -> None:
         """Emit a progress update for filesystem walk discovery."""
         elapsed = time.time() - self.start_time
@@ -112,6 +134,7 @@ class ProgressThread(threading.Thread):
                 description=f"Discovered {self.file_count} files "
                 f"(dirs: {self.directory_count})",
             )
+            self._sync_ui_stats()
         else:
             logger.info(message)
 
@@ -146,6 +169,8 @@ class ProgressThread(threading.Thread):
                 prev_count // interval
             ):
                 self._report_walk_progress(last_file or "")
+            elif self.ui:
+                self._sync_ui_stats()
 
     def do_log_copied(self, src: str, dest: str) -> None:
         """Log successful file copy operations."""
@@ -158,6 +183,7 @@ class ProgressThread(threading.Thread):
                 advance=1,
                 description=f"Copied {self.copied_count} files",
             )
+            self._sync_ui_stats()
         elif (
             self.copied_count % self.file_count_log_interval == 0
             or self.copied_count == 1
@@ -196,6 +222,7 @@ class ProgressThread(threading.Thread):
                 advance=1,
                 description=f"Deleted {self.deleted_count} files",
             )
+            self._sync_ui_stats()
         elif (
             self.deleted_count % self.file_count_log_interval == 0
             or self.deleted_count == 1
@@ -220,11 +247,13 @@ class ProgressThread(threading.Thread):
     def do_log_ignored(self, path: str, reason: str) -> None:
         """Log files that were ignored during processing."""
         self.ignored_count += 1
+        self._sync_ui_stats()
         logger.info("Ignoring %r for %r", path, reason)
 
     def do_log_error(self, path: str, reason: Exception) -> None:
         """Log files that caused errors during processing."""
         self.error_count += 1
+        self._sync_ui_stats()
         error_msg = format_error_message(path, reason)
         logger.error(error_msg)
 
@@ -257,6 +286,7 @@ class ProgressThread(threading.Thread):
                 )
             else:
                 self.ui.update_task("Walking filesystem...", total=total)
+        self._sync_ui_stats()
 
     def run(self) -> None:
         """The main execution loop for the thread.
@@ -274,6 +304,7 @@ class ProgressThread(threading.Thread):
                 method(*item[1:])
                 last_update = time.time()
             except queue.Empty:
+                self._sync_ui_stats()
                 if self.save_event and self.save_event.is_set():
                     if time.time() - last_update > 30:
                         logger.info("Saving...")
@@ -290,6 +321,7 @@ class ProgressThread(threading.Thread):
                     )
             except (AttributeError, ValueError) as e:
                 logger.error("Failed in progress thread: %s", e)
+        self._sync_ui_stats()
         self.log_final_summary()
 
     def log_final_summary(self) -> None:

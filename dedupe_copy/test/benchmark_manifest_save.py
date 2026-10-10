@@ -80,8 +80,7 @@ def run_benchmark(run_name, output_dir):
                 with open(results_file, "w", encoding="utf-8") as f:
                     json.dump({"scales": scales_completed, "times": save_times}, f)
 
-        # pylint: disable=broad-exception-caught
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught,broad-except
             print(f"  An error occurred at scale {scale}: {e}")
             print("Stopping benchmark for this run.")
             break
