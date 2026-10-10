@@ -350,3 +350,64 @@ class ConsoleUI:
                 self.console.print(f"[success]{message}[/success]")
             else:
                 self.console.print(message)
+
+
+def _run_demo() -> None:
+    """Run an interactive demonstration of the Dashboard UI."""
+    import time  # pylint: disable=import-outside-toplevel
+
+    demo_ui = ConsoleUI(dashboard=True, log_file="demo_dedupe_copy.log")
+    demo_ui.start()
+    demo_events = [
+        (0.5, "INFO", "Scanning /Volumes/Archive/Photos"),
+        (1.0, "INFO", "Discovered directory tree: 24 subfolders"),
+        (1.5, "INFO", "Accepted 450 unique image files"),
+        (2.0, "WARNING", "Permission denied reading system cache; skipping"),
+        (2.6, "INFO", "Deduplicating: found 50 colliding hashes"),
+        (3.2, "INFO", "Beginning parallel copy phase (8 workers)"),
+        (3.8, "INFO", "Copied 'IMG_2026_01.RAW' -> '/Backup/2026_01/'"),
+        (4.4, "ERROR", "I/O timeout on network destination; retrying"),
+        (5.0, "INFO", "Retry succeeded; resumed transfer"),
+        (5.6, "INFO", "Copy completed; finalizing SQLite manifest"),
+    ]
+    try:
+        demo_ui.add_task("Walking filesystem...", total=1000)
+        demo_ui.add_task("Copying files...", total=500)
+        start = time.time()
+        for step in range(1, 41):
+            time.sleep(0.15)
+            elapsed = time.time() - start
+            walk_prog = min(1000, step * 25)
+            copy_prog = min(500, max(0, (step - 15) * 20))
+            demo_ui.update_task("Walking filesystem...", advance=25)
+            if step > 15:
+                demo_ui.update_task("Copying files...", advance=20)
+            for t_ev, lvl, msg in demo_events:
+                if (step - 1) * 0.15 <= t_ev < step * 0.15:
+                    demo_ui.add_log_record(lvl, msg)
+            demo_ui.update_stats(
+                discovered=walk_prog * 15,
+                directories=24,
+                accepted=int(walk_prog * 12.5),
+                ignored=walk_prog * 2,
+                copied=copy_prog,
+                deleted=0,
+                errors=1 if step > 30 else 0,
+                rate=walk_prog * 15 / elapsed if elapsed > 0 else 0.0,
+                work_queue=max(0, 1000 - walk_prog),
+                walk_queue=max(0, 24 - step),
+                result_queue=max(0, (walk_prog - copy_prog) // 5),
+                progress_queue=3,
+                elapsed=elapsed,
+            )
+    finally:
+        demo_ui.stop()
+        if os.path.exists("demo_dedupe_copy.log"):
+            try:
+                os.remove("demo_dedupe_copy.log")
+            except OSError:
+                pass
+
+
+if __name__ == "__main__":
+    _run_demo()
