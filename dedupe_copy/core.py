@@ -1158,6 +1158,8 @@ def run_dupe_copy(
     verify_manifest: bool = False,
     use_ui: bool = True,
     rename_on_collision: bool = False,
+    dashboard: bool = False,
+    log_file: Optional[str] = None,
 ) -> int:
     """Main entry point for the deduplication and copy functionality.
 
@@ -1194,6 +1196,8 @@ def run_dupe_copy(
         use_ui: If True, uses the rich console UI.
         rename_on_collision: If True, rename colliding destination files instead
                              of skipping with an error.
+        dashboard: If True and use_ui is True, uses the fixed dashboard UI.
+        log_file: Optional filesystem path to write full log output to.
     """
     ensure_logging_configured()
 
@@ -1239,7 +1243,7 @@ def run_dupe_copy(
         )
 
         if use_ui:
-            ui = ConsoleUI()
+            ui = ConsoleUI(dashboard=dashboard, log_file=log_file)
             ui.start()
 
         if verify_manifest:

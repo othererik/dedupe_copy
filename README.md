@@ -3,7 +3,7 @@
 A multi-threaded command-line tool for finding duplicate files and copying/restructuring file layouts while eliminating duplicates.
 
 [![License](https://img.shields.io/badge/license-BSD-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.14%20%7C%203.15-blue.svg)](https://www.python.org/downloads/)
 
 ## Table of Contents
 
@@ -214,7 +214,7 @@ pip install -e .[color]
 
 ### Requirements
 
-- Python 3.14 or later
+- Python 3.14 or later (supports Python 3.14 and 3.15)
 - Sufficient disk space for manifest files (typically small, but can grow for very large file sets)
 - Optional: colorama for colored console output (installed with `[color]` extra)
 
@@ -449,6 +449,11 @@ Different organization rules for different file types.
 | `-v`, `--verbose` | Show detailed progress information (same as normal, kept for compatibility). |
 | `--debug` | Show debug information including queue states and internal diagnostics. |
 | `--no-color` | Disable colored output (useful for logging to files or non-terminal output). |
+| `--ui` / `--no-ui` | Enable or disable the Rich terminal user interface (enabled by default on interactive TTY). |
+| `--dashboard` | Enable the fixed-window terminal dashboard UI (default on interactive TTY when UI is enabled). |
+| `--no-dashboard` / `--stream-ui` | Disable the fixed dashboard and use traditional scrolling stream progress and log output instead. |
+| `--log-file PATH` | Path to write a persistent operational log file containing complete events and diagnostics (defaults to `dedupe_copy.log` in dashboard mode). |
+| `--no-log-file` | Disable writing the persistent operational log file. |
 
 
 **Output Verbosity Levels:**
@@ -703,6 +708,49 @@ For very large directories (millions of files):
 - Manifests are incrementally saved every 50,000 processed files
 
 ## Logging and Output Control
+
+### Terminal UI Modes: Fixed Dashboard vs. Scrolling Stream
+
+When running in an interactive terminal (TTY), DedupeCopy provides a clean, fixed-window **Dashboard UI** by default:
+
+```bash
+# Runs with the fixed live dashboard UI (default on TTY)
+dedupecopy -p /source -c /destination
+```
+
+**Dashboard Features:**
+- **Fixed Window**: The display does not scroll away; it updates in-place at a smooth 4 FPS.
+- **Header & Runtime**: Displays elapsed duration and the target operational log file.
+- **Progress Bars**: Shows real-time progress for filesystem walking, file copying, and file deletion.
+- **Work Left / Queues**: Live monitoring of internal queues (Directories to Walk, Files Awaiting Hash, Results to Process).
+- **Statistics & Throughput**: Discovered file counts, directory count, accepted unique files, ignored files, copied/deleted counts, and active files/sec processing rate.
+- **Recent Activity Buffer**: An in-memory ring buffer displaying the last 5 operational events with level-based syntax highlighting.
+
+#### Switching to Scrolling Stream or Headless Mode
+
+If you prefer traditional terminal scrolling output, or need headless output for automation:
+
+```bash
+# Traditional scrolling Rich progress and log messages
+dedupecopy -p /source -c /destination --no-dashboard
+# Or using the alias:
+dedupecopy -p /source -c /destination --stream-ui
+
+# Completely headless text mode (ideal for cron, CI, or pipes)
+dedupecopy -p /source -c /destination --no-ui
+```
+
+### Persistent Operational File Logging
+
+When long operations process hundreds of thousands of files, detailed per-file decisions are preserved to disk rather than scrolling off your screen:
+
+```bash
+# Writes full log to custom path (defaults to dedupe_copy.log in dashboard mode)
+dedupecopy -p /source -c /destination --log-file backup_run.log
+
+# Disable writing to a log file
+dedupecopy -p /source -c /destination --no-log-file
+```
 
 ### Verbosity Levels
 

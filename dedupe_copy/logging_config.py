@@ -53,18 +53,25 @@ class ColoredFormatter(logging.Formatter):
         return result
 
 
-def setup_logging(verbosity: str = "normal", use_colors: bool = True) -> None:
+def setup_logging(
+    verbosity: str = "normal",
+    use_colors: bool = True,
+    log_file: str | None = None,
+) -> None:
     """Configures the logging setup for the application.
 
     This function initializes the logging system with a specified verbosity
     level and enables colored output if supported. It sets up a handler
     that writes to the console and applies a formatter for the log messages.
+    If `log_file` is provided, a FileHandler is also attached to record all
+    events to disk.
 
     Args:
         verbosity: The desired level of logging verbosity. Can be one of
                    'quiet', 'normal', 'verbose', or 'debug'.
         use_colors: If True, enables colored output in the terminal, provided
                     the `colorama` library is installed.
+        log_file: Optional filesystem path to write full log output to.
     """
     # Initialize colorama if available, unwrapping any existing StreamWrapper
     # to prevent exponential O(2^N) write amplification across repeated calls.
@@ -115,6 +122,20 @@ def setup_logging(verbosity: str = "normal", use_colors: bool = True) -> None:
 
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
+
+    if log_file:
+        file_handler = logging.FileHandler(
+            log_file, mode="a", encoding="utf-8"
+        )
+        file_handler.setLevel(
+            logging.DEBUG if verbosity == "debug" else logging.INFO
+        )
+        file_formatter = logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
 
     # Don't propagate to root logger to avoid duplicate messages
     logger.propagate = False

@@ -1,5 +1,12 @@
 # Changelog
-## [1.2.7] - 2026-09-29
+## [1.3.0] - 2026-10-09
+- **User Interface & Observability**:
+  - Add fixed-window terminal Dashboard UI (`rich.live.Live`), replacing rapid text scrolling with a pinned overview displaying elapsed runtime, real-time progress bars, internal worker queue depths, live file & throughput statistics, and a recent activity log ring buffer
+  - Add persistent operational file logging (`--log-file`, defaulting to `dedupe_copy.log` when dashboard mode is active) so comprehensive per-file actions and debug diagnostics are saved to disk without cluttering the interactive terminal
+  - Add `--dashboard`, `--no-dashboard` (and `--stream-ui`), and `--no-log-file` command-line flags to easily toggle between the fixed dashboard and previous scrolling stream behavior or headless execution
+- **Packaging & CI**:
+  - Remove deprecated `License :: ...` trove classifier (PEP 639), declare `Python :: 3 :: Only`, system administrator audience, and backup/archiving topics in `pyproject.toml`
+  - Remove prerelease allowances in CI now that Python 3.15 is officially released
 - **Correctness & Bug Fixes (Uncovered via Hypothesis Stateful & Property Testing)**:
   - Fix `DefaultCacheDict.pop(key, [default])` and `CacheDict.pop(key, [default])` so missing keys return `default` (or raise `KeyError`) without invoking `__missing__`/`default_factory` or faulting DB-resident entries into `_cache`, and deduplicate within-batch keys in `PersistentSet.update()`
   - Fix `_classify_files_for_copy` (`copy_data`) so files excluded by `ignore` regex or `copy_config.extensions` are checked prior to `hashes_to_skip` — preventing ignored/non-matching files from being queued for deletion under `--delete-on-copy` or poisoning `hashes_to_skip` for subsequent matching files — and deduplicate entries by canonical physical path (`os.path.normcase(os.path.abspath(path))`)
