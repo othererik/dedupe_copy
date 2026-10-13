@@ -80,6 +80,8 @@ class ProgressThread(threading.Thread):
         self.not_copied_count = 0
         self.deleted_count = 0
         self.not_deleted_count = 0
+        self.total_to_copy = 0
+        self.total_to_delete = 0
         self.last_copied: Optional[str] = None
         self.save_event = save_event
         self.start_time = time.time()
@@ -99,7 +101,31 @@ class ProgressThread(threading.Thread):
         if not self.ui or not hasattr(self.ui, "update_stats"):
             return
         elapsed = time.time() - self.start_time
-        rate = self.file_count / elapsed if elapsed > 0 else 0.0
+        if self.copied_count > 0 and self.file_count == 0:
+            rate = self.copied_count / elapsed if elapsed > 0 else 0.0
+        elif self.deleted_count > 0 and self.file_count == 0:
+            rate = self.deleted_count / elapsed if elapsed > 0 else 0.0
+        elif self.copied_count > 0 or self.deleted_count > 0:
+            rate = (
+                (self.file_count + self.copied_count + self.deleted_count)
+                / elapsed
+                if elapsed > 0
+                else 0.0
+            )
+        else:
+            rate = self.file_count / elapsed if elapsed > 0 else 0.0
+
+        remaining_copy = (
+            max(0, self.total_to_copy - self.copied_count)
+            if self.total_to_copy > 0
+            else 0
+        )
+        remaining_delete = (
+            max(0, self.total_to_delete - self.deleted_count)
+            if self.total_to_delete > 0
+            else 0
+        )
+
         self.ui.update_stats(
             discovered=self.file_count,
             directories=self.directory_count,
@@ -108,6 +134,10 @@ class ProgressThread(threading.Thread):
             errors=self.error_count,
             copied=self.copied_count,
             deleted=self.deleted_count,
+            total_to_copy=self.total_to_copy,
+            remaining_copy=remaining_copy,
+            total_to_delete=self.total_to_delete,
+            remaining_delete=remaining_delete,
             rate=rate,
             elapsed=elapsed,
             work_queue=self.work.qsize(),
@@ -266,6 +296,11 @@ class ProgressThread(threading.Thread):
 
     def do_log_set_total(self, task_type: str, total: int) -> None:
         """Set the total for a specific task type."""
+        if task_type == "copy":
+            self.total_to_copy = total
+        elif task_type == "delete":
+            self.total_to_delete = total
+
         if not self.ui:
             return
 

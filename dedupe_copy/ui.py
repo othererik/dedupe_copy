@@ -75,6 +75,7 @@ class ConsoleUI:
         self._recent_logs: collections.deque[Tuple[str, str, str]] = (
             collections.deque(maxlen=5)
         )
+        self._installed_handlers: list[logging.Handler] = []
         self._stats: Dict[str, Any] = {
             "discovered": 0,
             "directories": 0,
@@ -121,7 +122,7 @@ class ConsoleUI:
         ]
         for handler in dedupe_logger.handlers[:]:
             dedupe_logger.removeHandler(handler)
-        dedupe_logger.propagate = True
+        dedupe_logger.propagate = False
 
         for fh in existing_file_handlers:
             dedupe_logger.addHandler(fh)
@@ -145,6 +146,7 @@ class ConsoleUI:
                 )
             )
             dedupe_logger.addHandler(file_h)
+            self._installed_handlers.append(file_h)
 
         if self.dashboard:
             dash_handler = DashboardLogHandler(self)
@@ -153,6 +155,7 @@ class ConsoleUI:
             root_logger.addHandler(dash_handler)
             root_logger.setLevel(configured_level)
             dedupe_logger.addHandler(dash_handler)
+            self._installed_handlers.append(dash_handler)
         else:
             handler = RichHandler(
                 console=self.console, rich_tracebacks=True, markup=True
@@ -164,6 +167,7 @@ class ConsoleUI:
             root_logger.addHandler(handler)
             root_logger.setLevel(configured_level)
             dedupe_logger.addHandler(handler)
+            self._installed_handlers.append(handler)
 
     def _render_header(self, stats: Dict[str, Any]) -> Panel:
         """Render the dashboard header panel."""
@@ -179,56 +183,139 @@ class ConsoleUI:
         )
         return Panel(header_table, style="blue")
 
+    def _build_queue_panel(
+        self, stats: Dict[str, Any], is_verify: bool, has_walk: bool
+    ) -> Panel:
+        """Construct the work left / queues panel."""
+        queue_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
+        queue_table.add_column("Key", style="bold")
+        queue_table.add_column("Value", justify="right")
+
+        if is_verify:
+            queue_table.add_row(
+                "Files Awaiting Verification", f"{stats.get('remaining', 0):,}"
+            )
+            queue_table.add_row(
+                "Total Files in Manifest", f"{stats.get('total_to_verify', 0):,}"
+            )
+            if stats.get("hashes", 0) > 0:
+                queue_table.add_row("Manifest Hashes", f"{stats.get('hashes', 0):,}")
+            return Panel(
+                queue_table,
+                title="[bold]Work Left / Manifest[/bold]",
+                border_style="magenta",
+            )
+
+        no_transfers = (
+            stats.get("copied", 0) == 0
+            and stats.get("deleted", 0) == 0
+            and stats.get("total_to_copy", 0) == 0
+            and stats.get("total_to_delete", 0) == 0
+        )
+        if has_walk or no_transfers:
+            queue_table.add_row("Directories to Walk", f"{stats.get('walk_queue', 0):,}")
+            queue_table.add_row("Files Awaiting Hash", f"{stats.get('work_queue', 0):,}")
+            queue_table.add_row("Results to Process", f"{stats.get('result_queue', 0):,}")
+        if stats.get("remaining_copy", 0) > 0 or stats.get("total_to_copy", 0) > 0:
+            queue_table.add_row(
+                "Files Awaiting Copy", f"{stats.get('remaining_copy', 0):,}"
+            )
+        if stats.get("remaining_delete", 0) > 0 or stats.get("total_to_delete", 0) > 0:
+            queue_table.add_row(
+                "Files Awaiting Deletion", f"{stats.get('remaining_delete', 0):,}"
+            )
+        if has_walk or stats.get("progress_queue", 0) > 0:
+            queue_table.add_row("Progress Messages", f"{stats.get('progress_queue', 0):,}")
+        if stats.get("manifest_hashes", 0) > 0 and not has_walk:
+            queue_table.add_row(
+                "Manifest Hashes", f"{stats.get('manifest_hashes', 0):,}"
+            )
+
+        return Panel(
+            queue_table,
+            title="[bold]Work Left / Queues[/bold]",
+            border_style="magenta",
+        )
+
+    def _build_stat_panel(
+        self, stats: Dict[str, Any], is_verify: bool, has_walk: bool
+    ) -> Panel:
+        """Construct the statistics and throughput panel."""
+        stat_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
+        stat_table.add_column("Metric", style="bold")
+        stat_table.add_column("Count", justify="right")
+
+        if is_verify:
+            stat_table.add_row(
+                "Files Verified", f"[green]{stats.get('verified', 0):,}[/green]"
+            )
+            if stats.get("errors", 0) > 0:
+                stat_table.add_row(
+                    "Errors Encountered",
+                    f"[bold red]{stats.get('errors', 0):,}[/bold red]",
+                )
+        else:
+            no_transfers = (
+                stats.get("copied", 0) == 0
+                and stats.get("deleted", 0) == 0
+                and stats.get("total_to_copy", 0) == 0
+                and stats.get("total_to_delete", 0) == 0
+            )
+            if has_walk or no_transfers:
+                stat_table.add_row("Files Discovered", f"{stats.get('discovered', 0):,}")
+                stat_table.add_row("Directories Scanned", f"{stats.get('directories', 0):,}")
+                stat_table.add_row(
+                    "Files Accepted", f"[green]{stats.get('accepted', 0):,}[/green]"
+                )
+                stat_table.add_row(
+                    "Files Ignored", f"[yellow]{stats.get('ignored', 0):,}[/yellow]"
+                )
+            if stats.get("copied", 0) > 0 or stats.get("total_to_copy", 0) > 0:
+                stat_table.add_row(
+                    "Files Copied", f"[cyan]{stats.get('copied', 0):,}[/cyan]"
+                )
+            if stats.get("deleted", 0) > 0 or stats.get("total_to_delete", 0) > 0:
+                stat_table.add_row(
+                    "Files Deleted", f"[red]{stats.get('deleted', 0):,}[/red]"
+                )
+            if stats.get("collisions", 0) > 0 and not has_walk:
+                stat_table.add_row(
+                    "Collisions Found",
+                    f"[yellow]{stats.get('collisions', 0):,}[/yellow]",
+                )
+            if stats.get("errors", 0) > 0:
+                stat_table.add_row(
+                    "Errors Encountered",
+                    f"[bold red]{stats.get('errors', 0):,}[/bold red]",
+                )
+
+        rate = stats.get("rate", 0.0)
+        stat_table.add_row("Processing Rate", f"{rate:.1f} files/sec")
+        return Panel(
+            stat_table,
+            title="[bold]Statistics & Throughput[/bold]",
+            border_style="green",
+        )
+
     def _render_queues_and_stats(self, stats: Dict[str, Any]) -> Table:
         """Render the middle two-column table for queues and stats."""
         mid_table = Table.grid(expand=True)
         mid_table.add_column(ratio=1)
         mid_table.add_column(ratio=1)
 
-        queue_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
-        queue_table.add_column("Key", style="bold")
-        queue_table.add_column("Value", justify="right")
-        queue_table.add_row("Directories to Walk", f"{stats.get('walk_queue', 0):,}")
-        queue_table.add_row("Files Awaiting Hash", f"{stats.get('work_queue', 0):,}")
-        queue_table.add_row("Results to Process", f"{stats.get('result_queue', 0):,}")
-        queue_table.add_row("Progress Messages", f"{stats.get('progress_queue', 0):,}")
-        queue_panel = Panel(
-            queue_table,
-            title="[bold]Work Left / Queues[/bold]",
-            border_style="magenta",
+        is_verify = stats.get("workflow") == "verify"
+        has_walk = (
+            stats.get("discovered", 0) > 0
+            or stats.get("directories", 0) > 0
+            or stats.get("accepted", 0) > 0
+            or stats.get("ignored", 0) > 0
+            or stats.get("walk_queue", 0) > 0
+            or stats.get("work_queue", 0) > 0
+            or stats.get("result_queue", 0) > 0
         )
 
-        stat_table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
-        stat_table.add_column("Metric", style="bold")
-        stat_table.add_column("Count", justify="right")
-        stat_table.add_row("Files Discovered", f"{stats.get('discovered', 0):,}")
-        stat_table.add_row("Directories Scanned", f"{stats.get('directories', 0):,}")
-        stat_table.add_row(
-            "Files Accepted", f"[green]{stats.get('accepted', 0):,}[/green]"
-        )
-        stat_table.add_row(
-            "Files Ignored", f"[yellow]{stats.get('ignored', 0):,}[/yellow]"
-        )
-        if stats.get("copied", 0) > 0:
-            stat_table.add_row(
-                "Files Copied", f"[cyan]{stats.get('copied', 0):,}[/cyan]"
-            )
-        if stats.get("deleted", 0) > 0:
-            stat_table.add_row(
-                "Files Deleted", f"[red]{stats.get('deleted', 0):,}[/red]"
-            )
-        if stats.get("errors", 0) > 0:
-            stat_table.add_row(
-                "Errors Encountered",
-                f"[bold red]{stats.get('errors', 0):,}[/bold red]",
-            )
-        rate = stats.get("rate", 0.0)
-        stat_table.add_row("Processing Rate", f"{rate:.1f} files/sec")
-        stat_panel = Panel(
-            stat_table,
-            title="[bold]Statistics & Throughput[/bold]",
-            border_style="green",
-        )
+        queue_panel = self._build_queue_panel(stats, is_verify, has_walk)
+        stat_panel = self._build_stat_panel(stats, is_verify, has_walk)
 
         mid_table.add_row(queue_panel, stat_panel)
         return mid_table
@@ -254,10 +341,11 @@ class ConsoleUI:
                         )
                     )
                 )
+                clean_msg = msg.replace("\n", " ").strip()
                 log_table.add_row(
                     Text(time_str, style="dim"),
                     Text(level, style=style),
-                    Text(msg, overflow="ellipsis", no_wrap=True),
+                    Text(clean_msg, overflow="ellipsis", no_wrap=True),
                 )
         else:
             log_table.add_row(
@@ -299,6 +387,22 @@ class ConsoleUI:
             self.live.stop()
         else:
             self.progress.stop()
+        self._cleanup_logging()
+
+    def _cleanup_logging(self) -> None:
+        """Remove logging handlers installed by this ConsoleUI instance."""
+        root_logger = logging.getLogger()
+        dedupe_logger = logging.getLogger("dedupe_copy")
+        for h in self._installed_handlers:
+            if h in dedupe_logger.handlers:
+                dedupe_logger.removeHandler(h)
+            if h in root_logger.handlers:
+                root_logger.removeHandler(h)
+            try:
+                h.close()
+            except (OSError, ValueError):
+                pass
+        self._installed_handlers.clear()
 
     def add_task(
         self, name: str, total: Optional[float] = None, description: str = ""
@@ -391,6 +495,8 @@ def _run_demo() -> None:
                 accepted=int(walk_prog * 12.5),
                 ignored=walk_prog * 2,
                 copied=copy_prog,
+                total_to_copy=500,
+                remaining_copy=max(0, 500 - copy_prog),
                 deleted=0,
                 errors=1 if step > 30 else 0,
                 rate=walk_prog * 15 / elapsed if elapsed > 0 else 0.0,

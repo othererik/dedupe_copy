@@ -1,4 +1,12 @@
 # Changelog
+## [1.3.1] - 2026-10-13
+- **User Interface & Observability**:
+  - Fix verify workflow (`--verify`) in Dashboard UI: populate and live-update verified file count, verification errors, manifest hashes, remaining items, elapsed time, and processing throughput rate instead of remaining at zero
+  - Dynamically adapt dashboard panels (`Work Left` and `Statistics & Throughput`): omit irrelevant walk queues and walk metrics during manifest verification and `--no-walk` operations, displaying operation-specific metrics (e.g. `Files Awaiting Verification`, `Files Awaiting Copy`, `Files Awaiting Deletion`)
+  - Fix processing throughput rate calculation in `ProgressThread` during `--no-walk` copy and delete operations so live rates reflect actual file transfers rather than staying at 0.0 files/sec
+  - Prevent duplicate log message entries in dashboard `Recent Activity` ring buffer by disabling child propagation when installing UI handlers, and clean up logging handlers on UI shutdown
+  - Add `--demo` flag to `dedupecopy` CLI to run the interactive dashboard demonstration directly from the main CLI binary
+
 ## [1.3.0] - 2026-10-09
 - **User Interface & Observability**:
   - Add fixed-window terminal Dashboard UI (`rich.live.Live`), replacing rapid text scrolling with a pinned overview displaying elapsed runtime, real-time progress bars, internal worker queue depths, live file & throughput statistics, and a recent activity log ring buffer
