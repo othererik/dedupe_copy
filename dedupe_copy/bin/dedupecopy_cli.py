@@ -81,6 +81,13 @@ def _create_parser() -> argparse.ArgumentParser:
         default=False,
         action="store_true",
     )
+    walk_group.add_argument(
+        "--demo",
+        help="Run an interactive demonstration of the dashboard UI",
+        required=False,
+        default=False,
+        action="store_true",
+    )
     parser.add_argument(
         "--min-delete-size",
         help="Minimum size of a file to be considered for deletion (bytes).",
@@ -408,6 +415,12 @@ def run_cli() -> int:
     """Main entry point for the command-line interface."""
     parser = _create_parser()
     args = parser.parse_args()
+
+    if getattr(args, "demo", False):
+        from dedupe_copy.ui import _run_demo  # pylint: disable=import-outside-toplevel
+
+        _run_demo()
+        return 0
 
     # Argument validation
     if args.delete_on_copy and not args.copy_path:

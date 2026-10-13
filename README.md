@@ -721,10 +721,17 @@ dedupecopy -p /source -c /destination
 **Dashboard Features:**
 - **Fixed Window**: The display does not scroll away; it updates in-place at a smooth 4 FPS.
 - **Header & Runtime**: Displays elapsed duration and the target operational log file.
-- **Progress Bars**: Shows real-time progress for filesystem walking, file copying, and file deletion.
-- **Work Left / Queues**: Live monitoring of internal queues (Directories to Walk, Files Awaiting Hash, Results to Process).
-- **Statistics & Throughput**: Discovered file counts, directory count, accepted unique files, ignored files, copied/deleted counts, and active files/sec processing rate.
+- **Progress Bars**: Shows real-time progress for filesystem walking, file copying, file deletion, and manifest verification.
+- **Adaptive Work Left / Queues**: Live monitoring of internal queues during discovery, files awaiting copy/deletion during transfer phases, or manifest files and hashes awaiting check during verification (`--verify`).
+- **Statistics & Throughput**: Displays active metrics relevant to the current workflow (discovered/accepted counts, verified files, transfer counts, and active processing throughput rate), omitting irrelevant zero-queues.
 - **Recent Activity Buffer**: An in-memory ring buffer displaying the last 5 operational events with level-based syntax highlighting.
+
+To preview the dashboard without scanning real files:
+
+```bash
+# Run an interactive demonstration of the live dashboard UI
+dedupecopy --demo
+```
 
 #### Switching to Scrolling Stream or Headless Mode
 

@@ -9,6 +9,7 @@ import queue
 import shutil
 import tempfile
 import threading
+import time
 from collections import Counter
 from typing import (
     Any,
@@ -739,15 +740,29 @@ def verify_manifest_fs(manifest: Manifest, ui: Optional[ConsoleUI] = None) -> bo
     verified_count = 0
     error_count = 0
 
+    read_sources = getattr(manifest, "read_sources", None)
+    total_to_verify = (
+        len(read_sources)
+        if read_sources is not None and len(read_sources) > 0
+        else sum(len(v) for _, v in manifest.items())
+    )
+    total_hashes = len(manifest)
+    start_time = time.time()
+    last_ui_update = start_time
+
     task_id: Optional["TaskID"] = None
     if ui:
-        read_sources = getattr(manifest, "read_sources", None)
-        total_to_verify = (
-            len(read_sources)
-            if read_sources is not None and len(read_sources) > 0
-            else sum(len(v) for _, v in manifest.items())
-        )
         task_id = ui.add_task("Verifying manifest...", total=total_to_verify)
+        ui.update_stats(
+            workflow="verify",
+            total_to_verify=total_to_verify,
+            verified=0,
+            errors=0,
+            remaining=total_to_verify,
+            hashes=total_hashes,
+            rate=0.0,
+            elapsed=0.0,
+        )
 
     for _, file_list in manifest.items():
         for file_path, expected_size, _ in file_list:
@@ -769,10 +784,41 @@ def verify_manifest_fs(manifest: Manifest, ui: Optional[ConsoleUI] = None) -> bo
             except OSError as e:
                 logger.error("VERIFY FAILED: Could not access %s: %s", file_path, e)
                 error_count += 1
+
             if ui and task_id is not None:
                 ui.update_task("Verifying manifest...", advance=1)
+                now = time.time()
+                checked = verified_count + error_count
+                if now - last_ui_update >= 0.1 or checked == total_to_verify:
+                    last_ui_update = now
+                    elapsed = now - start_time
+                    rate = checked / elapsed if elapsed > 0 else 0.0
+                    ui.update_stats(
+                        workflow="verify",
+                        total_to_verify=total_to_verify,
+                        verified=verified_count,
+                        errors=error_count,
+                        remaining=max(0, total_to_verify - checked),
+                        hashes=total_hashes,
+                        rate=rate,
+                        elapsed=elapsed,
+                    )
 
+    elapsed = time.time() - start_time
     total_files = verified_count + error_count
+    rate = total_files / elapsed if elapsed > 0 else 0.0
+    if ui:
+        ui.update_stats(
+            workflow="verify",
+            total_to_verify=total_to_verify,
+            verified=verified_count,
+            errors=error_count,
+            remaining=0,
+            hashes=total_hashes,
+            rate=rate,
+            elapsed=elapsed,
+        )
+
     logger.info(
         "Verification complete. Total files checked: %d. Verified: %d. Errors: %d.",
         total_files,

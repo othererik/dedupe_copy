@@ -1,11 +1,14 @@
 """Basic tests for the verify_manifest_fs function."""
+# pylint: disable=protected-access
 
 import os
 import unittest
 
+from rich.console import Console
 from dedupe_copy.test import utils
 from dedupe_copy.core import run_dupe_copy, verify_manifest_fs
 from dedupe_copy.manifest import Manifest
+from dedupe_copy.ui import ConsoleUI
 
 
 class TestVerify(unittest.TestCase):
@@ -108,3 +111,19 @@ class TestVerify(unittest.TestCase):
             ),
             1,
         )
+
+    def test_verify_manifest_fs_with_ui(self):
+        """Test that verify_manifest_fs updates stats on ConsoleUI correctly."""
+        console = Console(record=True)
+        ui = ConsoleUI(console=console, dashboard=True)
+        try:
+            result = verify_manifest_fs(self.manifest, ui=ui)
+            self.assertTrue(result)
+            self.assertEqual(ui._stats["workflow"], "verify")
+            self.assertEqual(ui._stats["total_to_verify"], len(self.file_list))
+            self.assertEqual(ui._stats["verified"], len(self.file_list))
+            self.assertEqual(ui._stats["errors"], 0)
+            self.assertEqual(ui._stats["remaining"], 0)
+            self.assertGreaterEqual(ui._stats["rate"], 0.0)
+        finally:
+            ui.stop()

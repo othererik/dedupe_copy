@@ -121,6 +121,70 @@ class TestDashboardUI(unittest.TestCase):
         finally:
             ui.stop()
 
+    def test_dashboard_verify_workflow(self) -> None:
+        """Verify dashboard renders verify-specific metrics and omits walk queues."""
+        ui = ConsoleUI(console=self.console, dashboard=True)
+        try:
+            ui.update_stats(
+                workflow="verify",
+                total_to_verify=50,
+                verified=48,
+                errors=2,
+                remaining=0,
+                hashes=45,
+                rate=250.0,
+                elapsed=0.2,
+            )
+            renderable = ui._build_dashboard_renderable()
+            self.console.print(renderable)
+            output = self.console.export_text()
+
+            # Verify panel titles and verify-specific metrics
+            self.assertIn("Work Left / Manifest", output)
+            self.assertIn("Files Awaiting Verification", output)
+            self.assertIn("Total Files in Manifest", output)
+            self.assertIn("Manifest Hashes", output)
+            self.assertIn("Files Verified", output)
+            self.assertIn("48", output)
+            self.assertIn("Errors Encountered", output)
+            self.assertIn("2", output)
+            self.assertIn("250.0 files/sec", output)
+
+            # Irrelevant walk queues and metrics should be omitted
+            self.assertNotIn("Directories to Walk", output)
+            self.assertNotIn("Files Awaiting Hash", output)
+            self.assertNotIn("Files Discovered", output)
+            self.assertNotIn("Directories Scanned", output)
+        finally:
+            ui.stop()
+
+    def test_dashboard_no_walk_copy_workflow(self) -> None:
+        """Verify dashboard in no-walk copy mode shows copy work and omits walk metrics."""
+        ui = ConsoleUI(console=self.console, dashboard=True)
+        try:
+            ui.update_stats(
+                copied=10,
+                total_to_copy=25,
+                remaining_copy=15,
+                rate=12.0,
+                elapsed=1.0,
+            )
+            renderable = ui._build_dashboard_renderable()
+            self.console.print(renderable)
+            output = self.console.export_text()
+
+            self.assertIn("Files Awaiting Copy", output)
+            self.assertIn("15", output)
+            self.assertIn("Files Copied", output)
+            self.assertIn("10", output)
+            self.assertIn("12.0 files/sec", output)
+
+            # Walk metrics omitted when no walk was performed
+            self.assertNotIn("Files Discovered", output)
+            self.assertNotIn("Directories Scanned", output)
+        finally:
+            ui.stop()
+
     def test_dashboard_start_and_stop(self) -> None:
         """Verify dashboard start and stop methods invoke Live methods without error."""
         ui = ConsoleUI(console=self.console, dashboard=True)
@@ -190,6 +254,12 @@ class TestCLIDashboardFlags(unittest.TestCase):
         args = parser.parse_args(["-p", "/tmp", "--dashboard"])
         processed = _handle_arguments(args)
         self.assertEqual(processed["log_file"], "dedupe_copy.log")
+
+    def test_cli_demo_flag(self) -> None:
+        """Test --demo CLI flag parsing."""
+        parser = _create_parser()
+        args = parser.parse_args(["--demo"])
+        self.assertTrue(args.demo)
 
 
 class TestDashboardEndToEnd(unittest.TestCase):
